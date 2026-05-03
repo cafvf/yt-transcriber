@@ -35,7 +35,7 @@ from yt_transcriber_bot.application.services.retention_policy import (
 from yt_transcriber_bot.application.use_cases.transcribe_video import (
     TranscribeVideoUseCase,
 )
-from yt_transcriber_bot.domain.entities.job import Job
+from yt_transcriber_bot.domain.entities.job import Job, JobStatus
 from yt_transcriber_bot.domain.value_objects.video_id import (
     InvalidYouTubeUrlError,
     VideoId,
@@ -127,6 +127,8 @@ class TelegramBotAdapter:
         self._models_dir = models_dir
         self._pending_rename_user: int | None = None
         self._pending_rename_slug: str | None = None
+        self._pending_rename_job_id: str | None = None
+        self._pending_rename_md_path: str | None = None
         self._queue: SequentialJobQueue[JobPayload] = SequentialJobQueue(self._process_job)
 
     # ------------------------------------------------------------------
@@ -236,10 +238,10 @@ class TelegramBotAdapter:
             "• Atalhos: /pt <link> e /en <link>.\n"
             "• /status → mostra o que está em processamento.\n"
             "• /cancel → cancela o job em andamento.\n"
-            "• /list → últimas transcrições.\n"
-            "• /last → reenvia a última transcrição.\n"
+            "• /list → últimas transcrições concluídas, numeradas.\n"
+            "• /last [n] → reenvia a n-ésima transcrição concluída; ex.: /last 2.\n"
             "• /redo <link> → reprocessa um vídeo.\n"
-            "• /rename → renomear falantes do último vídeo.\n"
+            "• /rename [n] → renomear falantes da n-ésima transcrição; ex.: /rename 2.\n"
             "• /clearcache → apaga modelos baixados.",
         )
 
@@ -262,8 +264,7 @@ class TelegramBotAdapter:
             return
         # Cancela diálogo de rename, se ativo
         if self._pending_rename_user == user_id and self._pending_rename_slug:
-            self._pending_rename_user = None
-            self._pending_rename_slug = None
+            self._clear_pending_rename()
             await self._send_text(chat_id, "Renomeação cancelada.")
             return
         current, _ = self._queue.snapshot()
@@ -342,56 +343,62 @@ class TelegramBotAdapter:
         if self._repository is None:
             await self._send_text(chat_id, "Histórico indisponível neste bot.")
             return
-        jobs = self._repository.list_recent_for_user(user_id, limit=10)
+        jobs = self._completed_jobs_for_user(user_id, limit=10)
         if not jobs:
-            await self._send_text(chat_id, "Nenhuma transcrição registrada ainda.")
+            await self._send_text(chat_id, "Nenhuma transcrição concluída registrada ainda.")
             return
-        lines: list[str] = ["Últimas transcrições:"]
-        for j in jobs:
-            status = j.status.value if hasattr(j.status, "value") else str(j.status)
-            lines.append(f"• {j.video_id} [{status}] — {j.requested_at.strftime('%Y-%m-%d %H:%M')}")
+        lines: list[str] = [
+            "Últimas transcrições concluídas:",
+            "Use /last n para reenviar ou /rename n para renomear falantes.",
+        ]
+        for idx, job in enumerate(jobs, start=1):
+            lines.append(f"{idx}. {_format_history_job(job)}")
         await self._send_text(chat_id, "\n".join(lines))
 
-    async def handle_command_last(self, *, chat_id: int, user_id: int) -> None:
+    async def handle_command_last(
+        self, *, chat_id: int, user_id: int, text: str = ""
+    ) -> None:
         if not self._is_authorized(user_id):
             return
         if self._repository is None:
             await self._send_text(chat_id, "Histórico indisponível.")
             return
-        last = self._repository.get_latest_completed_for_user(user_id)
-        if last is None:
-            await self._send_text(chat_id, "Sem transcrições concluídas ainda.")
+        index = _parse_history_index(text)
+        selected = await self._select_completed_job(chat_id=chat_id, user_id=user_id, index=index)
+        if selected is None:
             return
-        if last.md_path is None:
-            await self._send_text(chat_id, "O arquivo do último job não está mais disponível.")
+        if selected.md_path is None:
+            await self._send_text(chat_id, "O arquivo desse job não está mais disponível.")
             return
-        path = Path(last.md_path)
+        path = Path(selected.md_path)
         if not path.is_file():
-            await self._send_text(chat_id, "O Markdown do último job foi removido ou movido.")
+            await self._send_text(chat_id, "O Markdown desse job foi removido ou movido.")
             return
         await self._send_document_with_retry(chat_id, path)
 
-    async def handle_command_rename(self, *, chat_id: int, user_id: int) -> None:
+    async def handle_command_rename(
+        self, *, chat_id: int, user_id: int, text: str = ""
+    ) -> None:
         if not self._is_authorized(user_id):
             return
         if self._repository is None or self._rename_service is None:
             await self._send_text(chat_id, "Renomeação indisponível neste bot.")
             return
-        last = self._repository.get_latest_completed_for_user(user_id)
-        if last is None:
-            await self._send_text(chat_id, "Sem transcrições disponíveis para renomear.")
+        index = _parse_history_index(text)
+        selected = await self._select_completed_job(chat_id=chat_id, user_id=user_id, index=index)
+        if selected is None:
             return
-        slug = self._slug_from_md_path(last.md_path)
+        slug = self._slug_from_md_path(selected.md_path)
         if slug is None:
             await self._send_text(
-                chat_id, "Não consegui localizar o snapshot da última transcrição."
+                chat_id, "Não consegui localizar o snapshot dessa transcrição."
             )
             return
         try:
             speakers = self._rename_service.list_speakers(slug)
         except FileNotFoundError:
             await self._send_text(
-                chat_id, "Snapshot da última transcrição expirou. Reprocesse o vídeo."
+                chat_id, "Snapshot dessa transcrição expirou. Reprocesse o vídeo."
             )
             return
         if not speakers:
@@ -399,13 +406,47 @@ class TelegramBotAdapter:
             return
         self._pending_rename_user = user_id
         self._pending_rename_slug = slug
+        self._pending_rename_job_id = selected.job_id
+        self._pending_rename_md_path = selected.md_path
         await self._send_text(
             chat_id,
-            "Renomear falantes do último vídeo.\n"
+            f"Renomear falantes da transcrição #{index}.\n"
+            f"Alvo: {_format_history_job(selected)}\n"
             f"Falantes detectados: {', '.join(speakers)}\n"
             "Envie o mapeamento no formato: SPEAKER_00=João, SPEAKER_01=Maria\n"
+            "Para mesclar falantes, use o mesmo nome em dois labels.\n"
             "Use /cancel para abortar.",
         )
+
+    def _completed_jobs_for_user(self, user_id: int, *, limit: int) -> list[Job]:
+        if self._repository is None:
+            return []
+        jobs = self._repository.list_recent_for_user(user_id, limit=max(limit * 3, limit))
+        completed = [
+            job
+            for job in jobs
+            if job.requested_by_user_id == user_id and job.status == JobStatus.COMPLETED
+        ]
+        completed.sort(key=lambda job: job.updated_at, reverse=True)
+        return completed[:limit]
+
+    async def _select_completed_job(
+        self, *, chat_id: int, user_id: int, index: int
+    ) -> Job | None:
+        if index <= 0:
+            await self._send_text(chat_id, "Use um número positivo. Exemplo: /last 2 ou /rename 2.")
+            return None
+        jobs = self._completed_jobs_for_user(user_id, limit=max(index, 10))
+        if not jobs:
+            await self._send_text(chat_id, "Sem transcrições concluídas ainda.")
+            return None
+        if index > len(jobs):
+            await self._send_text(
+                chat_id,
+                f"Não encontrei a transcrição #{index}. Use /list para ver as opções disponíveis.",
+            )
+            return None
+        return jobs[index - 1]
 
     async def handle_command_clearcache(self, *, chat_id: int, user_id: int) -> None:
         if not self._is_authorized(user_id):
@@ -471,30 +512,38 @@ class TelegramBotAdapter:
                 "Formato inválido. Use SPEAKER_00=João, SPEAKER_01=Maria. Ou /cancel.",
             )
             return
-        # Recupera o md_path para reescrever no mesmo lugar
+        # Recupera o job e o md_path selecionados no início do diálogo.
         assert self._repository is not None
-        last = self._repository.get_latest_completed_for_user(user_id)
-        if last is None or last.md_path is None:
-            await self._send_text(chat_id, "Job não encontrado.")
-            self._pending_rename_user = None
-            self._pending_rename_slug = None
+        target = (
+            self._repository.get_by_id(self._pending_rename_job_id)
+            if self._pending_rename_job_id
+            else None
+        )
+        md_path = self._pending_rename_md_path or (target.md_path if target else None)
+        if target is None or md_path is None:
+            await self._send_text(chat_id, "Job selecionado não encontrado.")
+            self._clear_pending_rename()
             return
         try:
-            result = self._rename_service.rename(slug, aliases, Path(last.md_path))
+            result = self._rename_service.rename(slug, aliases, Path(md_path))
         except FileNotFoundError:
             await self._send_text(chat_id, "Snapshot expirou. Reprocesse o vídeo.")
-            self._pending_rename_user = None
-            self._pending_rename_slug = None
+            self._clear_pending_rename()
             return
         # Atualiza speaker_renames no Job para auditoria
-        last.speaker_renames = dict(aliases)
-        self._repository.save(last)
-        self._pending_rename_user = None
-        self._pending_rename_slug = None
+        target.speaker_renames = dict(aliases)
+        self._repository.save(target)
+        self._clear_pending_rename()
         await self._send_text(
             chat_id, f"✅ {result.speakers_renamed} falante(s) renomeado(s). Reenviando MD…"
         )
         await self._send_document_with_retry(chat_id, result.md_path)
+
+    def _clear_pending_rename(self) -> None:
+        self._pending_rename_user = None
+        self._pending_rename_slug = None
+        self._pending_rename_job_id = None
+        self._pending_rename_md_path = None
 
     @staticmethod
     def _slug_from_md_path(md_path: str | None) -> str | None:
@@ -643,6 +692,27 @@ def _parse_rename_mapping(text: str) -> dict[str, str]:
             continue
         out[label_clean] = name_clean
     return out
+
+
+def _parse_history_index(text: str) -> int:
+    """Extrai índice positivo de comandos como ``/last 2`` ou ``/rename 2``.
+
+    Quando nenhum número é informado, retorna 1 para manter compatibilidade
+    com ``/last`` e ``/rename`` sobre a transcrição mais recente.
+    """
+    parts = (text or "").strip().split()
+    if len(parts) < 2:
+        return 1
+    try:
+        return int(parts[1])
+    except ValueError:
+        return 1
+
+
+def _format_history_job(job: Job) -> str:
+    stem = Path(job.md_path).stem if job.md_path else job.video_id.value
+    when = job.updated_at.strftime("%Y-%m-%d %H:%M")
+    return f"{stem} — {job.video_id.value} — {when}"
 
 
 def _payload_language_suffix(payload: JobPayload) -> str:

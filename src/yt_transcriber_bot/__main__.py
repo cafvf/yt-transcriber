@@ -151,10 +151,16 @@ async def _run() -> None:
         await adapter.handle_command_list(chat_id=_cid(update), user_id=_uid(update))
 
     async def on_last(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
-        await adapter.handle_command_last(chat_id=_cid(update), user_id=_uid(update))
+        text = update.effective_message.text if update.effective_message else ""
+        await adapter.handle_command_last(
+            chat_id=_cid(update), user_id=_uid(update), text=text or ""
+        )
 
     async def on_rename(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
-        await adapter.handle_command_rename(chat_id=_cid(update), user_id=_uid(update))
+        text = update.effective_message.text if update.effective_message else ""
+        await adapter.handle_command_rename(
+            chat_id=_cid(update), user_id=_uid(update), text=text or ""
+        )
 
     async def on_clearcache(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await adapter.handle_command_clearcache(chat_id=_cid(update), user_id=_uid(update))
