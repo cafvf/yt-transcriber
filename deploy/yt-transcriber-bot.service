@@ -1,0 +1,19 @@
+[Unit]
+Description=YT Transcriber Bot (Telegram)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=SEU_USUARIO
+Group=SEU_USUARIO
+WorkingDirectory=/home/SEU_USUARIO/yt-transcriber-bot
+EnvironmentFile=/etc/yt-transcriber-bot/env
+ExecStart=/home/SEU_USUARIO/.local/bin/uv run python -m yt_transcriber_bot
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

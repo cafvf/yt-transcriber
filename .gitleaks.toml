@@ -1,0 +1,37 @@
+title = "yt-transcriber-bot secret scanning"
+
+[allowlist]
+description = "Arquivos de exemplo sem segredos reais"
+paths = [
+  '''^\.env\.example$''',
+]
+
+[[rules]]
+id = "telegram-bot-token"
+description = "Telegram BotFather token"
+regex = '''\b[0-9]{8,12}:[A-Za-z0-9_-]{30,}\b'''
+keywords = ["telegram", "bot", "TELEGRAM_BOT_TOKEN"]
+
+[[rules]]
+id = "huggingface-token"
+description = "Hugging Face access token"
+regex = '''\bhf_[A-Za-z0-9]{20,}\b'''
+keywords = ["hf_", "huggingface", "HF_TOKEN"]
+
+[[rules]]
+id = "openai-api-key"
+description = "OpenAI API key"
+regex = '''\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b'''
+keywords = ["OPENAI_API_KEY", "sk-"]
+
+[[rules]]
+id = "github-token"
+description = "GitHub token"
+regex = '''\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{30,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b'''
+keywords = ["github", "ghp_", "github_pat_"]
+
+[[rules]]
+id = "youtube-cookies"
+description = "YouTube/browser cookies file content"
+regex = '''(?i)#\s*Netscape\s+HTTP\s+Cookie\s+File|\.youtube\.com\s+TRUE\s+/'''
+keywords = ["cookies", "youtube", "Netscape"]

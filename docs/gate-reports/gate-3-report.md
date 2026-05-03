@@ -1,0 +1,21 @@
+# Gate 3 — Transcription + Diarization Engines — REPORT
+
+## Escopo realizado
+Foram entregues neste gate as três pontas mais sensíveis do sistema: detecção de hardware, motor de transcrição e motor de diarização (com fallback).
+
+A **porta `GpuDetector`** abstrai a introspecção de hardware via PyTorch. A implementação `TorchGpuDetector` recebe um `TorchProbe` injetável e devolve um `HardwareProfile` imutável com `has_cuda`, `cuda_compute_capability`, `vram_total_gb` e `gpu_name`. Quando há múltiplas GPUs, escolhe a de maior VRAM com desempate pelo menor índice. O `HardwareProfile` carrega ainda os predicados `is_cuda_compatible(min_compute_capability)` e `can_fit_model(required_vram_gb)`, isolando a regra de "GPU obsoleta" da política de seleção.
+
+A **política `select_runtime`** (`application/runtime_selection.py`) é lógica pura: combina `AppSettings` e `HardwareProfile` para produzir um `RuntimePlan` com `device`, `compute_type`, `model` e `reason` — esta última uma string em português explicando a decisão (entra nos logs e no MD final). O algoritmo respeita configuração explícita do usuário (`device=cpu` ou `cuda`); em modo `auto`, encadeia "sem CUDA → CPU", "CC obsoleta → CPU", "VRAM insuficiente → degrada modelo iterativamente até CPU". `compute_type=auto` se torna `float16` em CUDA e `int8` em CPU.
+
+A **porta `TranscriptionEngine`** define `transcribe(audio_path, *, device, compute_type, model, allowed_languages, progress)` retornando `TranscriptionResult` com `segments`, `detected_language` e `language_confidence`. A implementação `WhisperXTranscriptionEngine` abstrai o uso real de `whisperx` em uma interface `WhisperXBackend`, separando a integração concreta (que chama `whisperx.load_model`, `model.transcribe` e `whisperx.align`) da lógica de negócio (validação, mapeamento de erros, enforcement de idioma). Mapeamento de exceções: `out of memory` ou `oom` viram `OutOfMemoryError` (que o pipeline usa como sinal para retry com modelo menor); demais erros viram `TranscriptionError`. Idiomas detectados fora da allowlist (`pt`, `en`) caem para o primeiro permitido.
+
+A **porta `DiarizationEngine`** define `DiarizationResult` (com `speaker_segments` e `total_speakers`) e expõe a função utilitária `assign_speakers_to_segments` para combinar transcrição e diarização por **maior overlap temporal**. O `WhisperXDiarizationEngine` (primário) lança `DiarizationUnavailableError` quando não tem token, devolve zero segmentos ou explode com erro genérico — sinalizando o fallback. O `PyannoteDiarizationEngine` (fallback) é mais estrito: sem token é erro hard. O `CompositeDiarizationEngine` aplica **Chain of Responsibility**: percorre os engines em ordem e devolve o primeiro sucesso; agrega o último erro se todos falham. Aceita qualquer `DiarizationError` (não só `Unavailable`) como gatilho de fallback, garantindo que falhas inesperadas no WhisperX nunca derrubem o sistema sem antes tentar pyannote direto.
+
+## Métricas
+A suíte cresceu para **306 testes** (237 herdados + 69 novos), todos verdes em **2,7 s**. Cobertura global de **94%** linhas / 85% branches. Lint (ruff), format (ruff format) e mypy `--strict` zerados sobre 51 arquivos-fonte. Os trechos não cobertos são os "blocos de produção" que importam `torch`/`whisperx`/`pyannote` reais — esses são exercitados no Gate 7 (E2E real).
+
+## Bug encontrado e correção
+Durante o desenvolvimento da política de seleção de runtime apareceu o seguinte bug: `ModelName.smaller_alternative()` dá apenas um passo para baixo, o que era insuficiente quando o modelo solicitado era `large-v3` em GPU com 6 GB de VRAM — o passo único caía em `large-v2` (também 10 GB), e a política decidia CPU em vez de continuar iterando até `medium` (5 GB), que cabia. A correção transformou o passo único em loop while e foi protegida por **quatro testes de regressão** (`test_runtime_selection_regression.py`) cobrindo: degradação `large-v3 → medium` em 6GB; `large-v3 → small` em 3GB; `large-v3 → base` em 1.5GB; e `large-v3 → CPU` em 0.5GB. Esses testes seguem a política da §0.2 do plano (cada bug vira teste de regressão antes de ser corrigido).
+
+## Próximo gate
+Gate 4 — Pipeline (Chain of Responsibility) costurando download → conversão → transcrição → diarização → render do MD. Entrará também o serviço `TranscriptionRenderer` que produz o Markdown final no template aprovado.

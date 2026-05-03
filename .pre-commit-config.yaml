@@ -1,0 +1,21 @@
+# Hooks locais, sem dependência de repositórios remotos do pre-commit.
+# Instalação:
+#   uv sync --dev
+#   uv run pre-commit install
+# Execução manual:
+#   uv run pre-commit run --all-files
+repos:
+  - repo: local
+    hooks:
+      - id: local-secret-guard
+        name: bloquear arquivos sensíveis e tokens óbvios
+        entry: python3 scripts/security/scan_secrets.py
+        language: system
+        pass_filenames: true
+
+      - id: gitleaks-if-available
+        name: gitleaks complementar se instalado
+        entry: python3 scripts/security/gitleaks_if_available.py --staged
+        language: system
+        pass_filenames: false
+        always_run: true

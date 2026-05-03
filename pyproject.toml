@@ -1,0 +1,165 @@
+[project]
+name = "yt-transcriber-bot"
+version = "0.1.3"
+description = "Bot Telegram que transcreve vídeos do YouTube com WhisperX e diarização"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+license = { text = "MIT" }
+authors = [{ name = "yt-transcriber-bot contributors" }]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+dependencies = [
+    # Telegram
+    "python-telegram-bot>=21.0,<22.0",
+    # Configuração
+    "pydantic>=2.7,<3.0",
+    "pydantic-settings>=2.3,<3.0",
+    "python-dotenv>=1.0,<2.0",
+    # Segurança local / hooks de commit. Mantido em dependências principais para que `uv sync`
+    # instale o comando `pre-commit` sem exigir flags extras.
+    "pre-commit>=3.7,<5.0",
+    # YouTube
+    "yt-dlp>=2024.5.0",
+    # Persistência
+    "sqlalchemy>=2.0,<3.0",
+    # Texto
+    "python-slugify>=8.0,<9.0",
+    # ML / áudio — necessários para o fluxo real de transcrição e diarização.
+    # Mantidos nas dependências principais para que `uv sync` instale um ambiente
+    # executável, não apenas testável. O download é pesado por causa do PyTorch.
+    "torch>=2.4,<3.0",
+    "torchaudio>=2.4,<3.0",
+    "whisperx>=3.8.4,<4.0",
+    "pyannote.audio>=4.0,<5.0",
+    "faster-whisper>=1.2,<2.0",
+]
+
+[project.optional-dependencies]
+# Mantido por compatibilidade com instruções antigas (`uv sync --extra ml`).
+# A stack de ML agora é dependência principal, porque o bot não executa o fluxo
+# completo de transcrição/diarização sem torch, whisperx e pyannote.audio.
+ml = []
+
+[project.scripts]
+yt-transcriber-bot = "yt_transcriber_bot.__main__:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.2,<9.0",
+    "pytest-asyncio>=0.23,<1.0",
+    "pytest-cov>=5.0,<7.0",
+    "pytest-mock>=3.14,<4.0",
+    "ruff>=0.5,<1.0",
+    "mypy>=1.10,<2.0",
+    "types-python-slugify",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/yt_transcriber_bot"]
+
+# ============================
+# Pytest
+# ============================
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "-m", "not integration and not slow and not e2e",
+]
+markers = [
+    "integration: testes que tocam binários/serviços externos (ffmpeg real, SQLite real, etc.)",
+    "slow: testes lentos (modelos de ML reais, downloads pesados)",
+    "e2e: testes ponta-a-ponta com fluxo completo",
+]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["src/yt_transcriber_bot"]
+branch = true
+omit = ["*/__main__.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "@(abc\\.)?abstractmethod",
+]
+
+# ============================
+# Ruff
+# ============================
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",  # pycodestyle
+    "F",       # pyflakes
+    "I",       # isort
+    "N",       # pep8-naming
+    "UP",      # pyupgrade
+    "B",       # bugbear
+    "C4",      # comprehensions
+    "SIM",     # simplify
+    "RUF",     # ruff-specific
+    "PT",      # pytest-style
+]
+ignore = [
+    "E501",    # line-too-long (deixa a cargo do format)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["N802", "N803"]  # nomes de testes podem fugir do PEP8
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+# ============================
+# Mypy
+# ============================
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_return_any = true
+no_implicit_optional = true
+check_untyped_defs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_decorators = true
+disallow_any_generics = true
+mypy_path = "src"
+namespace_packages = true
+explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+module = [
+    "yt_dlp.*",
+    "whisperx.*",
+    "pyannote.*",
+    "faster_whisper.*",
+    "torch.*",
+    "torchaudio.*",
+    "slugify.*",
+]
+ignore_missing_imports = true
