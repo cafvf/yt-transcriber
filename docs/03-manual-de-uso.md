@@ -379,3 +379,88 @@ O comando `/help` no Telegram deve listar todos os comandos públicos atuais. A 
 - `/help` — mostra a referência de comandos.
 - `/clearcache` — apaga modelos baixados no diretório de cache configurado.
 
+
+## Sumarização com LM Studio
+
+O comando `/summary [n]` gera um arquivo Markdown derivado da transcrição já concluída, sem reprocessar áudio, WhisperX ou diarização.
+
+Exemplos:
+
+```text
+/summary
+/summary 2
+```
+
+A integração usa uma API compatível com OpenAI, como o servidor local do LM Studio. Configuração típica no `.env`:
+
+```env
+SUMMARY_BACKEND=openai_compatible
+SUMMARY_BASE_URL=http://127.0.0.1:1234/v1
+SUMMARY_MODEL=qwen3.5-9b
+SUMMARY_TEMPERATURE=0.2
+SUMMARY_MAX_TOKENS=1024
+SUMMARY_MAX_CHARS_PER_CHUNK=4000
+SUMMARY_MAX_INPUT_TOKENS=2500
+SUMMARY_CHARS_PER_TOKEN=2.0
+SUMMARY_OUTPUT_LANGUAGE=auto
+SUMMARY_DISABLE_THINKING=true
+```
+
+Antes de usar, abra o LM Studio, carregue o modelo desejado e inicie o servidor local. O bot chama `POST /v1/chat/completions`.
+
+`SUMMARY_DISABLE_THINKING=true` é recomendado para resumos. Nessa configuração, o bot envia uma instrução de resposta direta, inclui `enable_thinking=false` no corpo da chamada OpenAI-compatible e remove blocos `<think>...</think>` caso o servidor ainda os retorne.
+
+Para confirmar que o `.env` está sendo lido pela mesma configuração usada pelo bot, rode na raiz do projeto:
+
+```bash
+uv run python scripts/config/print_effective_settings.py
+```
+
+Confira principalmente `summary_base_url`, `summary_model`, `summary_max_input_tokens` e `summary_disable_thinking`.
+
+Para modelos com contexto de 4096 tokens, como alguns presets locais do Qwen, mantenha `SUMMARY_MAX_INPUT_TOKENS` entre `2000` e `2500`. O bot usa esse valor para dividir a transcrição antes de chamar a LLM. Se o LM Studio registrar erro semelhante a `request (...) exceeds the available context size (4096 tokens)`, reduza primeiro:
+
+```env
+SUMMARY_MAX_INPUT_TOKENS=2000
+SUMMARY_MAX_CHARS_PER_CHUNK=3000
+SUMMARY_MAX_TOKENS=768
+```
+
+### LM Studio rodando no Windows e bot rodando no WSL2
+
+Se o LM Studio estiver aberto no **Windows** e o bot estiver rodando dentro do **WSL2**, habilite o **Mirrored Mode** do WSL2. Sem isso, `SUMMARY_BASE_URL=http://127.0.0.1:1234/v1` ou `http://127.0.0.1:1234/v1` pode resultar em `Connection refused`, porque o `localhost` do WSL2 não alcança necessariamente o servidor local do Windows no modo NAT padrão.
+
+No Windows, crie ou edite o arquivo:
+
+```text
+%USERPROFILE%\.wslconfig
+```
+
+com:
+
+```ini
+[wsl2]
+networkingMode=mirrored
+dnsTunneling=true
+autoProxy=true
+```
+
+Depois reinicie o WSL a partir do PowerShell:
+
+```powershell
+wsl --shutdown
+```
+
+Reabra o terminal WSL2, inicie o servidor do LM Studio no Windows e teste **dentro do WSL2**:
+
+```bash
+curl http://127.0.0.1:1234/v1/models
+```
+
+Se retornar JSON com modelos, mantenha no `.env`:
+
+```env
+SUMMARY_BASE_URL=http://127.0.0.1:1234/v1
+```
+
+Use `localhost` apenas se também funcionar no teste com `curl`. Em caso de bloqueio, verifique o firewall do Windows e se o LM Studio está realmente com o servidor local iniciado.

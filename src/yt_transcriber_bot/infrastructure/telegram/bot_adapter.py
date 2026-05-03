@@ -50,6 +50,13 @@ from yt_transcriber_bot.infrastructure.exporting.video_subtitles_exporter import
     VideoSubtitleTooLargeError,
     VideoSubtitleTooLongError,
 )
+from yt_transcriber_bot.infrastructure.summarization.openai_compatible_client import (
+    ChatCompletionError,
+)
+from yt_transcriber_bot.infrastructure.summarization.transcript_summarizer import (
+    SummaryError,
+    TranscriptSummaryService,
+)
 from yt_transcriber_bot.infrastructure.telegram.job_queue import (
     QueuedItem,
     SequentialJobQueue,
@@ -91,6 +98,9 @@ Histórico e revisão
 • /list → lista as últimas transcrições concluídas, numeradas por título e horário.
 • /last [n] → reenvia a n-ésima transcrição concluída; exemplo: /last 2.
 • /rename [n] → abre botões para renomear ou mesclar falantes; exemplo: /rename 2.
+
+Resumos e artefatos derivados
+• /summary [n] → gera um resumo estruturado em Markdown usando a LLM configurada; exemplo: /summary 2.
 
 Exportações
 • /export json [n] → exporta a transcrição estruturada em JSON.
@@ -190,6 +200,7 @@ class TelegramBotAdapter:
         repository: JobRepository | None = None,
         rename_service: RenameSpeakersService | None = None,
         export_service: TranscriptExportService | None = None,
+        summary_service: TranscriptSummaryService | None = None,
         video_subtitle_export_service: VideoSoftSubtitleExportService | None = None,
         retention_policy: RetentionPolicy | None = None,
         models_dir: Path | None = None,
@@ -200,6 +211,7 @@ class TelegramBotAdapter:
         self._repository = repository
         self._rename_service = rename_service
         self._export_service = export_service
+        self._summary_service = summary_service
         self._video_subtitle_export_service = video_subtitle_export_service
         self._retention_policy = retention_policy
         self._models_dir = models_dir
@@ -306,6 +318,8 @@ class TelegramBotAdapter:
             await self.handle_command_last(chat_id=chat_id, user_id=user_id, text=stripped)
         elif command == "rename":
             await self.handle_command_rename(chat_id=chat_id, user_id=user_id, text=stripped)
+        elif command == "summary":
+            await self.handle_command_summary(chat_id=chat_id, user_id=user_id, text=stripped)
         elif command == "export":
             await self.handle_command_export(chat_id=chat_id, user_id=user_id, text=stripped)
         elif command in set(SUPPORTED_EXPORT_FORMATS):
@@ -703,6 +717,55 @@ class TelegramBotAdapter:
             )
             return None
         return jobs[index - 1]
+
+    async def handle_command_summary(
+        self, *, chat_id: int, user_id: int, text: str = ""
+    ) -> None:
+        """Gera resumo estruturado em Markdown para uma transcrição concluída."""
+        if not self._is_authorized(user_id):
+            return
+        if self._repository is None or self._summary_service is None:
+            await self._send_text(
+                chat_id,
+                "Sumarização indisponível neste bot. Verifique SUMMARY_BACKEND e a configuração do LM Studio.",
+            )
+            return
+        index = _parse_history_index(text)
+        selected = await self._select_completed_job(chat_id=chat_id, user_id=user_id, index=index)
+        if selected is None:
+            return
+        slug = self._slug_from_md_path(selected.md_path)
+        if slug is None:
+            await self._send_text(chat_id, "Não consegui localizar o snapshot dessa transcrição.")
+            return
+        output_base = Path(selected.md_path) if selected.md_path else self._settings.summaries_dir() / slug
+        await self._send_text(
+            chat_id,
+            f"🧠 Gerando resumo da transcrição #{index} com {self._settings.summary_model}. "
+            "Isso pode levar alguns minutos em modelo local.",
+        )
+        try:
+            result = await asyncio.to_thread(
+                self._summary_service.summarize,
+                slug=slug,
+                output_base_path=output_base,
+                speaker_aliases=selected.speaker_renames,
+            )
+        except FileNotFoundError:
+            await self._send_text(chat_id, "Snapshot dessa transcrição expirou. Reprocesse o vídeo.")
+            return
+        except ChatCompletionError as exc:
+            await self._send_text(chat_id, f"Falha ao chamar a LLM de resumo: {exc}")
+            return
+        except SummaryError as exc:
+            await self._send_text(chat_id, f"Falha ao gerar resumo: {exc}")
+            return
+        await self._send_text(
+            chat_id,
+            f"✅ Resumo gerado para a transcrição #{index} "
+            f"({result.chunks} bloco(s), modelo {result.model}). Enviando arquivo…",
+        )
+        await self._send_document_with_retry(chat_id, result.path)
 
     async def handle_command_export_shortcut(
         self, *, chat_id: int, user_id: int, format: str, text: str = ""

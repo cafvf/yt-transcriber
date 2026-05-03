@@ -253,6 +253,105 @@ LOG_LEVEL=INFO
 > Use `.env.example` apenas com placeholders.
 > Antes de commitar, instale os hooks de segurança com `uv run pre-commit install`.
 
+### 9.1 Sumarização com LM Studio
+
+Para usar o comando `/summary [n]`, o bot precisa acessar uma API compatível com OpenAI. No uso local recomendado, essa API é o servidor do LM Studio.
+
+Configuração típica no `.env`:
+
+```env
+SUMMARY_BACKEND=openai_compatible
+SUMMARY_BASE_URL=http://127.0.0.1:1234/v1
+SUMMARY_MODEL=qwen3.5-9b
+SUMMARY_API_KEY=
+SUMMARY_TEMPERATURE=0.2
+SUMMARY_MAX_TOKENS=1024
+SUMMARY_MAX_CHARS_PER_CHUNK=4000
+SUMMARY_MAX_INPUT_TOKENS=2500
+SUMMARY_CHARS_PER_TOKEN=2.0
+SUMMARY_TIMEOUT_S=300
+SUMMARY_OUTPUT_LANGUAGE=auto
+SUMMARY_DISABLE_THINKING=true
+SUMMARIES_DIR_NAME=summaries
+```
+
+Antes de iniciar o bot, abra o LM Studio, carregue o modelo desejado e ative o servidor local na aba **Developer / Local Server**. Valide no mesmo ambiente em que o bot roda:
+
+```bash
+curl http://127.0.0.1:1234/v1/models
+```
+
+Use em `SUMMARY_MODEL` o `id` do modelo retornado por esse endpoint.
+
+Para modelos Qwen com reasoning/thinking, mantenha:
+
+```env
+SUMMARY_DISABLE_THINKING=true
+```
+
+Essa opção não transforma o resumo em uma tarefa de raciocínio: o bot pede resposta direta, envia `enable_thinking=false` quando suportado pelo servidor OpenAI-compatible e limpa blocos `<think>...</think>` residuais antes de salvar o Markdown.
+
+Para verificar se o `.env` foi carregado corretamente, rode na raiz do projeto:
+
+```bash
+uv run python scripts/config/print_effective_settings.py
+```
+
+O script mostra as configurações efetivas e mascara segredos.
+
+Para servidores locais com janela de contexto de 4096 tokens, use a configuração conservadora acima. O bot não tem acesso ao tokenizer exato do modelo carregado no LM Studio; por isso, o chunking usa uma estimativa segura com `SUMMARY_MAX_INPUT_TOKENS` e `SUMMARY_CHARS_PER_TOKEN`. Se aparecer no LM Studio um erro como `request (...) exceeds the available context size (4096 tokens)`, reduza:
+
+```env
+SUMMARY_MAX_INPUT_TOKENS=2000
+SUMMARY_MAX_CHARS_PER_CHUNK=3000
+SUMMARY_MAX_TOKENS=768
+```
+
+### 9.2 WSL2 + LM Studio no Windows: habilitar Mirrored Mode
+
+Se o bot roda no **Ubuntu/WSL2** e o LM Studio roda no **Windows**, habilite o **Mirrored Mode** do WSL2. Esse modo faz com que o host Windows e a VM WSL2 possam conversar usando `localhost`/`127.0.0.1`, simplificando o acesso ao servidor local do LM Studio.
+
+No Windows, crie ou edite:
+
+```text
+%USERPROFILE%\.wslconfig
+```
+
+Conteúdo recomendado:
+
+```ini
+[wsl2]
+networkingMode=mirrored
+dnsTunneling=true
+autoProxy=true
+```
+
+Depois, no PowerShell:
+
+```powershell
+wsl --shutdown
+```
+
+Reabra o WSL2, inicie o servidor do LM Studio no Windows e teste **dentro do WSL2**:
+
+```bash
+curl http://127.0.0.1:1234/v1/models
+```
+
+Se funcionar, mantenha:
+
+```env
+SUMMARY_BASE_URL=http://127.0.0.1:1234/v1
+```
+
+Se ainda houver `Connection refused`, verifique:
+
+1. se o servidor do LM Studio está ativo;
+2. se a porta configurada no LM Studio é realmente `1234`;
+3. se o firewall do Windows está bloqueando o acesso;
+4. se o WSL foi reiniciado com `wsl --shutdown` depois da alteração em `.wslconfig`.
+
+
 ---
 
 ## Segurança local antes de commitar

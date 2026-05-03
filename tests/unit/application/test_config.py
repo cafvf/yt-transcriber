@@ -26,6 +26,7 @@ def env_no_dotenv(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         "AUDIO_BITRATE_KBPS",
         "MAX_VIDEO_DURATION_MIN",
         "RETENTION_COUNT",
+        "SUMMARY_DISABLE_THINKING",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -168,3 +169,29 @@ class TestTranscriptionSignature:
         s1 = AppSettings(audio_bitrate_kbps=32)
         s2 = AppSettings(audio_bitrate_kbps=64)
         assert s1.transcription_signature() != s2.transcription_signature()
+
+
+def test_summary_settings_defaults_are_lm_studio_compatible(tmp_path):
+    settings = AppSettings(
+        telegram_bot_token="x",
+        telegram_allowed_user_id=42,
+        hf_token="x",
+        base_dir=tmp_path / "data",
+        models_dir=tmp_path / "models",
+    )
+    assert settings.summary_backend == "openai_compatible"
+    assert settings.summary_base_url == "http://localhost:1234/v1"
+    assert settings.summary_model == "qwen3.5-9b"
+    assert settings.summary_max_tokens == 1024
+    assert settings.summary_max_chars_per_chunk == 4000
+    assert settings.summary_max_input_tokens == 2500
+    assert settings.summary_chars_per_token == 2.0
+    assert settings.summary_timeout_s == 300.0
+    assert settings.summary_disable_thinking is True
+    assert settings.summaries_dir() == tmp_path / "data" / "summaries"
+
+
+def test_summary_disable_thinking_can_be_disabled_from_env(env_no_dotenv: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SUMMARY_DISABLE_THINKING", "false")
+    settings = AppSettings()
+    assert settings.summary_disable_thinking is False

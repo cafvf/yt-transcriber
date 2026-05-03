@@ -24,6 +24,7 @@ PUBLIC_COMMANDS = [
     "/list",
     "/last",
     "/rename",
+    "/summary",
     "/export",
     "/json",
     "/srt",
@@ -60,6 +61,7 @@ def test_help_text_groups_commands_by_user_intent() -> None:
         "Entrada e idioma",
         "Estado, fila e cancelamento",
         "Histórico e revisão",
+        "Resumos e artefatos derivados",
         "Exportações",
         "Manutenção e ajuda",
     ]:

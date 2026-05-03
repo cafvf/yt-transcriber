@@ -103,6 +103,7 @@ async def _run() -> None:
         repository=composition.repository,
         rename_service=composition.rename_service,
         export_service=composition.export_service,
+        summary_service=composition.summary_service,
         video_subtitle_export_service=composition.video_subtitle_export_service,
         retention_policy=composition.retention_policy,
         models_dir=settings.models_dir,
@@ -174,6 +175,12 @@ async def _run() -> None:
             chat_id=_cid(update), user_id=_uid(update), text=text or ""
         )
 
+    async def on_summary(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        text = update.effective_message.text if update.effective_message else ""
+        await adapter.handle_command_summary(
+            chat_id=_cid(update), user_id=_uid(update), text=text or ""
+        )
+
     async def on_export(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         text = update.effective_message.text if update.effective_message else ""
         await adapter.handle_command_export(
@@ -220,6 +227,7 @@ async def _run() -> None:
     application.add_handler(CommandHandler("list", on_list))
     application.add_handler(CommandHandler("last", on_last))
     application.add_handler(CommandHandler("rename", on_rename))
+    application.add_handler(CommandHandler("summary", on_summary))
     application.add_handler(CommandHandler("export", on_export))
     application.add_handler(CommandHandler(["json", "srt", "vtt"], on_export_shortcut))
     application.add_handler(CommandHandler(["video_subs", "videosubs"], on_video_subs))

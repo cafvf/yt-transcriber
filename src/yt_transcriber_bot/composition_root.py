@@ -52,6 +52,12 @@ from yt_transcriber_bot.infrastructure.persistence.sqlalchemy.job_repository imp
 from yt_transcriber_bot.infrastructure.rendering.markdown_renderer import (
     MarkdownTranscriptRenderer,
 )
+from yt_transcriber_bot.infrastructure.summarization.openai_compatible_client import (
+    OpenAICompatibleChatClient,
+)
+from yt_transcriber_bot.infrastructure.summarization.transcript_summarizer import (
+    TranscriptSummaryService,
+)
 from yt_transcriber_bot.infrastructure.youtube.yt_dlp_downloader import (
     YtDlpDownloader,
 )
@@ -72,6 +78,7 @@ class Composition:
     use_case: TranscribeVideoUseCase
     rename_service: RenameSpeakersService
     export_service: TranscriptExportService
+    summary_service: TranscriptSummaryService | None
     video_subtitle_export_service: VideoSoftSubtitleExportService
     retention_policy: RetentionPolicy
 
@@ -147,6 +154,7 @@ def build(settings: AppSettings) -> Composition:
     settings.transcripts_dir().mkdir(parents=True, exist_ok=True)
     settings.logs_dir().mkdir(parents=True, exist_ok=True)
     settings.video_exports_dir().mkdir(parents=True, exist_ok=True)
+    settings.summaries_dir().mkdir(parents=True, exist_ok=True)
     segments_dir = settings.base_dir / "segments"
     segments_dir.mkdir(parents=True, exist_ok=True)
     settings.models_dir.mkdir(parents=True, exist_ok=True)
@@ -192,6 +200,29 @@ def build(settings: AppSettings) -> Composition:
     # Serviços auxiliares
     rename_service = RenameSpeakersService(snapshots, renderer)
     export_service = TranscriptExportService(snapshots)
+    summary_service: TranscriptSummaryService | None
+    if settings.summary_backend == "disabled":
+        summary_service = None
+    else:
+        summary_client = OpenAICompatibleChatClient(
+            base_url=settings.summary_base_url,
+            model=settings.summary_model,
+            temperature=settings.summary_temperature,
+            max_tokens=settings.summary_max_tokens,
+            timeout_s=settings.summary_timeout_s,
+            api_key=settings.summary_api_key,
+            disable_thinking=settings.summary_disable_thinking,
+        )
+        summary_service = TranscriptSummaryService(
+            snapshots=snapshots,
+            chat_client=summary_client,
+            output_dir=settings.summaries_dir(),
+            max_chars_per_chunk=settings.summary_max_chars_per_chunk,
+            max_input_tokens=settings.summary_max_input_tokens,
+            chars_per_token=settings.summary_chars_per_token,
+            output_language=settings.summary_output_language,
+            disable_thinking=settings.summary_disable_thinking,
+        )
     video_subtitle_export_service = VideoSoftSubtitleExportService(
         snapshots=snapshots,
         transcript_exporter=export_service,
@@ -217,6 +248,7 @@ def build(settings: AppSettings) -> Composition:
         use_case=use_case,
         rename_service=rename_service,
         export_service=export_service,
+        summary_service=summary_service,
         video_subtitle_export_service=video_subtitle_export_service,
         retention_policy=retention_policy,
     )

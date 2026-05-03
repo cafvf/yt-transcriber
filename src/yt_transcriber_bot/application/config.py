@@ -97,6 +97,49 @@ class AppSettings(BaseSettings):
         default=5, ge=1, le=50, description="Limite total de jobs em execução + pendentes"
     )
 
+    # ===== Sumarização por LLM local/OpenAI-compatible =====
+    summary_backend: str = Field(
+        default="openai_compatible",
+        description="Backend de resumo: openai_compatible|disabled",
+    )
+    summary_base_url: str = Field(
+        default="http://localhost:1234/v1",
+        description="Base URL OpenAI-compatible, por exemplo LM Studio: http://localhost:1234/v1",
+    )
+    summary_model: str = Field(
+        default="qwen3.5-9b",
+        description="Modelo carregado/visível no servidor do LM Studio para sumarização",
+    )
+    summary_api_key: str = Field(
+        default="",
+        description="API key opcional para servidores OpenAI-compatible; LM Studio local normalmente não exige",
+    )
+    summary_temperature: float = Field(default=0.2, ge=0.0, le=2.0)
+    summary_max_tokens: int = Field(default=1024, ge=256, le=32768)
+    summary_max_chars_per_chunk: int = Field(default=4000, ge=500, le=100000)
+    summary_max_input_tokens: int = Field(
+        default=2500,
+        ge=512,
+        le=32768,
+        description="Orçamento aproximado de tokens de entrada por chamada de resumo",
+    )
+    summary_chars_per_token: float = Field(
+        default=2.0,
+        ge=1.0,
+        le=10.0,
+        description="Estimativa conservadora de caracteres por token para chunking sem tokenizer local",
+    )
+    summary_timeout_s: float = Field(default=300.0, ge=5.0, le=1800.0)
+    summary_output_language: str = Field(
+        default="auto",
+        description="Idioma do resumo: auto mantém o idioma predominante da transcrição; use pt/en para forçar",
+    )
+    summary_disable_thinking: bool = Field(
+        default=True,
+        description="Desabilita thinking/reasoning explícito em chamadas de resumo quando suportado",
+    )
+    summaries_dir_name: str = Field(default="summaries")
+
     # ===== Vídeo com legenda selecionável =====
     max_video_subtitles_duration_min: int = Field(
         default=30,
@@ -126,6 +169,30 @@ class AppSettings(BaseSettings):
         if v not in valid:
             raise ValueError(f"compute_type inválido: '{v}' (use {sorted(valid)})")
         return v
+
+    @field_validator("summary_backend")
+    @classmethod
+    def _validate_summary_backend(cls, v: str) -> str:
+        value = v.strip().lower()
+        if value not in {"openai_compatible", "disabled"}:
+            raise ValueError("summary_backend inválido: use 'openai_compatible' ou 'disabled'")
+        return value
+
+    @field_validator("summary_base_url")
+    @classmethod
+    def _validate_summary_base_url(cls, v: str) -> str:
+        value = v.strip().rstrip("/")
+        if not value:
+            raise ValueError("summary_base_url não pode ser vazio")
+        return value
+
+    @field_validator("summary_model")
+    @classmethod
+    def _validate_summary_model(cls, v: str) -> str:
+        value = v.strip()
+        if not value:
+            raise ValueError("summary_model não pode ser vazio")
+        return value
 
     @field_validator("whisper_model")
     @classmethod
@@ -164,6 +231,9 @@ class AppSettings(BaseSettings):
 
     def video_exports_dir(self) -> Path:
         return self.base_dir / self.video_exports_dir_name
+
+    def summaries_dir(self) -> Path:
+        return self.base_dir / self.summaries_dir_name
 
     def transcription_signature(self) -> str:
         """Hash que muda quando parâmetros que afetam a transcrição mudam.

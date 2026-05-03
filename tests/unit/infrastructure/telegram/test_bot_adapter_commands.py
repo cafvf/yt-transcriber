@@ -70,6 +70,26 @@ class FakeBotClient:
         self.videos.append((file_path, caption))
 
 
+class FakeSummaryService:
+    def __init__(self, output_path: Path) -> None:
+        self.output_path = output_path
+        self.calls: list[dict[str, object]] = []
+
+    def summarize(self, **kwargs: object) -> object:
+        self.calls.append(kwargs)
+        self.output_path.parent.mkdir(parents=True, exist_ok=True)
+        self.output_path.write_text("# Resumo\n\nConteúdo resumido.")
+        return type(
+            "Result",
+            (),
+            {
+                "path": self.output_path,
+                "chunks": 1,
+                "model": "qwen3.5-9b",
+            },
+        )()
+
+
 class FakeVideoSubtitleExportService:
     def __init__(self, output_path: Path) -> None:
         self.output_path = output_path
@@ -175,6 +195,11 @@ def client() -> FakeBotClient:
 
 
 @pytest.fixture
+def summary_service(tmp_path: Path) -> FakeSummaryService:
+    return FakeSummaryService(tmp_path / "summaries" / "summary.md")
+
+
+@pytest.fixture
 def video_subtitle_service(tmp_path: Path) -> FakeVideoSubtitleExportService:
     return FakeVideoSubtitleExportService(tmp_path / "video_exports" / "video.mp4")
 
@@ -186,6 +211,7 @@ async def adapter(
     repo: FakeRepo,
     rename_service: RenameSpeakersService,
     export_service: TranscriptExportService,
+    summary_service: FakeSummaryService,
     video_subtitle_service: FakeVideoSubtitleExportService,
     tmp_path: Path,
 ) -> TelegramBotAdapter:
@@ -196,6 +222,7 @@ async def adapter(
         repository=repo,  # type: ignore[arg-type]
         rename_service=rename_service,
         export_service=export_service,
+        summary_service=summary_service,  # type: ignore[arg-type]
         video_subtitle_export_service=video_subtitle_service,  # type: ignore[arg-type]
         models_dir=tmp_path / "models",
     )
@@ -755,6 +782,92 @@ async def test_inline_done_button_closes_rename_dialog(
     await adapter.handle_message(chat_id=1, user_id=42, text="João")
     assert any("Renomeação concluída" in text for _, text, *_ in client.sent)
     assert any("link do YouTube" in text for _, text, *_ in client.sent)
+
+# --------------------------------------------------------------------
+# /summary
+# --------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_summary_latest_generates_and_sends_markdown(
+    adapter: TelegramBotAdapter,
+    client: FakeBotClient,
+    repo: FakeRepo,
+    snapshots: TranscriptSnapshotRepository,
+    summary_service: FakeSummaryService,
+    tmp_path: Path,
+) -> None:
+    md = tmp_path / "hello.md"
+    md.write_text("# placeholder")
+    repo.save(_make_completed_job(42, md, datetime(2026, 5, 1, tzinfo=UTC)))
+    _populate_snapshot(snapshots, "hello")
+
+    await adapter.handle_command_summary(chat_id=1, user_id=42, text="/summary")
+
+    assert summary_service.calls
+    assert summary_service.calls[0]["slug"] == "hello"
+    assert summary_service.output_path in client.docs
+    assert any("Resumo gerado" in text for _, text, *_ in client.sent)
+
+
+@pytest.mark.asyncio
+async def test_summary_index_selects_penultimate_job(
+    adapter: TelegramBotAdapter,
+    client: FakeBotClient,
+    repo: FakeRepo,
+    snapshots: TranscriptSnapshotRepository,
+    summary_service: FakeSummaryService,
+    tmp_path: Path,
+) -> None:
+    latest = tmp_path / "latest.md"
+    previous = tmp_path / "previous.md"
+    latest.write_text("# latest")
+    previous.write_text("# previous")
+    _populate_snapshot(snapshots, "latest")
+    _populate_snapshot(snapshots, "previous")
+    repo.save(_make_completed_job(42, previous, datetime(2026, 5, 1, 11, 0, tzinfo=UTC)))
+    repo.save(_make_completed_job(42, latest, datetime(2026, 5, 1, 12, 0, tzinfo=UTC)))
+
+    await adapter.handle_command_summary(chat_id=1, user_id=42, text="/summary 2")
+
+    assert summary_service.calls[0]["slug"] == "previous"
+
+
+@pytest.mark.asyncio
+async def test_summary_unavailable_explains_configuration(
+    settings: AppSettings, client: FakeBotClient, repo: FakeRepo
+) -> None:
+    adapter = TelegramBotAdapter(
+        settings=settings,
+        client=client,  # type: ignore[arg-type]
+        use_case=MagicMock(),
+        repository=repo,  # type: ignore[arg-type]
+    )
+
+    await adapter.handle_command_summary(chat_id=1, user_id=42, text="/summary")
+
+    assert any("Sumarização indisponível" in text for _, text, *_ in client.sent)
+
+
+@pytest.mark.asyncio
+async def test_summary_fallback_text_command(
+    adapter: TelegramBotAdapter,
+    client: FakeBotClient,
+    repo: FakeRepo,
+    snapshots: TranscriptSnapshotRepository,
+    summary_service: FakeSummaryService,
+    tmp_path: Path,
+) -> None:
+    md = tmp_path / "fallback-summary.md"
+    md.write_text("# placeholder")
+    repo.save(_make_completed_job(42, md, datetime(2026, 5, 1, tzinfo=UTC)))
+    _populate_snapshot(snapshots, "fallback-summary")
+
+    await adapter.handle_message(chat_id=1, user_id=42, text="/summary")
+
+    assert summary_service.calls[0]["slug"] == "fallback-summary"
+    assert summary_service.output_path in client.docs
+
 
 # --------------------------------------------------------------------
 # /export json|srt|vtt [n]
