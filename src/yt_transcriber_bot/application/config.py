@@ -97,6 +97,21 @@ class AppSettings(BaseSettings):
         default=5, ge=1, le=50, description="Limite total de jobs em execução + pendentes"
     )
 
+    # ===== Vídeo com legenda selecionável =====
+    max_video_subtitles_duration_min: int = Field(
+        default=30,
+        ge=1,
+        le=180,
+        description="Duração máxima para gerar vídeo MP4 com legenda selecionável",
+    )
+    max_video_subtitles_size_mb: int = Field(
+        default=200,
+        ge=1,
+        le=2000,
+        description="Tamanho máximo do MP4 legendado a ser enviado pelo Telegram",
+    )
+    video_exports_dir_name: str = Field(default="video_exports")
+
     @field_validator("device")
     @classmethod
     def _validate_device(cls, v: str) -> str:
@@ -146,6 +161,9 @@ class AppSettings(BaseSettings):
 
     def logs_dir(self) -> Path:
         return self.base_dir / self.logs_dir_name
+
+    def video_exports_dir(self) -> Path:
+        return self.base_dir / self.video_exports_dir_name
 
     def transcription_signature(self) -> str:
         """Hash que muda quando parâmetros que afetam a transcrição mudam.

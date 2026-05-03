@@ -344,15 +344,36 @@ async def test_help_lists_queue_and_history_commands(
     await adapter.handle_command_help(chat_id=1, user_id=42)
     msg = client.sent[-1].text
     for command in [
+        "/start",
+        "/help",
+        "/transcribe",
+        "/pt",
+        "/en",
+        "/redo",
+        "/status",
         "/queue",
+        "/fila",
         "/clearqueue",
         "/cancelqueue",
+        "/limparfila",
+        "/cancel",
         "/cancelall",
+        "/cancelartudo",
         "/list",
         "/last [n]",
         "/rename [n]",
+        "/export json",
+        "/export srt",
+        "/export vtt",
+        "/json [n]",
+        "/srt [n]",
+        "/vtt [n]",
+        "/video_subs [n]",
+        "/videosubs [n]",
+        "/clearcache",
     ]:
         assert command in msg
+    assert "→" in msg
 
 
 @pytest.mark.asyncio

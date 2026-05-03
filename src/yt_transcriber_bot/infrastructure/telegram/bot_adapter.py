@@ -3,7 +3,7 @@
 Responsabilidades:
 - Receber mensagens, autorizar (silenciosamente) o user_id permitido.
 - Detectar URLs do YouTube e enfileirar o job via SequentialJobQueue.
-- Despachar comandos: /start, /help, /status, /cancel, /list, /last, /redo, /rename e /clearcache.
+- Despachar comandos de operação, fila, histórico, exportação e manutenção.
 - Editar uma única mensagem para reportar progresso (ProgressReporter).
 - Enviar áudio comprimido + arquivo .md final, com retry exponencial.
 
@@ -40,6 +40,16 @@ from yt_transcriber_bot.domain.value_objects.video_id import (
     InvalidYouTubeUrlError,
     VideoId,
 )
+from yt_transcriber_bot.infrastructure.exporting.transcript_exporter import (
+    SUPPORTED_EXPORT_FORMATS,
+    TranscriptExportService,
+)
+from yt_transcriber_bot.infrastructure.exporting.video_subtitles_exporter import (
+    VideoSoftSubtitleExportService,
+    VideoSubtitleExportError,
+    VideoSubtitleTooLargeError,
+    VideoSubtitleTooLongError,
+)
 from yt_transcriber_bot.infrastructure.telegram.job_queue import (
     QueuedItem,
     SequentialJobQueue,
@@ -56,6 +66,48 @@ from yt_transcriber_bot.infrastructure.telegram.url_extractor import (
 )
 
 logger = logging.getLogger(__name__)
+
+HELP_TEXT = """🤖 yt-transcriber-bot — comandos disponíveis
+
+Entrada e idioma
+• <link do YouTube> → enfileira e transcreve o vídeo em Markdown.
+• /transcribe <link> [--lang pt|en] → enfileira explicitamente um link para transcrição.
+• /pt <link> → transcreve informando português como idioma do vídeo.
+• /en <link> → transcreve informando inglês como idioma do vídeo.
+• /redo <link> [--lang pt|en] → reprocessa um vídeo, sem reaproveitar o resultado anterior.
+
+Estado, fila e cancelamento
+• /status → mostra o job atual e o estado operacional do bot.
+• /queue → mostra a fila completa de processamento.
+• /fila → alias em português de /queue.
+• /clearqueue → remove apenas os jobs pendentes da fila.
+• /cancelqueue → alias de /clearqueue.
+• /limparfila → alias em português de /clearqueue.
+• /cancel → solicita cancelamento do job em andamento.
+• /cancelall → cancela o job atual e remove todos os pendentes.
+• /cancelartudo → alias em português de /cancelall.
+
+Histórico e revisão
+• /list → lista as últimas transcrições concluídas, numeradas por título e horário.
+• /last [n] → reenvia a n-ésima transcrição concluída; exemplo: /last 2.
+• /rename [n] → abre botões para renomear ou mesclar falantes; exemplo: /rename 2.
+
+Exportações
+• /export json [n] → exporta a transcrição estruturada em JSON.
+• /export srt [n] → exporta legenda SubRip (.srt).
+• /export vtt [n] → exporta legenda WebVTT (.vtt).
+• /json [n] → atalho para /export json [n].
+• /srt [n] → atalho para /export srt [n].
+• /vtt [n] → atalho para /export vtt [n].
+• /video_subs [n] → envia MP4 com legenda selecionável; limite padrão: 30 min e 200 MB.
+• /videosubs [n] → alias de /video_subs [n].
+
+Manutenção e ajuda
+• /start → mostra a mensagem inicial do bot.
+• /help → mostra esta lista de comandos.
+• /clearcache → apaga modelos baixados no diretório de cache configurado.
+"""
+
 
 
 # ----------------------------------------------------------------------
@@ -98,6 +150,10 @@ class BotClient(Protocol):
         self, chat_id: int, file_path: Path, caption: str | None = None
     ) -> None: ...
 
+    async def send_video(
+        self, chat_id: int, file_path: Path, caption: str | None = None
+    ) -> None: ...
+
 
 # ----------------------------------------------------------------------
 # Payload da fila
@@ -133,6 +189,8 @@ class TelegramBotAdapter:
         use_case: TranscribeVideoUseCase,
         repository: JobRepository | None = None,
         rename_service: RenameSpeakersService | None = None,
+        export_service: TranscriptExportService | None = None,
+        video_subtitle_export_service: VideoSoftSubtitleExportService | None = None,
         retention_policy: RetentionPolicy | None = None,
         models_dir: Path | None = None,
     ) -> None:
@@ -141,6 +199,8 @@ class TelegramBotAdapter:
         self._use_case = use_case
         self._repository = repository
         self._rename_service = rename_service
+        self._export_service = export_service
+        self._video_subtitle_export_service = video_subtitle_export_service
         self._retention_policy = retention_policy
         self._models_dir = models_dir
         self._pending_rename_user: int | None = None
@@ -246,6 +306,14 @@ class TelegramBotAdapter:
             await self.handle_command_last(chat_id=chat_id, user_id=user_id, text=stripped)
         elif command == "rename":
             await self.handle_command_rename(chat_id=chat_id, user_id=user_id, text=stripped)
+        elif command == "export":
+            await self.handle_command_export(chat_id=chat_id, user_id=user_id, text=stripped)
+        elif command in set(SUPPORTED_EXPORT_FORMATS):
+            await self.handle_command_export_shortcut(
+                chat_id=chat_id, user_id=user_id, format=command, text=stripped
+            )
+        elif command in {"video_subs", "videosubs"}:
+            await self.handle_command_video_subs(chat_id=chat_id, user_id=user_id, text=stripped)
         elif command == "clearcache":
             await self.handle_command_clearcache(chat_id=chat_id, user_id=user_id)
         else:
@@ -327,23 +395,7 @@ class TelegramBotAdapter:
     async def handle_command_help(self, *, chat_id: int, user_id: int) -> None:
         if not self._is_authorized(user_id):
             return
-        await self._send_text(
-            chat_id,
-            "Comandos:\n"
-            "• Mande um link do YouTube → transcrevo o áudio.\n"
-            "• Idioma opcional: adicione --lang pt ou --lang en ao link.\n"
-            "• Atalhos: /pt <link> e /en <link>.\n"
-            "• /status → mostra o job atual e o estado operacional.\n"
-            "• /queue ou /fila → mostra a fila completa.\n"
-            "• /clearqueue ou /cancelqueue → limpa apenas os pendentes.\n"
-            "• /cancel → cancela o job em andamento.\n"
-            "• /cancelall → cancela o job atual e limpa pendentes.\n"
-            "• /list → últimas transcrições concluídas, numeradas por título.\n"
-            "• /last [n] → reenvia a n-ésima transcrição concluída; ex.: /last 2.\n"
-            "• /redo <link> → reprocessa um vídeo.\n"
-            "• /rename [n] → abre botões para renomear/mesclar falantes; ex.: /rename 2.\n"
-            "• /clearcache → apaga modelos baixados.",
-        )
+        await self._send_text(chat_id, HELP_TEXT)
 
     async def handle_command_status(self, *, chat_id: int, user_id: int) -> None:
         if not self._is_authorized(user_id):
@@ -652,6 +704,119 @@ class TelegramBotAdapter:
             return None
         return jobs[index - 1]
 
+    async def handle_command_export_shortcut(
+        self, *, chat_id: int, user_id: int, format: str, text: str = ""
+    ) -> None:
+        """Atalho para /json [n], /srt [n] e /vtt [n]."""
+        parts = (text or "").strip().split(maxsplit=1)
+        rest = parts[1] if len(parts) > 1 else ""
+        await self.handle_command_export(
+            chat_id=chat_id,
+            user_id=user_id,
+            text=(f"/export {format} {rest}" if rest else f"/export {format}"),
+        )
+
+    async def handle_command_export(
+        self, *, chat_id: int, user_id: int, text: str = ""
+    ) -> None:
+        """Exporta JSON/SRT/VTT de uma transcrição concluída sem reprocessar."""
+        if not self._is_authorized(user_id):
+            return
+        if self._repository is None or self._export_service is None:
+            await self._send_text(chat_id, "Exportação indisponível neste bot.")
+            return
+        parsed = _parse_export_command(text)
+        if parsed is None:
+            await self._send_text(
+                chat_id,
+                "Uso: /export json|srt|vtt [n]. Exemplo: /export srt 2. "
+                "Use /list para ver as transcrições disponíveis.",
+            )
+            return
+        fmt, index = parsed
+        selected = await self._select_completed_job(chat_id=chat_id, user_id=user_id, index=index)
+        if selected is None:
+            return
+        slug = self._slug_from_md_path(selected.md_path)
+        if slug is None:
+            await self._send_text(chat_id, "Não consegui localizar o snapshot dessa transcrição.")
+            return
+        output_base = Path(selected.md_path) if selected.md_path else self._settings.transcripts_dir() / slug
+        try:
+            result = self._export_service.export(
+                slug=slug,
+                output_base_path=output_base,
+                format=fmt,
+                speaker_aliases=selected.speaker_renames,
+            )
+        except FileNotFoundError:
+            await self._send_text(chat_id, "Snapshot dessa transcrição expirou. Reprocesse o vídeo.")
+            return
+        except ValueError as exc:
+            await self._send_text(chat_id, str(exc))
+            return
+        await self._send_text(
+            chat_id,
+            f"📦 Exportação {result.format.upper()} gerada para a transcrição #{index}. Enviando arquivo…",
+        )
+        await self._send_document_with_retry(chat_id, result.path)
+
+    async def handle_command_video_subs(
+        self, *, chat_id: int, user_id: int, text: str = ""
+    ) -> None:
+        """Gera e envia MP4 com legenda selecionável para uma transcrição concluída."""
+        if not self._is_authorized(user_id):
+            return
+        if self._repository is None or self._video_subtitle_export_service is None:
+            await self._send_text(chat_id, "Exportação de vídeo legendado indisponível neste bot.")
+            return
+        index = _parse_history_index(text)
+        selected = await self._select_completed_job(chat_id=chat_id, user_id=user_id, index=index)
+        if selected is None:
+            return
+        slug = self._slug_from_md_path(selected.md_path)
+        if slug is None:
+            await self._send_text(chat_id, "Não consegui localizar o snapshot dessa transcrição.")
+            return
+        await self._send_text(
+            chat_id,
+            "🎬 Gerando MP4 com legenda selecionável. "
+            f"Limites: {self._settings.max_video_subtitles_duration_min} min e "
+            f"{self._settings.max_video_subtitles_size_mb} MB.",
+        )
+        try:
+            result = await asyncio.to_thread(
+                self._video_subtitle_export_service.export,
+                video_id=selected.video_id,
+                slug=slug,
+                speaker_aliases=selected.speaker_renames,
+            )
+        except FileNotFoundError:
+            await self._send_text(chat_id, "Snapshot dessa transcrição expirou. Reprocesse o vídeo.")
+            return
+        except VideoSubtitleTooLongError as exc:
+            await self._send_text(chat_id, f"Vídeo não exportado: {exc}")
+            return
+        except VideoSubtitleTooLargeError as exc:
+            await self._send_text(chat_id, f"Vídeo não exportado: {exc}")
+            return
+        except VideoSubtitleExportError as exc:
+            await self._send_text(chat_id, f"Falha ao gerar vídeo legendado: {exc}")
+            return
+        await self._send_text(
+            chat_id,
+            f"✅ MP4 com legenda selecionável gerado para a transcrição #{index}. Enviando vídeo…",
+        )
+        await self._send_video_with_retry(
+            chat_id,
+            result.path,
+            caption=(
+                "🎬 Vídeo com legenda selecionável\n"
+                f"Arquivo: {_format_file_size(result.size_bytes)}\n"
+                "A legenda foi adicionada como faixa selecionável no MP4."
+            ),
+        )
+
     async def handle_command_clearcache(self, *, chat_id: int, user_id: int) -> None:
         if not self._is_authorized(user_id):
             return
@@ -879,6 +1044,14 @@ class TelegramBotAdapter:
         except TelegramSendError as exc:
             logger.error("Audio não enviado: %s", exc)
 
+    async def _send_video_with_retry(
+        self, chat_id: int, path: Path, caption: str | None = None
+    ) -> None:
+        try:
+            await send_with_retry(lambda: self._client.send_video(chat_id, path, caption=caption))
+        except TelegramSendError as exc:
+            logger.error("Video não enviado: %s", exc)
+
     async def _send_document_with_retry(self, chat_id: int, path: Path) -> None:
         try:
             await send_with_retry(lambda: self._client.send_document(chat_id, path))
@@ -928,6 +1101,27 @@ def _parse_rename_mapping(text: str) -> dict[str, str]:
     return out
 
 
+def _parse_export_command(text: str) -> tuple[str, int] | None:
+    """Extrai formato e índice de ``/export srt 2``.
+
+    Quando o índice é omitido, retorna 1 para operar sobre a transcrição mais
+    recente, seguindo ``/last`` e ``/rename``.
+    """
+    parts = (text or "").strip().split()
+    if len(parts) < 2:
+        return None
+    fmt = parts[1].strip().lower().lstrip(".")
+    if fmt not in SUPPORTED_EXPORT_FORMATS:
+        return None
+    index = 1
+    if len(parts) >= 3:
+        try:
+            index = int(parts[2])
+        except ValueError:
+            index = 1
+    return fmt, index
+
+
 def _parse_history_index(text: str) -> int:
     """Extrai índice positivo de comandos como ``/last 2`` ou ``/rename 2``.
 
@@ -953,6 +1147,13 @@ def _payload_language_suffix(payload: JobPayload) -> str:
     if payload.requested_language:
         return f" — idioma: {payload.requested_language}"
     return " — idioma: automático"
+
+
+def _format_file_size(size_bytes: int) -> str:
+    mb = size_bytes / (1024 * 1024)
+    if mb >= 1:
+        return f"{mb:.1f} MB"
+    return f"{size_bytes / 1024:.1f} KB"
 
 
 def _format_language_status(result: object) -> str:

@@ -21,16 +21,3 @@ Adicionar exportação de artefatos derivados de transcrições concluídas sem 
 python3 -m compileall -q src tests scripts
 PYTHONPATH=/mnt/data/test_stubs:src pytest -q   tests/unit/infrastructure/exporting/test_transcript_exporter.py   tests/unit/infrastructure/telegram/test_bot_adapter_commands.py   tests/unit/test_entrypoint_command_registration.py
 ```
-
-
-## Atualização
-
-Além de `/export json|srt|vtt [n]`, a interface agora aceita atalhos diretos:
-
-```text
-/json [n]
-/srt [n]
-/vtt [n]
-```
-
-Esses atalhos usam a mesma seleção por histórico de `/last [n]` e `/rename [n]`.

@@ -33,6 +33,13 @@ from yt_transcriber_bot.infrastructure.audio.ffmpeg_converter import (
 from yt_transcriber_bot.infrastructure.diarization.composite_engine import (
     CompositeDiarizationEngine,
 )
+from yt_transcriber_bot.infrastructure.exporting.transcript_exporter import (
+    TranscriptExportService,
+)
+from yt_transcriber_bot.infrastructure.exporting.video_subtitles_exporter import (
+    VideoSoftSubtitleExportService,
+    VideoSubtitleExportLimits,
+)
 from yt_transcriber_bot.infrastructure.persistence.filesystem.local_file_storage import (
     LocalFileStorage,
 )
@@ -64,6 +71,8 @@ class Composition:
     snapshots: TranscriptSnapshotRepository
     use_case: TranscribeVideoUseCase
     rename_service: RenameSpeakersService
+    export_service: TranscriptExportService
+    video_subtitle_export_service: VideoSoftSubtitleExportService
     retention_policy: RetentionPolicy
 
 
@@ -137,6 +146,7 @@ def build(settings: AppSettings) -> Composition:
     settings.processed_dir().mkdir(parents=True, exist_ok=True)
     settings.transcripts_dir().mkdir(parents=True, exist_ok=True)
     settings.logs_dir().mkdir(parents=True, exist_ok=True)
+    settings.video_exports_dir().mkdir(parents=True, exist_ok=True)
     segments_dir = settings.base_dir / "segments"
     segments_dir.mkdir(parents=True, exist_ok=True)
     settings.models_dir.mkdir(parents=True, exist_ok=True)
@@ -181,6 +191,19 @@ def build(settings: AppSettings) -> Composition:
 
     # Serviços auxiliares
     rename_service = RenameSpeakersService(snapshots, renderer)
+    export_service = TranscriptExportService(snapshots)
+    video_subtitle_export_service = VideoSoftSubtitleExportService(
+        snapshots=snapshots,
+        transcript_exporter=export_service,
+        ydl_factory=real_ydl_factory,
+        output_dir=settings.video_exports_dir(),
+        cookies_file=settings.youtube_cookies_file or None,
+        cookies_browser=settings.youtube_cookies_browser or None,
+        limits=VideoSubtitleExportLimits(
+            max_duration_seconds=settings.max_video_subtitles_duration_min * 60,
+            max_size_bytes=settings.max_video_subtitles_size_mb * 1024 * 1024,
+        ),
+    )
     retention_policy = RetentionPolicy(
         repository=repository,
         max_volatile_jobs=settings.retention_count,
@@ -193,5 +216,7 @@ def build(settings: AppSettings) -> Composition:
         snapshots=snapshots,
         use_case=use_case,
         rename_service=rename_service,
+        export_service=export_service,
+        video_subtitle_export_service=video_subtitle_export_service,
         retention_policy=retention_policy,
     )

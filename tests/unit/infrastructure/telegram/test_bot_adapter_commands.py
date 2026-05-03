@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, date, datetime
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -21,6 +22,9 @@ from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
 from yt_transcriber_bot.domain.value_objects.duration import Duration
 from yt_transcriber_bot.domain.value_objects.language import Language
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
+from yt_transcriber_bot.infrastructure.exporting.transcript_exporter import (
+    TranscriptExportService,
+)
 from yt_transcriber_bot.infrastructure.persistence.filesystem.transcript_snapshot import (
     TranscriptSnapshot,
     TranscriptSnapshotRepository,
@@ -44,6 +48,7 @@ class FakeBotClient:
         self.sent: list[tuple[int, str]] = []
         self.docs: list[Path] = []
         self.audios: list[Path] = []
+        self.videos: list[tuple[Path, str | None]] = []
         self.edits: list[tuple[int, int, str]] = []
 
     async def send_message(self, chat_id: int, text: str, reply_markup: object | None = None) -> int:
@@ -60,6 +65,30 @@ class FakeBotClient:
 
     async def send_audio(self, chat_id: int, file_path: Path, caption: str | None = None) -> None:
         self.audios.append(file_path)
+
+    async def send_video(self, chat_id: int, file_path: Path, caption: str | None = None) -> None:
+        self.videos.append((file_path, caption))
+
+
+class FakeVideoSubtitleExportService:
+    def __init__(self, output_path: Path) -> None:
+        self.output_path = output_path
+        self.calls: list[dict[str, object]] = []
+
+    def export(self, **kwargs: object) -> object:
+        self.calls.append(kwargs)
+        self.output_path.parent.mkdir(parents=True, exist_ok=True)
+        self.output_path.write_bytes(b"fake-mp4")
+        return type(
+            "Result",
+            (),
+            {
+                "path": self.output_path,
+                "subtitle_path": self.output_path.with_suffix(".srt"),
+                "source_video_path": self.output_path,
+                "size_bytes": self.output_path.stat().st_size,
+            },
+        )()
 
 
 class FakeRepo:
@@ -136,8 +165,18 @@ def rename_service(
 
 
 @pytest.fixture
+def export_service(snapshots: TranscriptSnapshotRepository) -> TranscriptExportService:
+    return TranscriptExportService(snapshots)
+
+
+@pytest.fixture
 def client() -> FakeBotClient:
     return FakeBotClient()
+
+
+@pytest.fixture
+def video_subtitle_service(tmp_path: Path) -> FakeVideoSubtitleExportService:
+    return FakeVideoSubtitleExportService(tmp_path / "video_exports" / "video.mp4")
 
 
 @pytest.fixture
@@ -146,6 +185,8 @@ async def adapter(
     client: FakeBotClient,
     repo: FakeRepo,
     rename_service: RenameSpeakersService,
+    export_service: TranscriptExportService,
+    video_subtitle_service: FakeVideoSubtitleExportService,
     tmp_path: Path,
 ) -> TelegramBotAdapter:
     a = TelegramBotAdapter(
@@ -154,6 +195,8 @@ async def adapter(
         use_case=MagicMock(),
         repository=repo,  # type: ignore[arg-type]
         rename_service=rename_service,
+        export_service=export_service,
+        video_subtitle_export_service=video_subtitle_service,  # type: ignore[arg-type]
         models_dir=tmp_path / "models",
     )
     await a.start()
@@ -712,3 +755,151 @@ async def test_inline_done_button_closes_rename_dialog(
     await adapter.handle_message(chat_id=1, user_id=42, text="João")
     assert any("Renomeação concluída" in text for _, text, *_ in client.sent)
     assert any("link do YouTube" in text for _, text, *_ in client.sent)
+
+# --------------------------------------------------------------------
+# /export json|srt|vtt [n]
+# --------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_export_requires_format(adapter: TelegramBotAdapter, client: FakeBotClient) -> None:
+    await adapter.handle_command_export(chat_id=1, user_id=42, text="/export")
+    assert any("Uso: /export json|srt|vtt" in text for _, text, *_ in client.sent)
+
+
+@pytest.mark.asyncio
+async def test_export_invalid_format_shows_usage(
+    adapter: TelegramBotAdapter, client: FakeBotClient
+) -> None:
+    await adapter.handle_command_export(chat_id=1, user_id=42, text="/export pdf")
+    assert any("Uso: /export json|srt|vtt" in text for _, text, *_ in client.sent)
+
+
+@pytest.mark.asyncio
+async def test_export_srt_latest_generates_and_sends_file(
+    adapter: TelegramBotAdapter,
+    client: FakeBotClient,
+    repo: FakeRepo,
+    snapshots: TranscriptSnapshotRepository,
+    tmp_path: Path,
+) -> None:
+    md = tmp_path / "hello.md"
+    md.write_text("# placeholder")
+    repo.save(_make_completed_job(42, md, datetime(2026, 5, 1, tzinfo=UTC)))
+    _populate_snapshot(snapshots, "hello")
+
+    await adapter.handle_command_export(chat_id=1, user_id=42, text="/export srt")
+
+    srt = tmp_path / "hello.srt"
+    assert srt in client.docs
+    assert "00:00:00,000 --> 00:00:03,000" in srt.read_text()
+    assert any("Exportação SRT" in text for _, text, *_ in client.sent)
+
+
+@pytest.mark.asyncio
+async def test_export_json_with_index_uses_penultimate_and_speaker_aliases(
+    adapter: TelegramBotAdapter,
+    client: FakeBotClient,
+    repo: FakeRepo,
+    snapshots: TranscriptSnapshotRepository,
+    tmp_path: Path,
+) -> None:
+    old_md = tmp_path / "old-video.md"
+    new_md = tmp_path / "new-video.md"
+    old_md.write_text("# old")
+    new_md.write_text("# new")
+    old_job = _make_completed_job(
+        42,
+        old_md,
+        datetime(2026, 5, 1, 10, 0, tzinfo=UTC),
+        video_id="L9awVwLDH18",
+    )
+    old_job.speaker_renames = {"SPEAKER_00": "Waldemar"}
+    repo.save(old_job)
+    repo.save(
+        _make_completed_job(
+            42,
+            new_md,
+            datetime(2026, 5, 1, 11, 0, tzinfo=UTC),
+            video_id="YFDp-smGYqQ",
+        )
+    )
+    _populate_snapshot(snapshots, "old-video")
+    _populate_snapshot(snapshots, "new-video")
+
+    await adapter.handle_command_export(chat_id=1, user_id=42, text="/export json 2")
+
+    old_json = tmp_path / "old-video.json"
+    new_json = tmp_path / "new-video.json"
+    assert old_json in client.docs
+    assert not new_json.exists()
+    payload = json.loads(old_json.read_text())
+    assert payload["transcript"]["segments"][0]["speaker"] == "Waldemar"
+
+
+@pytest.mark.asyncio
+async def test_export_with_out_of_range_index_explains_to_use_list(
+    adapter: TelegramBotAdapter,
+    client: FakeBotClient,
+    repo: FakeRepo,
+    tmp_path: Path,
+) -> None:
+    md = tmp_path / "only-video.md"
+    md.write_text("# only")
+    repo.save(_make_completed_job(42, md, datetime(2026, 5, 1, tzinfo=UTC)))
+
+    await adapter.handle_command_export(chat_id=1, user_id=42, text="/export vtt 2")
+
+    assert any("Use /list" in text for _, text, *_ in client.sent)
+    assert client.docs == []
+
+
+# --------------------------------------------------------------------
+# /video_subs
+# --------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_video_subs_sends_soft_subtitled_mp4(
+    adapter: TelegramBotAdapter,
+    client: FakeBotClient,
+    repo: FakeRepo,
+    snapshots: TranscriptSnapshotRepository,
+    video_subtitle_service: FakeVideoSubtitleExportService,
+    tmp_path: Path,
+) -> None:
+    md = tmp_path / "video.md"
+    md.write_text("# video")
+    _populate_snapshot(snapshots, "video")
+    repo.save(_make_completed_job(42, md, datetime(2026, 5, 1, 12, 0, tzinfo=UTC)))
+
+    await adapter.handle_command_video_subs(chat_id=1, user_id=42, text="/video_subs")
+
+    assert video_subtitle_service.calls
+    assert video_subtitle_service.calls[0]["slug"] == "video"
+    assert client.videos
+    assert client.videos[0][0].name == "video.mp4"
+    assert "legenda selecionável" in (client.videos[0][1] or "")
+
+
+@pytest.mark.asyncio
+async def test_video_subs_index_selects_penultimate_job(
+    adapter: TelegramBotAdapter,
+    client: FakeBotClient,
+    repo: FakeRepo,
+    snapshots: TranscriptSnapshotRepository,
+    video_subtitle_service: FakeVideoSubtitleExportService,
+    tmp_path: Path,
+) -> None:
+    latest = tmp_path / "latest.md"
+    previous = tmp_path / "previous.md"
+    latest.write_text("# latest")
+    previous.write_text("# previous")
+    _populate_snapshot(snapshots, "latest")
+    _populate_snapshot(snapshots, "previous")
+    repo.save(_make_completed_job(42, previous, datetime(2026, 5, 1, 11, 0, tzinfo=UTC)))
+    repo.save(_make_completed_job(42, latest, datetime(2026, 5, 1, 12, 0, tzinfo=UTC)))
+
+    await adapter.handle_command_video_subs(chat_id=1, user_id=42, text="/video_subs 2")
+
+    assert video_subtitle_service.calls[0]["slug"] == "previous"

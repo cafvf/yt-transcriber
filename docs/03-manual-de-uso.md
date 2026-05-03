@@ -54,6 +54,58 @@ Exemplo de saída:
 ### `/last [n]`
 Reenvia o arquivo Markdown da n-ésima transcrição concluída, usando a numeração mostrada por `/list`. Sem índice, usa a transcrição mais recente. Se o arquivo tiver sido removido ou movido, o bot avisa que o Markdown não está mais disponível.
 
+### `/export json|srt|vtt [n]`
+Exporta artefatos derivados da n-ésima transcrição concluída, sem reprocessar áudio, WhisperX ou diarização. Sem índice, exporta a transcrição mais recente.
+
+Exemplos:
+
+```text
+/export json
+/export srt 2
+/export vtt 3
+```
+
+Formatos gerados:
+
+- `json`: metadados, contexto de execução, aliases de falantes e segmentos estruturados.
+- `srt`: legenda SubRip com timestamps e nome exibido do falante.
+- `vtt`: legenda WebVTT com timestamps e nome exibido do falante.
+
+Se você já aplicou `/rename`, os nomes/mesclagens de falantes salvos no job são usados nos arquivos exportados.
+
+Atalhos equivalentes:
+
+```text
+/json [n]
+/srt [n]
+/vtt [n]
+```
+
+### `/video_subs [n]`
+Gera e envia um MP4 com a legenda adicionada como **faixa selecionável**, sem queimar a legenda na imagem. O índice `[n]` segue a mesma numeração de `/list`; sem índice, usa a transcrição mais recente.
+
+Exemplos:
+
+```text
+/video_subs
+/video_subs 2
+```
+
+Limites operacionais padrão:
+
+- duração máxima: 30 minutos;
+- tamanho máximo do vídeo final: 200 MB.
+
+Esses limites podem ser ajustados no `.env`:
+
+```env
+MAX_VIDEO_SUBTITLES_DURATION_MIN=30
+MAX_VIDEO_SUBTITLES_SIZE_MB=200
+VIDEO_EXPORTS_DIR_NAME=video_exports
+```
+
+O bot usa o snapshot da transcrição para gerar um `.srt`, baixa um MP4 compatível e faz o mux da legenda com `ffmpeg` como `mov_text`.
+
 ### `/redo <link>`
 Reprocessa explicitamente um link do YouTube como um **novo job** na fila.
 
@@ -288,3 +340,42 @@ https://www.youtube.com/watch?v=... --lang en
 Quando o idioma é informado manualmente, ele tem prioridade sobre os metadados do YouTube. Isso afeta a escolha do modelo em `WHISPER_MODEL=auto`, a busca por legendas do YouTube e o carregamento do WhisperX com idioma explícito.
 
 O Telegram informa o idioma durante a fila e na conclusão, distinguindo entre idioma informado pelo usuário, idioma inferido dos metadados, idioma detectado pelo ASR e idioma vindo de legenda do YouTube.
+
+## Referência rápida de comandos
+
+O comando `/help` no Telegram deve listar todos os comandos públicos atuais. A lista está agrupada por uso:
+
+### Entrada e idioma
+
+- `/transcribe <link> [--lang pt|en]` — enfileira explicitamente um link para transcrição.
+- `/pt <link>` — transcreve informando português como idioma do vídeo.
+- `/en <link>` — transcreve informando inglês como idioma do vídeo.
+- `/redo <link> [--lang pt|en]` — reprocessa um vídeo.
+
+### Estado, fila e cancelamento
+
+- `/status` — mostra o job atual e o estado operacional.
+- `/queue` ou `/fila` — mostra a fila completa.
+- `/clearqueue`, `/cancelqueue` ou `/limparfila` — remove apenas os pendentes.
+- `/cancel` — solicita cancelamento do job atual.
+- `/cancelall` ou `/cancelartudo` — cancela o atual e remove pendentes.
+
+### Histórico e revisão
+
+- `/list` — lista transcrições concluídas, com título e horário quando disponíveis.
+- `/last [n]` — reenvia a n-ésima transcrição concluída.
+- `/rename [n]` — abre botões para renomear ou mesclar falantes.
+
+### Exportações
+
+- `/export json [n]`, `/json [n]` — exporta JSON estruturado.
+- `/export srt [n]`, `/srt [n]` — exporta legenda SRT.
+- `/export vtt [n]`, `/vtt [n]` — exporta legenda VTT.
+- `/video_subs [n]` ou `/videosubs [n]` — envia MP4 com legenda selecionável.
+
+### Manutenção
+
+- `/start` — mostra a mensagem inicial.
+- `/help` — mostra a referência de comandos.
+- `/clearcache` — apaga modelos baixados no diretório de cache configurado.
+

@@ -48,10 +48,19 @@ class PTBBotClient:
             )
 
     async def send_audio(
-        self, chat_id: int, file_path: Path, caption: str | None = None) -> None:
+        self, chat_id: int, file_path: Path, caption: str | None = None
+    ) -> None:
         with file_path.open("rb") as fh:
             await self._bot.send_audio(
                 chat_id=chat_id, audio=fh, filename=file_path.name, caption=caption
+            )
+
+    async def send_video(
+        self, chat_id: int, file_path: Path, caption: str | None = None
+    ) -> None:
+        with file_path.open("rb") as fh:
+            await self._bot.send_video(
+                chat_id=chat_id, video=fh, filename=file_path.name, caption=caption
             )
 
 
