@@ -87,6 +87,29 @@ class SequentialJobQueue(Generic[T]):
         current.cancel_event.set()
         return True
 
+    async def clear_pending(self) -> int:
+        """Cancela e remove a visão local dos itens pendentes.
+
+        Os itens ainda podem estar dentro do ``asyncio.Queue`` interno, mas
+        ficam marcados como cancelados e serão descartados pelo worker ao serem
+        retirados. Retorna a quantidade de itens pendentes sinalizados.
+        """
+        async with self._lock:
+            pending = list(self._pending)
+            self._pending.clear()
+        for item in pending:
+            item.cancel_event.set()
+        return len(pending)
+
+    async def cancel_all(self) -> tuple[bool, int]:
+        """Cancela o job atual e todos os pendentes.
+
+        Retorna ``(havia_atual, quantidade_pendentes_cancelados)``.
+        """
+        current_cancelled = await self.cancel_current()
+        pending_cancelled = await self.clear_pending()
+        return current_cancelled, pending_cancelled
+
     async def cancel_by_id(self, item_id: str) -> bool:
         """Cancela um job pendente OU o atual pelo ``item_id``.
 

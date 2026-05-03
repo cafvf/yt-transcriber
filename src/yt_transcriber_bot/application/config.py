@@ -93,6 +93,9 @@ class AppSettings(BaseSettings):
 
     # ===== Telegram =====
     telegram_message_edit_min_interval_s: float = Field(default=2.0, ge=0.5, le=10.0)
+    telegram_max_queue_size: int = Field(
+        default=5, ge=1, le=50, description="Limite total de jobs em execução + pendentes"
+    )
 
     @field_validator("device")
     @classmethod

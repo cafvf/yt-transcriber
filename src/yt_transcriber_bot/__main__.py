@@ -12,6 +12,7 @@ from pathlib import Path
 from telegram import Update
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -124,6 +125,15 @@ async def _run() -> None:
     async def on_status(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await adapter.handle_command_status(chat_id=_cid(update), user_id=_uid(update))
 
+    async def on_queue(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        await adapter.handle_command_queue(chat_id=_cid(update), user_id=_uid(update))
+
+    async def on_clearqueue(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        await adapter.handle_command_clearqueue(chat_id=_cid(update), user_id=_uid(update))
+
+    async def on_cancelall(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        await adapter.handle_command_cancelall(chat_id=_cid(update), user_id=_uid(update))
+
     async def on_cancel(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await adapter.handle_command_cancel(chat_id=_cid(update), user_id=_uid(update))
 
@@ -165,9 +175,22 @@ async def _run() -> None:
     async def on_clearcache(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await adapter.handle_command_clearcache(chat_id=_cid(update), user_id=_uid(update))
 
+    async def on_callback(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        query = update.callback_query
+        if query is None:
+            return
+        await query.answer()
+        data = query.data or ""
+        chat_id = query.message.chat_id if query.message else _cid(update)
+        user_id = query.from_user.id if query.from_user else _uid(update)
+        await adapter.handle_callback_query(chat_id=chat_id, user_id=user_id, data=data)
+
     application.add_handler(CommandHandler("start", on_start))
     application.add_handler(CommandHandler("help", on_help))
     application.add_handler(CommandHandler("status", on_status))
+    application.add_handler(CommandHandler(["queue", "fila"], on_queue))
+    application.add_handler(CommandHandler(["clearqueue", "cancelqueue", "limparfila"], on_clearqueue))
+    application.add_handler(CommandHandler(["cancelall", "cancelartudo"], on_cancelall))
     application.add_handler(CommandHandler("cancel", on_cancel))
     application.add_handler(CommandHandler("redo", on_redo))
     application.add_handler(CommandHandler("pt", on_pt))
@@ -177,6 +200,8 @@ async def _run() -> None:
     application.add_handler(CommandHandler("last", on_last))
     application.add_handler(CommandHandler("rename", on_rename))
     application.add_handler(CommandHandler("clearcache", on_clearcache))
+    application.add_handler(CallbackQueryHandler(on_callback, pattern=r"^rename:"))
+    application.add_handler(MessageHandler(filters.COMMAND, on_text))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
     await adapter.start()

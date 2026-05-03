@@ -46,8 +46,8 @@ class FakeBotClient:
         self.audios: list[Path] = []
         self.edits: list[tuple[int, int, str]] = []
 
-    async def send_message(self, chat_id: int, text: str) -> int:
-        self.sent.append((chat_id, text))
+    async def send_message(self, chat_id: int, text: str, reply_markup: object | None = None) -> int:
+        self.sent.append((chat_id, text, reply_markup))
         return 100 + len(self.sent)
 
     async def edit_message(self, chat_id: int, message_id: int, text: str) -> None:
@@ -170,8 +170,8 @@ def _make_completed_job(
 ) -> Job:
     job = Job.new(VideoId(video_id), user_id)
     object.__setattr__(job, "requested_at", requested_at)
-    object.__setattr__(job, "updated_at", requested_at)
     job.transition_to(JobStatus.COMPLETED)
+    object.__setattr__(job, "updated_at", requested_at)
     job.md_path = str(md_path)
     return job
 
@@ -214,7 +214,7 @@ def _populate_snapshot(snapshots: TranscriptSnapshotRepository, slug: str) -> No
 @pytest.mark.asyncio
 async def test_list_empty(adapter: TelegramBotAdapter, client: FakeBotClient) -> None:
     await adapter.handle_command_list(chat_id=1, user_id=42)
-    assert any("Nenhuma transcrição" in t for _, t in client.sent)
+    assert any("Nenhuma transcrição" in t for _, t, *_ in client.sent)
 
 
 @pytest.mark.asyncio
@@ -228,7 +228,7 @@ async def test_list_shows_recent_jobs(
     md.write_text("# x")
     repo.save(_make_completed_job(42, md, datetime(2026, 5, 1, 12, 0, tzinfo=UTC)))
     await adapter.handle_command_list(chat_id=1, user_id=42)
-    assert any("dQw4w9WgXcQ" in t for _, t in client.sent)
+    assert any("dQw4w9WgXcQ" in t for _, t, *_ in client.sent)
 
 
 # --------------------------------------------------------------------
@@ -239,7 +239,7 @@ async def test_list_shows_recent_jobs(
 @pytest.mark.asyncio
 async def test_last_empty(adapter: TelegramBotAdapter, client: FakeBotClient) -> None:
     await adapter.handle_command_last(chat_id=1, user_id=42)
-    assert any("Sem transcrições" in t for _, t in client.sent)
+    assert any("Sem transcrições" in t for _, t, *_ in client.sent)
 
 
 @pytest.mark.asyncio
@@ -266,7 +266,7 @@ async def test_last_when_md_file_missing(
     md = tmp_path / "ghost.md"
     repo.save(_make_completed_job(42, md, datetime(2026, 5, 1, tzinfo=UTC)))
     await adapter.handle_command_last(chat_id=1, user_id=42)
-    assert any("removido ou movido" in t for _, t in client.sent)
+    assert any("removido ou movido" in t for _, t, *_ in client.sent)
 
 
 # --------------------------------------------------------------------
@@ -277,7 +277,7 @@ async def test_last_when_md_file_missing(
 @pytest.mark.asyncio
 async def test_rename_when_no_jobs(adapter: TelegramBotAdapter, client: FakeBotClient) -> None:
     await adapter.handle_command_rename(chat_id=1, user_id=42)
-    assert any("Sem transcrições concluídas" in t for _, t in client.sent)
+    assert any("Sem transcrições concluídas" in t for _, t, *_ in client.sent)
 
 
 @pytest.mark.asyncio
@@ -295,7 +295,7 @@ async def test_rename_full_flow(
 
     # Início do diálogo
     await adapter.handle_command_rename(chat_id=1, user_id=42)
-    assert any("Falantes detectados" in t for _, t in client.sent)
+    assert any("Falantes detectados" in t for _, t, *_ in client.sent)
 
     # Envia o mapeamento como texto
     await adapter.handle_message(chat_id=1, user_id=42, text="SPEAKER_00=João, SPEAKER_01=Maria")
@@ -325,7 +325,7 @@ async def test_rename_invalid_input_keeps_dialog_open(
 
     await adapter.handle_command_rename(chat_id=1, user_id=42)
     await adapter.handle_message(chat_id=1, user_id=42, text="lixo qualquer")
-    assert any("Formato inválido" in t for _, t in client.sent)
+    assert any("Formato inválido" in t for _, t, *_ in client.sent)
 
 
 @pytest.mark.asyncio
@@ -343,7 +343,7 @@ async def test_rename_cancel_aborts_dialog(
 
     await adapter.handle_command_rename(chat_id=1, user_id=42)
     await adapter.handle_command_cancel(chat_id=1, user_id=42)
-    assert any("Renomeação cancelada" in t for _, t in client.sent)
+    assert any("Renomeação cancelada" in t for _, t, *_ in client.sent)
 
 
 # --------------------------------------------------------------------
@@ -361,7 +361,7 @@ async def test_clearcache_removes_files(
     (models / "subdir").mkdir()
     (models / "subdir" / "weights.pt").write_bytes(b"y" * 200)
     await adapter.handle_command_clearcache(chat_id=1, user_id=42)
-    assert any("Cache limpo" in t for _, t in client.sent)
+    assert any("Cache limpo" in t for _, t, *_ in client.sent)
     assert not (models / "model.bin").exists()
     assert not (models / "subdir" / "weights.pt").exists()
 
@@ -401,7 +401,7 @@ async def test_redo_requires_link(settings: AppSettings, client: FakeBotClient) 
         use_case=MagicMock(),
     )
     await adapter.handle_command_redo(chat_id=1, user_id=42, text="/redo")
-    assert any("Uso: /redo" in text for _, text in client.sent)
+    assert any("Uso: /redo" in text for _, text, *_ in client.sent)
 
 
 @pytest.mark.asyncio
@@ -416,7 +416,7 @@ async def test_redo_enqueues_fresh_processing(settings: AppSettings, client: Fak
         user_id=42,
         text="/redo https://youtu.be/dQw4w9WgXcQ",
     )
-    assert any("Reprocessando" in text and "Enfileirando" in text for _, text in client.sent)
+    assert any("Reprocessando" in text and "Enfileirando" in text for _, text, *_ in client.sent)
 
 
 @pytest.mark.asyncio
@@ -437,7 +437,7 @@ async def test_clearcache_refuses_unconfigured_directory(
     )
     await adapter.handle_command_clearcache(chat_id=1, user_id=42)
     assert protected.exists()
-    assert any("Operação recusada" in text for _, text in client.sent)
+    assert any("Operação recusada" in text for _, text, *_ in client.sent)
 
 # --------------------------------------------------------------------
 # Histórico numerado: /list, /last n e /rename n
@@ -529,7 +529,7 @@ async def test_last_with_out_of_range_index_explains_to_use_list(
 
     await adapter.handle_command_last(chat_id=1, user_id=42, text="/last 2")
 
-    assert any("Use /list" in text for _, text in client.sent)
+    assert any("Use /list" in text for _, text, *_ in client.sent)
     assert client.docs == []
 
 
@@ -563,7 +563,7 @@ async def test_rename_with_index_targets_penultimate_job_not_latest(
     _populate_snapshot(snapshots, "new-video")
 
     await adapter.handle_command_rename(chat_id=1, user_id=42, text="/rename 2")
-    assert any("transcrição #2" in text and "old-video" in text for _, text in client.sent)
+    assert any("transcrição #2" in text and "Hello" in text for _, text, *_ in client.sent)
 
     await adapter.handle_message(chat_id=1, user_id=42, text="SPEAKER_00=João, SPEAKER_01=Maria")
 
@@ -593,6 +593,122 @@ async def test_rename_with_out_of_range_index_does_not_open_dialog(
     await adapter.handle_command_rename(chat_id=1, user_id=42, text="/rename 2")
     await adapter.handle_message(chat_id=1, user_id=42, text="SPEAKER_00=João")
 
-    assert any("Use /list" in text for _, text in client.sent)
-    assert any("link do YouTube" in text for _, text in client.sent)
+    assert any("Use /list" in text for _, text, *_ in client.sent)
+    assert any("link do YouTube" in text for _, text, *_ in client.sent)
     assert client.docs == []
+
+# --------------------------------------------------------------------
+# Interface regressions requested in 2026-05-03 review
+# --------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_prefers_video_title_from_snapshot(
+    adapter: TelegramBotAdapter,
+    client: FakeBotClient,
+    repo: FakeRepo,
+    snapshots: TranscriptSnapshotRepository,
+    tmp_path: Path,
+) -> None:
+    md = tmp_path / "titled-video.md"
+    md.write_text("# placeholder")
+    repo.save(_make_completed_job(42, md, datetime(2026, 5, 1, 12, 30, tzinfo=UTC)))
+    _populate_snapshot(snapshots, "titled-video")
+    await adapter.handle_command_list(chat_id=1, user_id=42)
+    msg = client.sent[-1][1]
+    assert "Hello" in msg
+    assert "executado em 2026-05-01 12:30" in msg
+
+
+@pytest.mark.asyncio
+async def test_list_falls_back_to_slug_when_snapshot_missing(
+    adapter: TelegramBotAdapter,
+    client: FakeBotClient,
+    repo: FakeRepo,
+    tmp_path: Path,
+) -> None:
+    md = tmp_path / "fallback-video.md"
+    md.write_text("# placeholder")
+    repo.save(_make_completed_job(42, md, datetime(2026, 5, 1, 12, 30, tzinfo=UTC)))
+    await adapter.handle_command_list(chat_id=1, user_id=42)
+    msg = client.sent[-1][1]
+    assert "fallback-video" in msg
+    assert "executado em 2026-05-01 12:30" in msg
+
+
+@pytest.mark.asyncio
+async def test_rename_command_sends_inline_buttons(
+    adapter: TelegramBotAdapter,
+    client: FakeBotClient,
+    repo: FakeRepo,
+    snapshots: TranscriptSnapshotRepository,
+    tmp_path: Path,
+) -> None:
+    md = tmp_path / "buttons.md"
+    md.write_text("# placeholder")
+    repo.save(_make_completed_job(42, md, datetime(2026, 5, 1, tzinfo=UTC)))
+    _populate_snapshot(snapshots, "buttons")
+    await adapter.handle_command_rename(chat_id=1, user_id=42)
+    _, text, reply_markup = client.sent[-1]
+    assert "Toque em um falante" in text
+    assert reply_markup is not None
+    callbacks = [button.callback_data for row in reply_markup for button in row]
+    assert "rename:speaker:SPEAKER_00" in callbacks
+    assert "rename:merge" in callbacks
+    assert "rename:done" in callbacks
+
+
+@pytest.mark.asyncio
+async def test_inline_button_rename_single_speaker(
+    adapter: TelegramBotAdapter,
+    client: FakeBotClient,
+    repo: FakeRepo,
+    snapshots: TranscriptSnapshotRepository,
+    tmp_path: Path,
+) -> None:
+    md = tmp_path / "inline.md"
+    md.write_text("# placeholder")
+    repo.save(_make_completed_job(42, md, datetime(2026, 5, 1, tzinfo=UTC)))
+    _populate_snapshot(snapshots, "inline")
+    await adapter.handle_command_rename(chat_id=1, user_id=42)
+    await adapter.handle_callback_query(chat_id=1, user_id=42, data="rename:speaker:SPEAKER_00")
+    assert any("Qual nome" in text for _, text, *_ in client.sent)
+    await adapter.handle_message(chat_id=1, user_id=42, text="João")
+    assert md in client.docs
+    assert "João" in md.read_text()
+
+
+@pytest.mark.asyncio
+async def test_inline_merge_button_guides_user(
+    adapter: TelegramBotAdapter,
+    client: FakeBotClient,
+    repo: FakeRepo,
+    snapshots: TranscriptSnapshotRepository,
+    tmp_path: Path,
+) -> None:
+    md = tmp_path / "merge.md"
+    md.write_text("# placeholder")
+    repo.save(_make_completed_job(42, md, datetime(2026, 5, 1, tzinfo=UTC)))
+    _populate_snapshot(snapshots, "merge")
+    await adapter.handle_command_rename(chat_id=1, user_id=42)
+    await adapter.handle_callback_query(chat_id=1, user_id=42, data="rename:merge")
+    assert any("mesclar falantes" in text for _, text, *_ in client.sent)
+
+
+@pytest.mark.asyncio
+async def test_inline_done_button_closes_rename_dialog(
+    adapter: TelegramBotAdapter,
+    client: FakeBotClient,
+    repo: FakeRepo,
+    snapshots: TranscriptSnapshotRepository,
+    tmp_path: Path,
+) -> None:
+    md = tmp_path / "done.md"
+    md.write_text("# placeholder")
+    repo.save(_make_completed_job(42, md, datetime(2026, 5, 1, tzinfo=UTC)))
+    _populate_snapshot(snapshots, "done")
+    await adapter.handle_command_rename(chat_id=1, user_id=42)
+    await adapter.handle_callback_query(chat_id=1, user_id=42, data="rename:done")
+    await adapter.handle_message(chat_id=1, user_id=42, text="João")
+    assert any("Renomeação concluída" in text for _, text, *_ in client.sent)
+    assert any("link do YouTube" in text for _, text, *_ in client.sent)

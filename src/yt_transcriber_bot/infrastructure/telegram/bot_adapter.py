@@ -63,10 +63,28 @@ logger = logging.getLogger(__name__)
 # ----------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class InlineButton:
+    """Botão inline independente do python-telegram-bot.
+
+    O adapter usa esta estrutura simples para permanecer testável sem importar
+    classes concretas da Bot API. O client real converte para
+    ``InlineKeyboardMarkup``.
+    """
+
+    text: str
+    callback_data: str
+
+
+InlineKeyboard = tuple[tuple[InlineButton, ...], ...]
+
+
 class BotClient(Protocol):
     """Subset da Bot API que usamos. Permite mockagem nos testes."""
 
-    async def send_message(self, chat_id: int, text: str) -> int:
+    async def send_message(
+        self, chat_id: int, text: str, reply_markup: InlineKeyboard | None = None
+    ) -> int:
         """Envia mensagem e retorna o ``message_id``."""
         ...
 
@@ -129,6 +147,7 @@ class TelegramBotAdapter:
         self._pending_rename_slug: str | None = None
         self._pending_rename_job_id: str | None = None
         self._pending_rename_md_path: str | None = None
+        self._pending_rename_label: str | None = None
         self._queue: SequentialJobQueue[JobPayload] = SequentialJobQueue(self._process_job)
 
     # ------------------------------------------------------------------
@@ -155,11 +174,13 @@ class TelegramBotAdapter:
     async def handle_message(self, *, chat_id: int, user_id: int, text: str) -> None:
         if not self._is_authorized(user_id):
             return  # silêncio total (Dúvida 3)
+        raw_text = text or ""
+        if await self._handle_text_command(chat_id=chat_id, user_id=user_id, text=raw_text):
+            return
         # Diálogo de rename pendente?
         if self._pending_rename_user == user_id and self._pending_rename_slug:
-            await self._handle_rename_input(chat_id, user_id, text or "")
+            await self._handle_rename_input(chat_id, user_id, raw_text)
             return
-        raw_text = text or ""
         url = extract_first_youtube_url(raw_text)
         if url is None:
             await self._send_text(chat_id, "Envie um link do YouTube para transcrever.")
@@ -180,6 +201,57 @@ class TelegramBotAdapter:
             requested_language=requested_language,
         )
 
+    async def _handle_text_command(self, *, chat_id: int, user_id: int, text: str) -> bool:
+        """Fallback defensivo para comandos que cheguem como texto comum.
+
+        O entrypoint real registra ``CommandHandler`` para todos os comandos,
+        mas este fallback evita comandos silenciosos se algum handler não for
+        instalado ou se o comando vier com sufixo ``@NomeDoBot``.
+        """
+        stripped = (text or "").strip()
+        if not stripped.startswith("/"):
+            return False
+        token = stripped.split(maxsplit=1)[0]
+        command = token[1:].split("@", 1)[0].lower()
+        if command == "start":
+            await self.handle_command_start(chat_id=chat_id, user_id=user_id)
+        elif command == "help":
+            await self.handle_command_help(chat_id=chat_id, user_id=user_id)
+        elif command == "status":
+            await self.handle_command_status(chat_id=chat_id, user_id=user_id)
+        elif command in {"queue", "fila"}:
+            await self.handle_command_queue(chat_id=chat_id, user_id=user_id)
+        elif command in {"clearqueue", "cancelqueue", "limparfila"}:
+            await self.handle_command_clearqueue(chat_id=chat_id, user_id=user_id)
+        elif command in {"cancelall", "cancelartudo"}:
+            await self.handle_command_cancelall(chat_id=chat_id, user_id=user_id)
+        elif command == "cancel":
+            await self.handle_command_cancel(chat_id=chat_id, user_id=user_id)
+        elif command == "redo":
+            await self.handle_command_redo(chat_id=chat_id, user_id=user_id, text=stripped)
+        elif command == "pt":
+            await self.handle_command_language_link(
+                chat_id=chat_id, user_id=user_id, text=stripped, language="pt"
+            )
+        elif command == "en":
+            await self.handle_command_language_link(
+                chat_id=chat_id, user_id=user_id, text=stripped, language="en"
+            )
+        elif command == "transcribe":
+            rest = stripped.split(maxsplit=1)[1] if len(stripped.split(maxsplit=1)) > 1 else ""
+            await self.handle_message(chat_id=chat_id, user_id=user_id, text=rest)
+        elif command == "list":
+            await self.handle_command_list(chat_id=chat_id, user_id=user_id)
+        elif command == "last":
+            await self.handle_command_last(chat_id=chat_id, user_id=user_id, text=stripped)
+        elif command == "rename":
+            await self.handle_command_rename(chat_id=chat_id, user_id=user_id, text=stripped)
+        elif command == "clearcache":
+            await self.handle_command_clearcache(chat_id=chat_id, user_id=user_id)
+        else:
+            await self._send_text(chat_id, "Comando não reconhecido. Use /help para ver os comandos disponíveis.")
+        return True
+
     async def _enqueue_url(
         self,
         *,
@@ -197,6 +269,22 @@ class TelegramBotAdapter:
             video_id = VideoId.from_url(url)
         except (InvalidYouTubeUrlError, ValueError) as exc:
             await self._send_text(chat_id, f"Link inválido: {exc}")
+            return
+
+        if self._is_already_queued(video_id, requested_language):
+            await self._send_text(
+                chat_id,
+                "Esse vídeo já está em processamento ou na fila "
+                f"para o idioma {requested_language or 'automático'}.",
+            )
+            return
+        current, pending = self._queue.snapshot()
+        total_in_queue = (1 if current is not None else 0) + len(pending)
+        if total_in_queue >= self._settings.telegram_max_queue_size:
+            await self._send_text(
+                chat_id,
+                "Fila cheia. Aguarde um job terminar ou use /queue, /clearqueue ou /cancelall.",
+            )
             return
 
         prefix = "🔁 Reprocessando" if redo else "📥 Recebido"
@@ -218,6 +306,15 @@ class TelegramBotAdapter:
         if item.enqueued_position > 1:
             await self._send_text(chat_id, f"⏳ Posição na fila: {item.enqueued_position}.")
 
+
+    def _is_already_queued(self, video_id: VideoId, requested_language: str | None) -> bool:
+        current, pending = self._queue.snapshot()
+        for item in ([current] if current is not None else []) + list(pending):
+            payload = item.payload
+            if payload.video_id == video_id and payload.requested_language == requested_language:
+                return True
+        return False
+
     async def handle_command_start(self, *, chat_id: int, user_id: int) -> None:
         if not self._is_authorized(user_id):
             return
@@ -236,12 +333,15 @@ class TelegramBotAdapter:
             "• Mande um link do YouTube → transcrevo o áudio.\n"
             "• Idioma opcional: adicione --lang pt ou --lang en ao link.\n"
             "• Atalhos: /pt <link> e /en <link>.\n"
-            "• /status → mostra o que está em processamento.\n"
+            "• /status → mostra o job atual e o estado operacional.\n"
+            "• /queue ou /fila → mostra a fila completa.\n"
+            "• /clearqueue ou /cancelqueue → limpa apenas os pendentes.\n"
             "• /cancel → cancela o job em andamento.\n"
-            "• /list → últimas transcrições concluídas, numeradas.\n"
+            "• /cancelall → cancela o job atual e limpa pendentes.\n"
+            "• /list → últimas transcrições concluídas, numeradas por título.\n"
             "• /last [n] → reenvia a n-ésima transcrição concluída; ex.: /last 2.\n"
             "• /redo <link> → reprocessa um vídeo.\n"
-            "• /rename [n] → renomear falantes da n-ésima transcrição; ex.: /rename 2.\n"
+            "• /rename [n] → abre botões para renomear/mesclar falantes; ex.: /rename 2.\n"
             "• /clearcache → apaga modelos baixados.",
         )
 
@@ -249,15 +349,74 @@ class TelegramBotAdapter:
         if not self._is_authorized(user_id):
             return
         current, pending = self._queue.snapshot()
-        if current is None and not pending:
-            await self._send_text(chat_id, "Nada na fila. Pronto para receber links.")
+        if current is None:
+            if pending:
+                await self._send_text(
+                    chat_id,
+                    "📡 Status do bot\n"
+                    f"✅ Nenhum job em execução. Pendentes: {len(pending)}. Use /queue para ver a fila.",
+                )
+            else:
+                await self._send_text(
+                    chat_id,
+                    "📡 Status do bot\n✅ Bot ocioso. Nenhum job em execução e nenhum item pendente.",
+                )
             return
-        lines: list[str] = []
+        await self._send_text(
+            chat_id,
+            "📡 Status do bot\n\n"
+            "▶️ Em execução:\n"
+            f"🔗 {current.payload.url}\n"
+            f"🌐{_payload_language_suffix(current.payload).replace(' — idioma:', ' Idioma:')}\n"
+            f"⏳ Fila pendente: {len(pending)} item(ns).\n\n"
+            "Use /queue para ver a fila completa.",
+        )
+
+    async def handle_command_queue(self, *, chat_id: int, user_id: int) -> None:
+        if not self._is_authorized(user_id):
+            return
+        current, pending = self._queue.snapshot()
+        total = (1 if current is not None else 0) + len(pending)
+        lines: list[str] = [
+            f"📋 Fila de processamento ({total}/{self._settings.telegram_max_queue_size})"
+        ]
+        if current is None and not pending:
+            lines.append("\n✅ Fila vazia. Envie um link do YouTube para começar.")
         if current is not None:
-            lines.append(f"▶️ Processando: {current.payload.url}{_payload_language_suffix(current.payload)}")
-        for it in pending:
-            lines.append(f"⏳ Aguardando: {it.payload.url}{_payload_language_suffix(it.payload)}")
+            lines.extend([
+                "\n▶️ Em execução:",
+                f"1. {current.payload.url}{_payload_language_suffix(current.payload)}",
+            ])
+        if pending:
+            lines.append("\n⏳ Aguardando:")
+            start = 2 if current is not None else 1
+            for idx, item in enumerate(pending, start=start):
+                lines.append(f"{idx}. {item.payload.url}{_payload_language_suffix(item.payload)}")
+        lines.append("\nComandos úteis: /status, /clearqueue, /cancelqueue, /cancelall.")
         await self._send_text(chat_id, "\n".join(lines))
+
+    async def handle_command_clearqueue(self, *, chat_id: int, user_id: int) -> None:
+        if not self._is_authorized(user_id):
+            return
+        removed = await self._queue.clear_pending()
+        if removed == 0:
+            await self._send_text(chat_id, "Não havia jobs pendentes para remover da fila.")
+        else:
+            await self._send_text(chat_id, f"🧹 Fila limpa. {removed} job(s) pendente(s) removido(s).")
+
+    async def handle_command_cancelall(self, *, chat_id: int, user_id: int) -> None:
+        if not self._is_authorized(user_id):
+            return
+        current_cancelled, pending_cancelled = await self._queue.cancel_all()
+        if not current_cancelled and pending_cancelled == 0:
+            await self._send_text(chat_id, "Nada para cancelar.")
+            return
+        parts: list[str] = []
+        if current_cancelled:
+            parts.append("job atual sinalizado para cancelamento")
+        if pending_cancelled:
+            parts.append(f"{pending_cancelled} pendente(s) removido(s)")
+        await self._send_text(chat_id, "🛑 Cancelamento geral solicitado: " + "; ".join(parts) + ".")
 
     async def handle_command_cancel(self, *, chat_id: int, user_id: int) -> None:
         if not self._is_authorized(user_id):
@@ -271,10 +430,16 @@ class TelegramBotAdapter:
         if current is None:
             await self._send_text(chat_id, "Nada para cancelar.")
             return
-        # Sinaliza ao runner do use case + ao loop da queue
+        # Sinaliza ao runner do use case + ao loop da queue.
         current.payload.cancel_event.set()
-        await self._queue.cancel_current()
-        await self._send_text(chat_id, "🛑 Cancelando o job em andamento…")
+        cancelled = await self._queue.cancel_current()
+        if cancelled:
+            await self._send_text(
+                chat_id,
+                "🛑 Cancelamento solicitado. Avisarei quando o job for encerrado com sucesso.",
+            )
+        else:
+            await self._send_text(chat_id, "Nada para cancelar.")
 
     async def handle_command_redo(
         self,
@@ -352,7 +517,7 @@ class TelegramBotAdapter:
             "Use /last n para reenviar ou /rename n para renomear falantes.",
         ]
         for idx, job in enumerate(jobs, start=1):
-            lines.append(f"{idx}. {_format_history_job(job)}")
+            lines.append(f"{idx}. {self._format_history_job(job)}")
         await self._send_text(chat_id, "\n".join(lines))
 
     async def handle_command_last(
@@ -408,15 +573,54 @@ class TelegramBotAdapter:
         self._pending_rename_slug = slug
         self._pending_rename_job_id = selected.job_id
         self._pending_rename_md_path = selected.md_path
+        self._pending_rename_label = None
+        keyboard = _rename_keyboard(speakers)
         await self._send_text(
             chat_id,
-            f"Renomear falantes da transcrição #{index}.\n"
-            f"Alvo: {_format_history_job(selected)}\n"
-            f"Falantes detectados: {', '.join(speakers)}\n"
-            "Envie o mapeamento no formato: SPEAKER_00=João, SPEAKER_01=Maria\n"
-            "Para mesclar falantes, use o mesmo nome em dois labels.\n"
-            "Use /cancel para abortar.",
+            f"✏️ Renomear falantes da transcrição #{index}.\n"
+            f"Alvo: {self._format_history_job(selected)}\n"
+            f"Falantes detectados: {', '.join(speakers)}\n\n"
+            "Toque em um falante para renomear com botões, ou envie diretamente:\n"
+            "SPEAKER_00=João, SPEAKER_01=Maria\n\n"
+            "Para mesclar falantes, use o mesmo nome em dois labels.",
+            reply_markup=keyboard,
         )
+
+    async def handle_callback_query(
+        self, *, chat_id: int, user_id: int, data: str
+    ) -> None:
+        """Trata botões inline de renomeação/mesclagem."""
+        if not self._is_authorized(user_id):
+            return
+        if not data.startswith("rename:"):
+            await self._send_text(chat_id, "Ação não reconhecida.")
+            return
+        if self._pending_rename_user != user_id or not self._pending_rename_slug:
+            await self._send_text(chat_id, "Nenhuma renomeação ativa. Use /rename ou /rename n.")
+            return
+        action = data.split(":", 2)
+        if len(action) < 2:
+            await self._send_text(chat_id, "Ação de renomeação inválida.")
+            return
+        kind = action[1]
+        if kind == "done":
+            self._clear_pending_rename()
+            await self._send_text(chat_id, "✅ Renomeação concluída.")
+            return
+        if kind == "merge":
+            self._pending_rename_label = None
+            await self._send_text(
+                chat_id,
+                "🔗 Para mesclar falantes, envie o mesmo nome para dois ou mais labels.\n"
+                "Exemplo: SPEAKER_00=Maria, SPEAKER_02=Maria",
+            )
+            return
+        if kind == "speaker" and len(action) == 3:
+            label = action[2]
+            self._pending_rename_label = label
+            await self._send_text(chat_id, f"Qual nome deseja usar para {label}?")
+            return
+        await self._send_text(chat_id, "Ação de renomeação inválida.")
 
     def _completed_jobs_for_user(self, user_id: int, *, limit: int) -> list[Job]:
         if self._repository is None:
@@ -505,11 +709,15 @@ class TelegramBotAdapter:
         slug = self._pending_rename_slug
         assert slug is not None
         assert self._rename_service is not None
-        aliases = _parse_rename_mapping(text)
+        if self._pending_rename_label and "=" not in text:
+            aliases = {self._pending_rename_label: text.strip()} if text.strip() else {}
+        else:
+            aliases = _parse_rename_mapping(text)
         if not aliases:
             await self._send_text(
                 chat_id,
-                "Formato inválido. Use SPEAKER_00=João, SPEAKER_01=Maria. Ou /cancel.",
+                "Formato inválido. Use SPEAKER_00=João, SPEAKER_01=Maria, "
+                "ou toque em um botão de falante e envie apenas o nome. Use /cancel para abortar.",
             )
             return
         # Recupera o job e o md_path selecionados no início do diálogo.
@@ -544,12 +752,24 @@ class TelegramBotAdapter:
         self._pending_rename_slug = None
         self._pending_rename_job_id = None
         self._pending_rename_md_path = None
+        self._pending_rename_label = None
 
     @staticmethod
     def _slug_from_md_path(md_path: str | None) -> str | None:
         if md_path is None:
             return None
         return Path(md_path).stem
+
+    def _format_history_job(self, job: Job) -> str:
+        slug = self._slug_from_md_path(job.md_path)
+        title: str | None = None
+        if slug is not None and self._rename_service is not None:
+            metadata = self._rename_service.metadata_for(slug)
+            if metadata is not None:
+                title = metadata.title
+        label = title or (Path(job.md_path).stem if job.md_path else job.video_id.value)
+        when = job.updated_at.strftime("%Y-%m-%d %H:%M")
+        return f"{label} — {job.video_id.value} — executado em {when}"
 
     # ------------------------------------------------------------------
     # Worker — executa o use case e envia entregáveis
@@ -609,6 +829,7 @@ class TelegramBotAdapter:
 
         if result.canceled:
             await progress.finish("🛑 Cancelado pelo usuário.")
+            await self._send_text(payload.chat_id, "✅ Job cancelado com sucesso.")
             return
         if result.failure_reason is not None:
             await progress.finish(f"⚠️ Falhou: {result.failure_reason}")
@@ -642,9 +863,13 @@ class TelegramBotAdapter:
     # Envio com retry
     # ------------------------------------------------------------------
 
-    async def _send_text(self, chat_id: int, text: str) -> int:
+    async def _send_text(
+        self, chat_id: int, text: str, reply_markup: InlineKeyboard | None = None
+    ) -> int:
         try:
-            return await send_with_retry(lambda: self._client.send_message(chat_id, text))
+            return await send_with_retry(
+                lambda: self._client.send_message(chat_id, text, reply_markup=reply_markup)
+            )
         except TelegramSendError:
             return 0  # já loga internamente; não propaga
 
@@ -673,6 +898,15 @@ def _make_editor(
         await client.edit_message(chat_id, message_id, text)
 
     return edit
+
+
+def _rename_keyboard(speakers: tuple[str, ...]) -> InlineKeyboard:
+    rows: list[tuple[InlineButton, ...]] = []
+    for label in speakers:
+        rows.append((InlineButton(f"✏️ {label}", f"rename:speaker:{label}"),))
+    rows.append((InlineButton("🔗 Mesclar falantes", "rename:merge"),))
+    rows.append((InlineButton("✅ Concluir", "rename:done"),))
+    return tuple(rows)
 
 
 def _parse_rename_mapping(text: str) -> dict[str, str]:

@@ -10,6 +10,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
 from yt_transcriber_bot.infrastructure.persistence.filesystem.transcript_snapshot import (
     TranscriptSnapshotRepository,
 )
@@ -40,6 +41,16 @@ class RenameSpeakersService:
         if snap is None:
             raise FileNotFoundError(f"Snapshot inexistente: {slug}")
         return snap.transcript.speaker_labels()
+
+
+    def metadata_for(self, slug: str) -> VideoMetadata | None:
+        """Retorna metadados do snapshot, quando ele ainda existe.
+
+        Usado pela interface do Telegram para exibir títulos reais no histórico
+        sem acoplar o adapter à persistência de snapshots.
+        """
+        snap = self._snapshots.load(slug)
+        return snap.metadata if snap is not None else None
 
     def rename(
         self,

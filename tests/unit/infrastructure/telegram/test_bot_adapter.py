@@ -31,6 +31,7 @@ from yt_transcriber_bot.infrastructure.telegram.bot_adapter import (
 class _SentMessage:
     chat_id: int
     text: str
+    reply_markup: object | None = None
 
 
 @dataclass
@@ -48,11 +49,11 @@ class FakeBotClient:
         self._next_message_id = 100
         self.fail_send_count = 0
 
-    async def send_message(self, chat_id: int, text: str) -> int:
+    async def send_message(self, chat_id: int, text: str, reply_markup: object | None = None) -> int:
         if self.fail_send_count > 0:
             self.fail_send_count -= 1
             raise RuntimeError("transient")
-        self.sent.append(_SentMessage(chat_id, text))
+        self.sent.append(_SentMessage(chat_id, text, reply_markup))
         self._next_message_id += 1
         return self._next_message_id
 
@@ -218,7 +219,7 @@ async def test_valid_url_is_enqueued_and_executed(
 @pytest.mark.asyncio
 async def test_status_when_idle(adapter: TelegramBotAdapter, client: FakeBotClient) -> None:
     await adapter.handle_command_status(chat_id=1, user_id=42)
-    assert any("Nada na fila" in m.text for m in client.sent)
+    assert any("Bot ocioso" in m.text for m in client.sent)
 
 
 @pytest.mark.asyncio
@@ -247,7 +248,7 @@ async def test_cancel_signals_use_case(
     await adapter.handle_command_cancel(chat_id=10, user_id=42)
     await asyncio.sleep(0.5)
     # Mensagem de cancelamento foi disparada
-    assert any("Cancelando" in m.text for m in client.sent)
+    assert any("Cancelamento solicitado" in m.text for m in client.sent)
 
 
 # --------------------------------------------------------------------
@@ -330,3 +331,96 @@ async def test_lifecycle_start_stop(settings: AppSettings) -> None:
     await a.start()
     await a.stop()
     # Sem exceções → OK
+
+# --------------------------------------------------------------------
+# Queue commands / fallback
+# --------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_help_lists_queue_and_history_commands(
+    adapter: TelegramBotAdapter, client: FakeBotClient
+) -> None:
+    await adapter.handle_command_help(chat_id=1, user_id=42)
+    msg = client.sent[-1].text
+    for command in [
+        "/queue",
+        "/clearqueue",
+        "/cancelqueue",
+        "/cancelall",
+        "/list",
+        "/last [n]",
+        "/rename [n]",
+    ]:
+        assert command in msg
+
+
+@pytest.mark.asyncio
+async def test_queue_command_via_text_fallback(
+    adapter: TelegramBotAdapter, client: FakeBotClient
+) -> None:
+    await adapter.handle_message(chat_id=1, user_id=42, text="/queue")
+    assert any("Fila de processamento" in m.text for m in client.sent)
+    assert any("Fila vazia" in m.text for m in client.sent)
+
+
+@pytest.mark.asyncio
+async def test_cancelqueue_alias_clears_only_pending_items(
+    adapter: TelegramBotAdapter,
+    client: FakeBotClient,
+    fake_use_case: FakeUseCase,
+) -> None:
+    fake_use_case.sleep_s = 1.0
+    fake_use_case.result = TranscribeVideoResult(
+        job=Job.new(VideoId("aaaaaaaaaaa"), 42),
+        md_path=None,
+        audio_path=None,
+        diagnostics=(),
+        canceled=True,
+    )
+    await adapter.handle_message(chat_id=10, user_id=42, text="https://youtu.be/aaaaaaaaaaa")
+    await asyncio.sleep(0.1)
+    await adapter.handle_message(chat_id=10, user_id=42, text="https://youtu.be/bbbbbbbbbbb")
+    await adapter.handle_message(chat_id=10, user_id=42, text="/cancelqueue")
+    assert any("Fila limpa" in m.text and "1 job" in m.text for m in client.sent)
+
+
+@pytest.mark.asyncio
+async def test_duplicate_link_is_rejected_while_running(
+    adapter: TelegramBotAdapter,
+    client: FakeBotClient,
+    fake_use_case: FakeUseCase,
+) -> None:
+    fake_use_case.sleep_s = 1.0
+    fake_use_case.result = TranscribeVideoResult(
+        job=Job.new(VideoId("ccccccccccc"), 42),
+        md_path=None,
+        audio_path=None,
+        diagnostics=(),
+        canceled=True,
+    )
+    await adapter.handle_message(chat_id=10, user_id=42, text="https://youtu.be/ccccccccccc --lang pt")
+    await asyncio.sleep(0.1)
+    await adapter.handle_message(chat_id=10, user_id=42, text="https://youtu.be/ccccccccccc --lang pt")
+    assert any("já está em processamento" in m.text for m in client.sent)
+
+
+@pytest.mark.asyncio
+async def test_cancel_final_success_message_is_sent(
+    adapter: TelegramBotAdapter,
+    client: FakeBotClient,
+    fake_use_case: FakeUseCase,
+) -> None:
+    fake_use_case.sleep_s = 1.0
+    fake_use_case.result = TranscribeVideoResult(
+        job=Job.new(VideoId("ddddddddddd"), 42),
+        md_path=None,
+        audio_path=None,
+        diagnostics=(),
+        canceled=True,
+    )
+    await adapter.handle_message(chat_id=10, user_id=42, text="https://youtu.be/ddddddddddd")
+    await asyncio.sleep(0.1)
+    await adapter.handle_command_cancel(chat_id=10, user_id=42)
+    await asyncio.sleep(1.1)
+    assert any("Job cancelado com sucesso" in m.text for m in client.sent)

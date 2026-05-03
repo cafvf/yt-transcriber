@@ -51,8 +51,8 @@ Exemplo de saída:
 • dQw4w9WgXcQ [completed] — 2026-05-01 12:00
 ```
 
-### `/last`
-Reenvia o arquivo Markdown da última transcrição concluída. Se o arquivo tiver sido removido ou movido, o bot avisa que o Markdown não está mais disponível.
+### `/last [n]`
+Reenvia o arquivo Markdown da n-ésima transcrição concluída, usando a numeração mostrada por `/list`. Sem índice, usa a transcrição mais recente. Se o arquivo tiver sido removido ou movido, o bot avisa que o Markdown não está mais disponível.
 
 ### `/redo <link>`
 Reprocessa explicitamente um link do YouTube como um **novo job** na fila.
@@ -73,8 +73,8 @@ Comportamento atual:
 
 A confirmação inline com diff de configuração permanece como melhoria futura.
 
-### `/rename`
-Inicia o diálogo para renomear falantes do último vídeo concluído. O bot lista os labels detectados e espera um mapeamento textual em lote:
+### `/rename [n]`
+Inicia o diálogo para renomear falantes da n-ésima transcrição concluída, usando a numeração mostrada por `/list`. Sem índice, usa a transcrição mais recente. O bot mostra botões inline para cada falante e também aceita um mapeamento textual em lote:
 
 ```text
 SPEAKER_00=João, SPEAKER_01=Maria
@@ -102,9 +102,14 @@ Remove arquivos dentro do diretório `models_dir` configurado. Por segurança, a
 
 Na próxima transcrição que exigir modelos ausentes, eles precisarão ser baixados novamente.
 
+### Comandos de fila
+
+- `/queue` ou `/fila`: mostra a fila completa.
+- `/clearqueue`, `/cancelqueue` ou `/limparfila`: remove apenas jobs pendentes.
+- `/cancelall` ou `/cancelartudo`: sinaliza cancelamento do job atual e remove pendentes.
+
 ### Comandos planejados, mas não implementados nesta versão
 
-- `/clearqueue`
 - `/lasterror`
 - `/redo` com confirmação inline e diff de configuração
 - botões inline como `[Refazer com WhisperX]`

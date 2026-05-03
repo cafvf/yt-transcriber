@@ -41,7 +41,7 @@ cookies.txt
 # =========================================================
 # Artefatos de runtime do bot
 # =========================================================
-data/*.*
+data/
 downloads/
 processed/
 transcripts/
@@ -94,4 +94,3 @@ coverage.xml
 # =========================================================
 .DS_Store
 Thumbs.db
-*.Zone.Identifier
