@@ -2,7 +2,7 @@
 
 Bot privado do Telegram que recebe links do YouTube enviados por um único usuário autorizado, baixa o áudio na faixa original (ignorando dublagens automáticas), realiza transcrição com **WhisperX** e **diarização de falantes** (pyannote, com fallback nativo do WhisperX), e devolve no chat (i) um arquivo de áudio comprimido em Opus/OGG focado em voz e (ii) uma transcrição em Markdown estruturada por turnos de fala.
 
-O projeto é construído sob os princípios de **Extreme Programming**, **Test-Driven Development** purista (com abordagem híbrida apenas onde a integração externa é incontornável), **Programação Orientada a Objetos** rigorosa e uso explícito de **padrões de projeto** (Hexagonal/Ports & Adapters, Strategy, Repository, Chain of Responsibility, Command, Observer, Factory).
+O projeto é construído sob os princípios de **Spec-Driven Development**, **Extreme Programming**, **Test-Driven Development** purista (com abordagem híbrida apenas onde a integração externa é incontornável), **Programação Orientada a Objetos** rigorosa e uso explícito de **padrões de projeto** (Hexagonal/Ports & Adapters, Strategy, Repository, Chain of Responsibility, Command, Observer, Factory). Tudo programado usando uma IA como assistente.
 
 A entrega é particionada em **oito gates incrementais**, cada um com critérios de aceitação objetivos e uma suíte de testes obrigatórios; correções identificadas durante a avaliação de qualquer gate geram **novos testes de regressão** antes da correção propriamente dita, garantindo que o erro não retorne.
 
