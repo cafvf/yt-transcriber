@@ -2,11 +2,9 @@
 
 Bot privado do Telegram para processar vídeos do YouTube e gerar artefatos auditáveis de transcrição. O fluxo principal recebe um link, baixa metadados/áudio com `yt-dlp`, usa legendas do YouTube quando a qualidade é aceitável, transcreve com WhisperX quando necessário, diariza falantes com pyannote, renderiza Markdown e permite exportações derivadas.
 
-<<<<<<< ours
-O projeto é construído sob os princípios de **Spec-Driven Development**, **Extreme Programming**, **Test-Driven Development** purista (com abordagem híbrida apenas onde a integração externa é incontornável), **Programação Orientada a Objetos** rigorosa e uso explícito de **padrões de projeto** (Hexagonal/Ports & Adapters, Strategy, Repository, Chain of Responsibility, Command, Observer, Factory). Tudo programado usando uma IA como assistente.
-=======
 A versão atual também inclui exportação JSON/SRT/VTT, MP4 com legenda selecionável, renomeação/mesclagem de falantes por botões inline, histórico local em SQLite e sumarização via LM Studio/OpenAI-compatible com controle de contexto, tokenizer opcional, deduplicação, progresso no Telegram e retentativa adaptativa em caso de timeout.
->>>>>>> theirs
+
+O projeto é desenvolvido com **Spec-Driven Development (SDD)** apoiado por IA, combinando especificação funcional, testes de regressão e arquitetura hexagonal/Ports & Adapters. A IA atua como assistente de implementação, revisão, geração de patches e ampliação de testes; a validação final, as decisões de produto e a curadoria técnica permanecem humanas.
 
 ## Paradigma de desenvolvimento
 
