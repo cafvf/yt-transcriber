@@ -23,9 +23,14 @@ def env_clean(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:  # type: ignor
         "HF_TOKEN",
         "DEVICE",
         "WHISPER_MODEL",
+        "WHISPER_MODEL_PT",
+        "WHISPER_MODEL_EN",
+        "WHISPER_MODEL_DEFAULT",
         "COMPUTE_TYPE",
+        "YT_TRANSCRIBER_ENV_FILE",
     ):
         monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("YT_TRANSCRIBER_ENV_FILE", str(tmp_path / ".env"))
 
 
 def _settings(**overrides: object) -> AppSettings:

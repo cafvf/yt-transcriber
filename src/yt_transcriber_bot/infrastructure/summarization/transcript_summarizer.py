@@ -8,12 +8,14 @@ map-reduce: resume blocos e depois sintetiza os resumos parciais.
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Mapping
-from typing import Protocol
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from collections.abc import Callable
+from typing import Protocol
 
 from yt_transcriber_bot.domain.entities.transcript import TranscriptSegment
 from yt_transcriber_bot.infrastructure.persistence.filesystem.transcript_snapshot import (
@@ -23,6 +25,7 @@ from yt_transcriber_bot.infrastructure.persistence.filesystem.transcript_snapsho
 from yt_transcriber_bot.infrastructure.summarization.openai_compatible_client import (
     ChatCompletionError,
     ChatCompletionRequest,
+    ChatCompletionTimeoutError,
 )
 
 
@@ -39,6 +42,20 @@ class ChatCompletionClient(Protocol):
     def complete(self, request: ChatCompletionRequest) -> str: ...
 
 
+class TextTokenizer(Protocol):
+    """Contador/divisor de tokens usado para montar chunks de entrada."""
+
+    @property
+    def description(self) -> str: ...
+
+    @property
+    def is_exact(self) -> bool: ...
+
+    def count(self, text: str) -> int: ...
+
+    def split(self, text: str, max_tokens: int) -> list[str]: ...
+
+
 @dataclass(frozen=True)
 class SummaryResult:
     """Resultado de geração do resumo."""
@@ -46,6 +63,24 @@ class SummaryResult:
     path: Path
     chunks: int
     model: str
+
+
+@dataclass(frozen=True)
+class SummaryProgress:
+    """Evento de progresso emitido durante a sumarização."""
+
+    kind: str
+    current: int
+    total: int
+    message: str
+
+
+@dataclass
+class _SummaryTurn:
+    start_seconds: float
+    end_seconds: float
+    speaker: str
+    text: str
 
 
 class TranscriptSummaryService:
@@ -57,11 +92,20 @@ class TranscriptSummaryService:
         snapshots: TranscriptSnapshotRepository,
         chat_client: ChatCompletionClient,
         output_dir: Path,
-        max_chars_per_chunk: int = 4_000,
-        max_input_tokens: int = 2_500,
-        chars_per_token: float = 2.0,
+        max_chars_per_chunk: int = 18_000,
+        max_input_tokens: int = 6_000,
+        chars_per_token: float = 2.5,
+        partial_max_tokens: int = 512,
+        final_max_tokens: int = 1024,
+        timeout_split_retries: int = 2,
         output_language: str = "auto",
         disable_thinking: bool = True,
+        tokenizer_backend: str = "auto",
+        tokenizer_model: str = "",
+        tokenizer: TextTokenizer | None = None,
+        deduplicate_transcript: bool = True,
+        merge_same_speaker_gap_s: float = 2.0,
+        min_overlap_words: int = 6,
     ) -> None:
         self._snapshots = snapshots
         self._chat_client = chat_client
@@ -69,8 +113,21 @@ class TranscriptSummaryService:
         self._max_chars_per_chunk = max(1_000, max_chars_per_chunk)
         self._max_input_tokens = max(512, max_input_tokens)
         self._chars_per_token = max(1.0, chars_per_token)
+        self._partial_max_tokens = max(1, partial_max_tokens)
+        self._final_max_tokens = max(1, final_max_tokens)
+        self._timeout_split_retries = max(0, timeout_split_retries)
         self._output_language = output_language.strip().lower() or "auto"
         self._disable_thinking = disable_thinking
+        self._tokenizer_backend = tokenizer_backend.strip().lower() or "auto"
+        self._tokenizer_model = tokenizer_model.strip() or chat_client.model
+        self._tokenizer = tokenizer or _make_tokenizer(
+            backend=self._tokenizer_backend,
+            model=self._tokenizer_model,
+            chars_per_token=self._chars_per_token,
+        )
+        self._deduplicate_transcript = deduplicate_transcript
+        self._merge_same_speaker_gap_s = max(0.0, merge_same_speaker_gap_s)
+        self._min_overlap_words = max(2, min_overlap_words)
 
     def summarize(
         self,
@@ -78,25 +135,136 @@ class TranscriptSummaryService:
         slug: str,
         output_base_path: Path,
         speaker_aliases: Mapping[str, str] | None = None,
+        on_progress: Callable[[SummaryProgress], None] | None = None,
     ) -> SummaryResult:
         snap = self._snapshots.load(slug)
         if snap is None:
             raise FileNotFoundError(f"Snapshot inexistente: {slug}")
-        transcript_text = _snapshot_to_text(snap, speaker_aliases or {})
-        effective_max_chars = _effective_chunk_chars(
+        transcript_text = _snapshot_to_text(
+            snap,
+            speaker_aliases or {},
+            deduplicate=self._deduplicate_transcript,
+            merge_same_speaker_gap_s=self._merge_same_speaker_gap_s,
+            min_overlap_words=self._min_overlap_words,
+        )
+        chunks = _chunk_text(
+            transcript_text,
             max_chars_per_chunk=self._max_chars_per_chunk,
             max_input_tokens=self._max_input_tokens,
             chars_per_token=self._chars_per_token,
+            tokenizer=self._tokenizer,
         )
-        chunks = _chunk_text(transcript_text, effective_max_chars)
         if not chunks:
             raise SummaryError("Snapshot não contém texto suficiente para sumarizar.")
+        _emit_summary_progress(
+            on_progress,
+            kind="planned",
+            current=0,
+            total=len(chunks),
+            message=(
+                f"Transcrição preparada em {len(chunks)} bloco(s). "
+                f"Tokenizer: {self._tokenizer.description}."
+            ),
+        )
+        effective_chunks = len(chunks)
         try:
             if len(chunks) == 1:
-                summary_body = self._summarize_single(snap, chunks[0])
+                _emit_summary_progress(
+                    on_progress,
+                    kind="single_started",
+                    current=1,
+                    total=1,
+                    message="Enviando transcrição completa para a LLM.",
+                )
+                try:
+                    summary_body = self._summarize_single(snap, chunks[0])
+                except ChatCompletionTimeoutError:
+                    if self._timeout_split_retries <= 0:
+                        raise
+                    _emit_summary_progress(
+                        on_progress,
+                        kind="chunk_split",
+                        current=1,
+                        total=1,
+                        message=(
+                            "A chamada única excedeu o timeout. "
+                            "Dividindo a transcrição e tentando novamente."
+                        ),
+                    )
+                    retry_chunks = self._split_chunk_after_timeout(chunks[0])
+                    if len(retry_chunks) <= 1:
+                        raise
+                    partials: list[str] = []
+                    for sub_index, retry_chunk in enumerate(retry_chunks, 1):
+                        partials.extend(
+                            self._summarize_chunk_adaptively(
+                                snap=snap,
+                                chunk=retry_chunk,
+                                label=f"1.{sub_index}",
+                                current=1,
+                                total=1,
+                                retries_left=self._timeout_split_retries - 1,
+                                on_progress=on_progress,
+                            )
+                        )
+                    effective_chunks = len(partials)
+                    _emit_summary_progress(
+                        on_progress,
+                        kind="synthesis_started",
+                        current=effective_chunks,
+                        total=effective_chunks,
+                        message="Subdivisões resumidas. Gerando síntese final.",
+                    )
+                    summary_body = self._synthesize_partials_adaptively(
+                        snap, partials, self._timeout_split_retries, on_progress
+                    )
+                    _emit_summary_progress(
+                        on_progress,
+                        kind="synthesis_completed",
+                        current=effective_chunks,
+                        total=effective_chunks,
+                        message="Síntese final concluída.",
+                    )
+                else:
+                    _emit_summary_progress(
+                        on_progress,
+                        kind="single_completed",
+                        current=1,
+                        total=1,
+                        message="Resumo em passagem única concluído.",
+                    )
             else:
-                partials = [self._summarize_chunk(snap, chunk, i, len(chunks)) for i, chunk in enumerate(chunks, 1)]
-                summary_body = self._synthesize_partials(snap, partials)
+                partials: list[str] = []
+                for i, chunk in enumerate(chunks, 1):
+                    partials.extend(
+                        self._summarize_chunk_adaptively(
+                            snap=snap,
+                            chunk=chunk,
+                            label=str(i),
+                            current=i,
+                            total=len(chunks),
+                            retries_left=self._timeout_split_retries,
+                            on_progress=on_progress,
+                        )
+                    )
+                effective_chunks = len(partials)
+                _emit_summary_progress(
+                    on_progress,
+                    kind="synthesis_started",
+                    current=effective_chunks,
+                    total=effective_chunks,
+                    message="Resumos parciais concluídos. Gerando síntese final.",
+                )
+                summary_body = self._synthesize_partials_adaptively(
+                    snap, partials, self._timeout_split_retries, on_progress
+                )
+                _emit_summary_progress(
+                    on_progress,
+                    kind="synthesis_completed",
+                    current=effective_chunks,
+                    total=effective_chunks,
+                    message="Síntese final concluída.",
+                )
         except ChatCompletionError:
             raise
         except Exception as exc:  # pragma: no cover - camada defensiva
@@ -104,26 +272,164 @@ class TranscriptSummaryService:
         output_path = self._output_path(slug, output_base_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(
-            _wrap_summary_markdown(snap, summary_body, model=self._chat_client.model, chunks=len(chunks)),
+            _wrap_summary_markdown(
+                snap,
+                summary_body,
+                model=self._chat_client.model,
+                chunks=effective_chunks,
+                tokenizer_description=self._tokenizer.description,
+                deduplicated=self._deduplicate_transcript,
+            ),
             encoding="utf-8",
         )
-        return SummaryResult(path=output_path, chunks=len(chunks), model=self._chat_client.model)
+        return SummaryResult(path=output_path, chunks=effective_chunks, model=self._chat_client.model)
+
+    def _summarize_chunk_adaptively(
+        self,
+        *,
+        snap: TranscriptSnapshot,
+        chunk: str,
+        label: str,
+        current: int,
+        total: int,
+        retries_left: int,
+        on_progress: Callable[[SummaryProgress], None] | None,
+    ) -> list[str]:
+        estimated_tokens = self._tokenizer.count(chunk)
+        _emit_summary_progress(
+            on_progress,
+            kind="chunk_started",
+            current=current,
+            total=total,
+            message=(
+                f"Iniciando resumo parcial {label}/{total} "
+                f"(~{estimated_tokens} tokens de transcrição)."
+            ),
+        )
+        try:
+            partial = self._summarize_chunk(snap, chunk, label, total)
+        except ChatCompletionTimeoutError:
+            if retries_left <= 0:
+                raise
+            subchunks = self._split_chunk_after_timeout(chunk)
+            if len(subchunks) <= 1:
+                raise
+            _emit_summary_progress(
+                on_progress,
+                kind="chunk_split",
+                current=current,
+                total=total,
+                message=(
+                    f"Resumo parcial {label}/{total} excedeu o timeout. "
+                    f"Subdividindo em {len(subchunks)} parte(s) menores."
+                ),
+            )
+            partials: list[str] = []
+            for sub_index, subchunk in enumerate(subchunks, 1):
+                partials.extend(
+                    self._summarize_chunk_adaptively(
+                        snap=snap,
+                        chunk=subchunk,
+                        label=f"{label}.{sub_index}",
+                        current=current,
+                        total=total,
+                        retries_left=retries_left - 1,
+                        on_progress=on_progress,
+                    )
+                )
+            return partials
+        _emit_summary_progress(
+            on_progress,
+            kind="chunk_completed",
+            current=current,
+            total=total,
+            message=f"Resumo parcial {label}/{total} concluído.",
+        )
+        return [partial]
+
+    def _split_chunk_after_timeout(self, chunk: str) -> list[str]:
+        """Divide um chunk problemático de forma conservadora após timeout.
+
+        A divisão usa aproximadamente metade do orçamento atual. Isso reduz o
+        tempo de ingestão do prompt e de geração sem alterar globalmente a
+        configuração do operador durante a execução em andamento.
+        """
+
+        current_tokens = max(1, self._tokenizer.count(chunk))
+        retry_transcript_tokens = max(256, current_tokens // 2)
+        retry_input_tokens = max(512, retry_transcript_tokens + _PROMPT_TOKEN_RESERVE)
+        retry_chars = max(500, min(self._max_chars_per_chunk // 2, len(chunk) // 2 + 1))
+        subchunks = _chunk_text(
+            chunk,
+            max_chars_per_chunk=retry_chars,
+            max_input_tokens=retry_input_tokens,
+            chars_per_token=self._chars_per_token,
+            tokenizer=self._tokenizer,
+        )
+        if len(subchunks) <= 1 and len(chunk) > 500:
+            midpoint = len(chunk) // 2
+            split_at = chunk.rfind("\n", 0, midpoint)
+            if split_at <= 0:
+                split_at = chunk.rfind(". ", 0, midpoint)
+            if split_at <= 0:
+                split_at = midpoint
+            subchunks = [chunk[:split_at].strip(), chunk[split_at:].strip()]
+        return [part for part in subchunks if part.strip()]
+
+    def _synthesize_partials_adaptively(
+        self,
+        snap: TranscriptSnapshot,
+        partials: list[str],
+        retries_left: int,
+        on_progress: Callable[[SummaryProgress], None] | None,
+    ) -> str:
+        try:
+            return self._synthesize_partials(snap, partials)
+        except ChatCompletionTimeoutError:
+            if retries_left <= 0 or len(partials) <= 1:
+                raise
+            midpoint = max(1, len(partials) // 2)
+            _emit_summary_progress(
+                on_progress,
+                kind="synthesis_split",
+                current=len(partials),
+                total=len(partials),
+                message=(
+                    "A síntese final excedeu o timeout. "
+                    "Sintetizando os resumos parciais em grupos menores."
+                ),
+            )
+            left = self._synthesize_partials_adaptively(
+                snap, partials[:midpoint], retries_left - 1, on_progress
+            )
+            right = self._synthesize_partials_adaptively(
+                snap, partials[midpoint:], retries_left - 1, on_progress
+            )
+            return self._synthesize_partials_adaptively(
+                snap, [left, right], retries_left - 1, on_progress
+            )
 
     def _summarize_single(self, snap: TranscriptSnapshot, transcript_text: str) -> str:
         return self._chat_client.complete(
             ChatCompletionRequest(
-                system_prompt=_system_prompt(self._output_language, snap.transcript.language.code, self._disable_thinking),
+                system_prompt=_system_prompt(
+                    self._output_language, snap.transcript.language.code, self._disable_thinking
+                ),
                 user_prompt=_single_pass_prompt(snap, transcript_text),
+                max_tokens=self._final_max_tokens,
             )
         )
 
     def _summarize_chunk(
-        self, snap: TranscriptSnapshot, chunk: str, index: int, total: int
+        self, snap: TranscriptSnapshot, chunk: str, index: str | int, total: str | int
     ) -> str:
         return self._chat_client.complete(
             ChatCompletionRequest(
-                system_prompt=_system_prompt(self._output_language, snap.transcript.language.code, self._disable_thinking),
+                system_prompt=_system_prompt(
+                    self._output_language, snap.transcript.language.code, self._disable_thinking
+                ),
                 user_prompt=_chunk_prompt(snap, chunk, index, total),
+                max_tokens=self._partial_max_tokens,
             )
         )
 
@@ -131,8 +437,11 @@ class TranscriptSummaryService:
         joined = "\n\n---\n\n".join(partials)
         return self._chat_client.complete(
             ChatCompletionRequest(
-                system_prompt=_system_prompt(self._output_language, snap.transcript.language.code, self._disable_thinking),
+                system_prompt=_system_prompt(
+                    self._output_language, snap.transcript.language.code, self._disable_thinking
+                ),
                 user_prompt=_synthesis_prompt(snap, joined),
+                max_tokens=self._final_max_tokens,
             )
         )
 
@@ -142,6 +451,19 @@ class TranscriptSummaryService:
         else:
             filename = f"{slug}.summary.md"
         return self._output_dir / filename
+
+
+def _emit_summary_progress(
+    callback: Callable[[SummaryProgress], None] | None,
+    *,
+    kind: str,
+    current: int,
+    total: int,
+    message: str,
+) -> None:
+    if callback is None:
+        return
+    callback(SummaryProgress(kind=kind, current=current, total=total, message=message))
 
 
 def _system_prompt(output_language: str, transcript_language: str, disable_thinking: bool = True) -> str:
@@ -183,7 +505,7 @@ def _single_pass_prompt(snap: TranscriptSnapshot, transcript_text: str) -> str:
     )
 
 
-def _chunk_prompt(snap: TranscriptSnapshot, chunk: str, index: int, total: int) -> str:
+def _chunk_prompt(snap: TranscriptSnapshot, chunk: str, index: str | int, total: str | int) -> str:
     return (
         f"Este é o bloco {index}/{total} da transcrição do vídeo \"{snap.metadata.title}\".\n"
         "Resuma apenas este bloco, preservando timestamps úteis e sem concluir além do trecho recebido.\n"
@@ -209,15 +531,66 @@ def _synthesis_prompt(snap: TranscriptSnapshot, partials: str) -> str:
     )
 
 
-def _snapshot_to_text(snap: TranscriptSnapshot, aliases: Mapping[str, str]) -> str:
-    lines: list[str] = []
+def _snapshot_to_text(
+    snap: TranscriptSnapshot,
+    aliases: Mapping[str, str],
+    *,
+    deduplicate: bool = True,
+    merge_same_speaker_gap_s: float = 2.0,
+    min_overlap_words: int = 6,
+) -> str:
+    turns: list[_SummaryTurn] = []
+    previous_text = ""
     for segment in snap.transcript.segments:
         text = _clean_text(segment.text)
         if not text:
             continue
+        if deduplicate:
+            text = _deduplicate_text(
+                previous_text=previous_text,
+                current_text=text,
+                min_overlap_words=min_overlap_words,
+            )
+        if not text:
+            continue
         speaker = _speaker(segment, aliases)
-        lines.append(f"[{_hms(segment.start_seconds)} — {_hms(segment.end_seconds)}] {speaker}: {text}")
-    return "\n".join(lines)
+        if _can_merge_with_previous_turn(turns, speaker, segment, merge_same_speaker_gap_s):
+            previous = turns[-1]
+            previous.end_seconds = max(previous.end_seconds, segment.end_seconds)
+            previous.text = _join_turn_text(previous.text, text)
+        else:
+            turns.append(
+                _SummaryTurn(
+                    start_seconds=segment.start_seconds,
+                    end_seconds=segment.end_seconds,
+                    speaker=speaker,
+                    text=text,
+                )
+            )
+        previous_text = _clean_text(segment.text)
+    return "\n".join(
+        f"[{_hms(turn.start_seconds)} — {_hms(turn.end_seconds)}] {turn.speaker}: {turn.text}"
+        for turn in turns
+    )
+
+
+def _can_merge_with_previous_turn(
+    turns: list[_SummaryTurn], speaker: str, segment: TranscriptSegment, max_gap_s: float
+) -> bool:
+    if not turns:
+        return False
+    previous = turns[-1]
+    gap_s = max(0.0, segment.start_seconds - previous.end_seconds)
+    return previous.speaker == speaker and gap_s <= max_gap_s
+
+
+def _join_turn_text(left: str, right: str) -> str:
+    if not left:
+        return right
+    if not right:
+        return left
+    separator = "" if left.endswith((" ", "\n")) else " "
+    return f"{left}{separator}{right}".strip()
 
 
 def _speaker(segment: TranscriptSegment, aliases: Mapping[str, str]) -> str:
@@ -232,57 +605,185 @@ def _clean_text(text: str) -> str:
 _PROMPT_TOKEN_RESERVE = 900
 
 
+class _EstimatedTokenizer:
+    def __init__(self, *, chars_per_token: float) -> None:
+        self._chars_per_token = max(1.0, chars_per_token)
+
+    @property
+    def description(self) -> str:
+        return f"estimativa por caracteres ({self._chars_per_token:.2f} chars/token)"
+
+    @property
+    def is_exact(self) -> bool:
+        return False
+
+    def count(self, text: str) -> int:
+        if not text:
+            return 0
+        return max(1, math.ceil(len(text) / self._chars_per_token))
+
+    def split(self, text: str, max_tokens: int) -> list[str]:
+        max_chars = max(200, int(max_tokens * self._chars_per_token))
+        return _split_text_by_chars(text, max_chars)
+
+
+class _HuggingFaceTokenizer:
+    def __init__(self, *, model: str, tokenizer: object) -> None:
+        self._model = model
+        self._tokenizer = tokenizer
+
+    @property
+    def description(self) -> str:
+        return f"Hugging Face tokenizer local ({self._model})"
+
+    @property
+    def is_exact(self) -> bool:
+        return True
+
+    def count(self, text: str) -> int:
+        if not text:
+            return 0
+        return len(self._encode(text))
+
+    def split(self, text: str, max_tokens: int) -> list[str]:
+        token_ids = self._encode(text)
+        if len(token_ids) <= max_tokens:
+            return [text]
+        parts: list[str] = []
+        for start in range(0, len(token_ids), max_tokens):
+            part_ids = token_ids[start : start + max_tokens]
+            decoded = self._decode(part_ids).strip()
+            if decoded:
+                parts.append(decoded)
+        return parts
+
+    def _encode(self, text: str) -> list[int]:
+        encoded = self._tokenizer.encode(text, add_special_tokens=False)  # type: ignore[attr-defined]
+        return list(encoded)
+
+    def _decode(self, token_ids: list[int]) -> str:
+        return str(
+            self._tokenizer.decode(  # type: ignore[attr-defined]
+                token_ids,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=False,
+            )
+        )
+
+
+def _make_tokenizer(*, backend: str, model: str, chars_per_token: float) -> TextTokenizer:
+    backend = backend.strip().lower() or "auto"
+    if backend not in {"auto", "hf", "huggingface", "estimate", "estimated"}:
+        raise SummaryError(
+            "SUMMARY_TOKENIZER_BACKEND inválido. Use auto, hf ou estimate. "
+            f"Valor recebido: {backend!r}."
+        )
+    if backend in {"estimate", "estimated"}:
+        return _EstimatedTokenizer(chars_per_token=chars_per_token)
+
+    try:
+        from transformers import AutoTokenizer  # type: ignore[import-not-found]
+
+        tokenizer = AutoTokenizer.from_pretrained(
+            model,
+            local_files_only=True,
+            trust_remote_code=True,
+        )
+        return _HuggingFaceTokenizer(model=model, tokenizer=tokenizer)
+    except Exception as exc:
+        if backend in {"hf", "huggingface"}:
+            raise SummaryError(
+                "Não foi possível carregar o tokenizer Hugging Face local para SUMMARY_TOKENIZER_MODEL "
+                f"ou SUMMARY_MODEL ({model!r}). Baixe/cacheie o tokenizer localmente ou use "
+                "SUMMARY_TOKENIZER_BACKEND=estimate. Detalhe: "
+                f"{exc}"
+            ) from exc
+        return _EstimatedTokenizer(chars_per_token=chars_per_token)
+
+
+def _effective_chunk_tokens(max_input_tokens: int) -> int:
+    return max(256, max_input_tokens - _PROMPT_TOKEN_RESERVE)
+
+
 def _effective_chunk_chars(
     *, max_chars_per_chunk: int, max_input_tokens: int, chars_per_token: float
 ) -> int:
-    """Retorna um limite conservador de caracteres por bloco.
+    """Retorna o limite de caracteres usado pelo fallback estimado."""
 
-    LM Studio/llama.cpp valida a quantidade de tokens do prompt contra
-    ``n_ctx_slot`` antes de começar a gerar. Como nem sempre temos o tokenizer
-    exato do modelo local, usamos uma estimativa conservadora. Para Qwen e
-    português/inglês técnico, ``2.0`` caracteres/token é intencionalmente
-    prudente.
-
-    ``max_input_tokens`` é o orçamento total estimado do prompt. Reservamos
-    parte dele para instruções, metadados e cabeçalhos, deixando o restante para
-    a transcrição propriamente dita.
-    """
-
-    transcript_token_budget = max(256, max_input_tokens - _PROMPT_TOKEN_RESERVE)
+    transcript_token_budget = _effective_chunk_tokens(max_input_tokens)
     token_based_chars = int(transcript_token_budget * chars_per_token)
     return max(500, min(max_chars_per_chunk, token_based_chars))
 
 
-def _chunk_text(text: str, max_chars: int) -> list[str]:
+def _chunk_text(
+    text: str,
+    max_chars: int | None = None,
+    *,
+    max_chars_per_chunk: int | None = None,
+    max_input_tokens: int | None = None,
+    chars_per_token: float = 2.0,
+    tokenizer: TextTokenizer | None = None,
+) -> list[str]:
+    if max_chars is not None:
+        effective_max_chars = max_chars
+        tokenizer = _EstimatedTokenizer(chars_per_token=chars_per_token)
+        token_budget = max(256, math.ceil(effective_max_chars / max(1.0, chars_per_token)))
+    else:
+        if max_chars_per_chunk is None or max_input_tokens is None:
+            raise TypeError("Informe max_chars ou max_chars_per_chunk + max_input_tokens.")
+        tokenizer = tokenizer or _EstimatedTokenizer(chars_per_token=chars_per_token)
+        token_budget = _effective_chunk_tokens(max_input_tokens)
+        effective_max_chars = _effective_chunk_chars(
+            max_chars_per_chunk=max_chars_per_chunk,
+            max_input_tokens=max_input_tokens,
+            chars_per_token=chars_per_token,
+        )
     lines = [line for line in text.splitlines() if line.strip()]
     chunks: list[str] = []
     current: list[str] = []
-    current_size = 0
+    current_tokens = 0
+    current_chars = 0
     for line in lines:
+        line_tokens = tokenizer.count(line) + 1
         line_size = len(line) + 1
-        if current and current_size + line_size > max_chars:
+        exceeds_token_budget = current and current_tokens + line_tokens > token_budget
+        exceeds_char_budget = current and current_chars + line_size > effective_max_chars
+        if exceeds_token_budget or exceeds_char_budget:
             chunks.append("\n".join(current))
             current = []
-            current_size = 0
-        # Se uma única linha ultrapassar o orçamento, divida preservando o
-        # timestamp/falante quando possível. Isso evita prompts enormes quando
-        # a transcrição tem um segmento muito longo.
-        if line_size > max_chars:
+            current_tokens = 0
+            current_chars = 0
+        if line_tokens > token_budget or line_size > effective_max_chars:
             if current:
                 chunks.append("\n".join(current))
                 current = []
-                current_size = 0
-            chunks.extend(_split_long_line(line, max_chars))
+                current_tokens = 0
+                current_chars = 0
+            chunks.extend(
+                _split_long_line(
+                    line,
+                    max_chars=effective_max_chars,
+                    max_tokens=token_budget,
+                    tokenizer=tokenizer,
+                )
+            )
             continue
         current.append(line)
-        current_size += line_size
+        current_tokens += line_tokens
+        current_chars += line_size
     if current:
         chunks.append("\n".join(current))
     return chunks
 
 
-def _split_long_line(line: str, max_chars: int) -> list[str]:
-    if len(line) <= max_chars:
+def _split_long_line(
+    line: str,
+    max_chars: int,
+    *,
+    max_tokens: int | None = None,
+    tokenizer: TextTokenizer | None = None,
+) -> list[str]:
+    if len(line) <= max_chars and (tokenizer is None or max_tokens is None or tokenizer.count(line) <= max_tokens):
         return [line]
     prefix = ""
     body = line
@@ -290,26 +791,99 @@ def _split_long_line(line: str, max_chars: int) -> list[str]:
     if match:
         prefix = match.group(1)
         body = match.group(2)
-    available = max(200, max_chars - len(prefix) - 20)
+    available_chars = max(200, max_chars - len(prefix) - 20)
+    if tokenizer is not None and max_tokens is not None:
+        available_tokens = max(64, max_tokens - tokenizer.count(prefix) - 8)
+        body_parts = tokenizer.split(body, available_tokens)
+        parts: list[str] = []
+        for body_part in body_parts:
+            parts.extend(_split_text_by_chars(body_part, available_chars))
+        return [f"{prefix}{part}" if prefix else part for part in parts if part.strip()]
+    return [f"{prefix}{part}" if prefix else part for part in _split_text_by_chars(body, available_chars)]
+
+
+def _split_text_by_chars(text: str, max_chars: int) -> list[str]:
+    if len(text) <= max_chars:
+        return [text.strip()] if text.strip() else []
     parts: list[str] = []
     start = 0
-    while start < len(body):
-        end = min(len(body), start + available)
-        if end < len(body):
-            split_at = body.rfind(". ", start, end)
+    while start < len(text):
+        end = min(len(text), start + max_chars)
+        if end < len(text):
+            split_at = text.rfind(". ", start, end)
             if split_at <= start:
-                split_at = body.rfind(" ", start, end)
+                split_at = text.rfind(" ", start, end)
             if split_at > start:
                 end = split_at + 1
-        chunk = body[start:end].strip()
+        chunk = text[start:end].strip()
         if chunk:
-            parts.append(f"{prefix}{chunk}" if prefix else chunk)
-        start = end
+            parts.append(chunk)
+        start = max(end, start + 1)
     return parts
 
 
+def _deduplicate_text(*, previous_text: str, current_text: str, min_overlap_words: int) -> str:
+    current_text = _drop_adjacent_duplicate_sentences(current_text)
+    if not previous_text:
+        return current_text
+    if _normalized_words(previous_text) == _normalized_words(current_text):
+        return ""
+    return _remove_repeated_prefix(
+        previous_text=previous_text,
+        current_text=current_text,
+        min_overlap_words=min_overlap_words,
+    )
+
+
+def _drop_adjacent_duplicate_sentences(text: str) -> str:
+    sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+", text) if part.strip()]
+    if len(sentences) <= 1:
+        return text
+    kept: list[str] = []
+    previous_key: tuple[str, ...] = ()
+    for sentence in sentences:
+        key = _normalized_words(sentence)
+        if key and key == previous_key:
+            continue
+        kept.append(sentence)
+        previous_key = key
+    return " ".join(kept).strip()
+
+
+def _remove_repeated_prefix(*, previous_text: str, current_text: str, min_overlap_words: int) -> str:
+    previous_words = _word_spans(previous_text)
+    current_words = _word_spans(current_text)
+    if len(previous_words) < min_overlap_words or len(current_words) < min_overlap_words:
+        return current_text
+    previous_keys = [word for word, _, _ in previous_words]
+    current_keys = [word for word, _, _ in current_words]
+    max_overlap = min(len(previous_keys), len(current_keys), 80)
+    for overlap in range(max_overlap, min_overlap_words - 1, -1):
+        if previous_keys[-overlap:] == current_keys[:overlap]:
+            cut_at = current_words[overlap - 1][2]
+            return current_text[cut_at:].lstrip(" ,.;:—-–")
+    return current_text
+
+
+def _normalized_words(text: str) -> tuple[str, ...]:
+    return tuple(word for word, _, _ in _word_spans(text))
+
+
+def _word_spans(text: str) -> list[tuple[str, int, int]]:
+    return [
+        (match.group(0).lower(), match.start(), match.end())
+        for match in re.finditer(r"[\wÀ-ÿ]+", text, flags=re.UNICODE)
+    ]
+
+
 def _wrap_summary_markdown(
-    snap: TranscriptSnapshot, body: str, *, model: str, chunks: int
+    snap: TranscriptSnapshot,
+    body: str,
+    *,
+    model: str,
+    chunks: int,
+    tokenizer_description: str = "estimativa por caracteres",
+    deduplicated: bool = True,
 ) -> str:
     m = snap.metadata
     generated_at = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
@@ -323,6 +897,8 @@ def _wrap_summary_markdown(
         f"**Modelo de transcrição**: {snap.context.whisper_model}\n"
         f"**Modelo de sumarização**: {model}\n"
         f"**Blocos usados na sumarização**: {chunks}\n"
+        f"**Tokenização para chunking**: {tokenizer_description}\n"
+        f"**Deduplicação pré-resumo**: {'ativada' if deduplicated else 'desativada'}\n"
         f"**Data do resumo**: {generated_at}\n\n"
         "---\n\n"
         f"{body.strip()}\n\n"

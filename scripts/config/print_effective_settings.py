@@ -10,9 +10,18 @@ lidos pela mesma configuração que o bot usa em produção.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
-from yt_transcriber_bot.application.config import AppSettings
+from dotenv import dotenv_values
+
+from yt_transcriber_bot.application.config import (
+    SETTINGS_ENV_FILE_ENV_VAR,
+    AppSettings,
+    find_project_root,
+    get_forced_settings_env_file,
+    resolve_settings_env_file,
+)
 
 
 _SECRET_FIELDS = {
@@ -37,10 +46,18 @@ _FIELDS = (
     "summary_model",
     "summary_temperature",
     "summary_max_tokens",
+    "summary_partial_max_tokens",
+    "summary_final_max_tokens",
     "summary_max_chars_per_chunk",
     "summary_max_input_tokens",
     "summary_chars_per_token",
+    "summary_tokenizer_backend",
+    "summary_tokenizer_model",
+    "summary_deduplicate_transcript",
+    "summary_merge_same_speaker_gap_s",
+    "summary_min_overlap_words",
     "summary_timeout_s",
+    "summary_timeout_split_retries",
     "summary_output_language",
     "summary_disable_thinking",
     "summary_validate_model",
@@ -61,21 +78,68 @@ def _mask(value: object) -> str:
     return f"{text[:4]}...{text[-4:]}"
 
 
-def main() -> int:
-    settings = AppSettings()
-    env_path = Path(".env").resolve()
-    print("Configuração efetiva do yt-transcriber-bot")
-    print(f"Diretório atual: {Path.cwd()}")
-    print(f".env esperado: {env_path}")
-    print(f".env existe: {'sim' if env_path.exists() else 'não'}")
-    print()
+def _settings_env_file_path() -> Path:
+    return resolve_settings_env_file()
+
+
+def _lookup_case_insensitive(mapping: dict[str, object], key: str) -> tuple[str, object] | None:
+    key_upper = key.upper()
+    for actual_key, value in mapping.items():
+        if actual_key.upper() == key_upper:
+            return actual_key, value
+    return None
+
+
+def _source_for_field(field: str, env_path: Path, dotenv_data: dict[str, object]) -> str:
+    env_name = field.upper()
+    real_env = _lookup_case_insensitive(dict(os.environ), env_name)
+    if real_env is not None:
+        actual_key, _ = real_env
+        return f"ambiente real {actual_key} (sobrescreve .env)"
+    dotenv_hit = _lookup_case_insensitive(dotenv_data, env_name)
+    if dotenv_hit is not None:
+        actual_key, _ = dotenv_hit
+        return f"arquivo {env_path} ({actual_key})"
+    return "valor padrão ou argumento explícito"
+
+
+def build_report_lines(settings: AppSettings | None = None) -> list[str]:
+    settings = settings or AppSettings()
+    env_path = _settings_env_file_path().expanduser().resolve()
+    dotenv_data = dict(dotenv_values(env_path)) if env_path.exists() else {}
+
+    forced_env_file = os.environ.get(SETTINGS_ENV_FILE_ENV_VAR, "").strip()
+    project_root_from_cwd = find_project_root(Path.cwd())
+    project_root_from_code = find_project_root(Path(__file__))
+    forced_path = get_forced_settings_env_file()
+    lines = [
+        "Configuração efetiva do yt-transcriber-bot",
+        f"Diretório atual: {Path.cwd()}",
+        f"Raiz detectada pelo diretório atual: {project_root_from_cwd or '<não encontrada>'}",
+        f"Raiz detectada pelo código: {project_root_from_code or '<não encontrada>'}",
+        f"{SETTINGS_ENV_FILE_ENV_VAR}: {forced_env_file or '<não definido>'}",
+        f"Arquivo forçado resolvido: {forced_path or '<não definido>'}",
+        f".env usado para diagnóstico/runtime: {env_path}",
+        f".env existe: {'sim' if env_path.exists() else 'não'}",
+        ".env.example: nunca é usado como configuração runtime.",
+        "Prioridade: variáveis do ambiente real sobrescrevem valores do .env.",
+        "",
+    ]
     for field in _FIELDS:
         value = getattr(settings, field)
-        print(f"{field}={value}")
-    print()
+        source = _source_for_field(field, env_path, dotenv_data)
+        lines.append(f"{field}={value}  # origem: {source}")
+    lines.append("")
     for field in sorted(_SECRET_FIELDS):
         value = getattr(settings, field)
-        print(f"{field}={_mask(value)}")
+        source = _source_for_field(field, env_path, dotenv_data)
+        lines.append(f"{field}={_mask(value)}  # origem: {source}")
+    return lines
+
+
+def main() -> int:
+    for line in build_report_lines():
+        print(line)
     return 0
 
 

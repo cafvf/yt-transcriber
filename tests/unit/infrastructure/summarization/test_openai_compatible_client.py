@@ -7,6 +7,7 @@ import pytest
 from yt_transcriber_bot.infrastructure.summarization.openai_compatible_client import (
     ChatCompletionError,
     ChatCompletionRequest,
+    ChatCompletionTimeoutError,
     OpenAICompatibleChatClient,
 )
 
@@ -42,12 +43,56 @@ def test_openai_compatible_client_posts_chat_completion_payload() -> None:
     assert payload["stream"] is False
     assert payload["enable_thinking"] is False
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+    assert payload["reasoning_effort"] == "none"
     assert payload["messages"] == [
         {"role": "system", "content": "sistema"},
         {"role": "user", "content": "/no_think\n\nusuário"},
     ]
     assert headers["Authorization"] == "Bearer local-key"
     assert timeout_s == 77
+
+
+def test_openai_compatible_client_allows_per_request_max_tokens_override() -> None:
+    calls: list[tuple[str, Mapping[str, Any], Mapping[str, str], float]] = []
+
+    def transport(
+        url: str, payload: Mapping[str, Any], headers: Mapping[str, str], timeout_s: float
+    ) -> Mapping[str, Any]:
+        calls.append((url, payload, headers, timeout_s))
+        return {"choices": [{"message": {"content": "ok"}}]}
+
+    client = OpenAICompatibleChatClient(
+        base_url="http://localhost:1234/v1",
+        model="qwen3.5-9b",
+        max_tokens=2048,
+        validate_model=False,
+        transport=transport,
+    )
+
+    assert client.complete(ChatCompletionRequest("s", "u", max_tokens=321)) == "ok"
+
+    assert calls[0][1]["max_tokens"] == 321
+
+
+def test_openai_compatible_client_reports_timeout_as_specific_error() -> None:
+    def transport(
+        url: str, payload: Mapping[str, Any], headers: Mapping[str, str], timeout_s: float
+    ) -> Mapping[str, Any]:
+        raise TimeoutError("timed out")
+
+    client = OpenAICompatibleChatClient(
+        base_url="http://localhost:1234/v1",
+        model="qwen3.5-9b",
+        validate_model=False,
+        transport=transport,
+    )
+
+    with pytest.raises(ChatCompletionTimeoutError) as exc_info:
+        client.complete(ChatCompletionRequest("s", "u"))
+
+    message = str(exc_info.value)
+    assert "SUMMARY_TIMEOUT_S" in message
+    assert "SUMMARY_MAX_INPUT_TOKENS" in message
 
 
 def test_openai_compatible_client_rejects_invalid_response() -> None:
@@ -112,6 +157,7 @@ def test_openai_compatible_client_can_leave_thinking_untouched() -> None:
     assert client.complete(ChatCompletionRequest("s", "u")) == "Resposta direta"
     assert "enable_thinking" not in calls[0][1]
     assert "chat_template_kwargs" not in calls[0][1]
+    assert "reasoning_effort" not in calls[0][1]
 
 
 def test_openai_compatible_client_strips_qwen_think_blocks() -> None:

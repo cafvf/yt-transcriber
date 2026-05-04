@@ -6,7 +6,18 @@ from pathlib import Path
 
 import pytest
 
-from yt_transcriber_bot.application.config import AppSettings
+from yt_transcriber_bot.application.config import (
+    AppSettings,
+    find_project_root,
+    resolve_settings_env_file,
+)
+
+
+def _assert_defined(value: str) -> None:
+    """Verifica que um campo textual de configuração tem valor efetivo."""
+
+    assert isinstance(value, str)
+    assert value.strip()
 
 
 @pytest.fixture
@@ -26,18 +37,25 @@ def env_no_dotenv(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         "AUDIO_BITRATE_KBPS",
         "MAX_VIDEO_DURATION_MIN",
         "RETENTION_COUNT",
+        "SUMMARY_MODEL",
+        "SUMMARY_BACKEND",
+        "SUMMARY_BASE_URL",
         "SUMMARY_DISABLE_THINKING",
+        "SUMMARY_VALIDATE_MODEL",
+        "SUMMARY_STRICT_MODEL_MATCH",
+        "YT_TRANSCRIBER_ENV_FILE",
     ):
         monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("YT_TRANSCRIBER_ENV_FILE", str(tmp_path / ".env"))
 
 
 class TestAppSettingsDefaults:
     def test_defaults_are_sensible(self, env_no_dotenv: None) -> None:
         s = AppSettings()
-        assert s.whisper_model == "auto"
-        assert s.whisper_model_pt == "large-v3"
-        assert s.whisper_model_en == "medium"
-        assert s.whisper_model_default == "medium"
+        _assert_defined(s.whisper_model)
+        _assert_defined(s.whisper_model_pt)
+        _assert_defined(s.whisper_model_en)
+        _assert_defined(s.whisper_model_default)
         assert s.device == "auto"
         assert s.compute_type == "auto"
         assert s.audio_bitrate_kbps == 32
@@ -171,7 +189,9 @@ class TestTranscriptionSignature:
         assert s1.transcription_signature() != s2.transcription_signature()
 
 
-def test_summary_settings_defaults_are_lm_studio_compatible(tmp_path):
+def test_summary_settings_defaults_are_lm_studio_compatible(
+    env_no_dotenv: None, tmp_path: Path
+) -> None:
     settings = AppSettings(
         telegram_bot_token="x",
         telegram_allowed_user_id=42,
@@ -181,27 +201,126 @@ def test_summary_settings_defaults_are_lm_studio_compatible(tmp_path):
     )
     assert settings.summary_backend == "openai_compatible"
     assert settings.summary_base_url == "http://localhost:1234/v1"
-    assert settings.summary_model == "qwen3.5-9b"
-    assert settings.summary_max_tokens == 1024
-    assert settings.summary_max_chars_per_chunk == 4000
-    assert settings.summary_max_input_tokens == 2500
-    assert settings.summary_chars_per_token == 2.0
-    assert settings.summary_timeout_s == 300.0
+    _assert_defined(settings.summary_model)
+    assert settings.summary_max_tokens > 0
+    assert settings.summary_partial_max_tokens > 0
+    assert settings.summary_final_max_tokens >= settings.summary_partial_max_tokens
+    assert settings.summary_max_chars_per_chunk >= 1000
+    assert settings.summary_max_input_tokens >= 1000
+    assert settings.summary_chars_per_token >= 1.0
+    assert settings.summary_tokenizer_backend == "auto"
+    assert settings.summary_tokenizer_model == ""
+    assert settings.summary_deduplicate_transcript is True
+    assert settings.summary_merge_same_speaker_gap_s == 2.0
+    assert settings.summary_min_overlap_words == 6
+    assert settings.summary_timeout_s >= 300.0
+    assert settings.summary_timeout_split_retries >= 0
     assert settings.summary_disable_thinking is True
     assert settings.summary_validate_model is True
     assert settings.summary_strict_model_match is True
     assert settings.summaries_dir() == tmp_path / "data" / "summaries"
 
 
-def test_summary_disable_thinking_can_be_disabled_from_env(env_no_dotenv: None, monkeypatch: pytest.MonkeyPatch) -> None:
+
+def test_summary_tokenizer_backend_is_normalized(env_no_dotenv: None) -> None:
+    assert AppSettings(summary_tokenizer_backend="huggingface").summary_tokenizer_backend == "hf"
+    assert AppSettings(summary_tokenizer_backend="estimated").summary_tokenizer_backend == "estimate"
+
+    with pytest.raises(ValueError):
+        AppSettings(summary_tokenizer_backend="unknown")
+
+def test_summary_disable_thinking_can_be_disabled_from_env(
+    env_no_dotenv: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("SUMMARY_DISABLE_THINKING", "false")
     settings = AppSettings()
     assert settings.summary_disable_thinking is False
 
 
-def test_summary_model_guard_can_be_disabled_from_env(env_no_dotenv: None, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_summary_model_guard_can_be_disabled_from_env(
+    env_no_dotenv: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("SUMMARY_VALIDATE_MODEL", "false")
     monkeypatch.setenv("SUMMARY_STRICT_MODEL_MATCH", "false")
     settings = AppSettings()
     assert settings.summary_validate_model is False
     assert settings.summary_strict_model_match is False
+
+
+def test_summary_model_is_loaded_from_detected_project_root_dotenv(
+    env_no_dotenv: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "yt-transcriber-bot"\n', encoding="utf-8"
+    )
+    (tmp_path / ".env").write_text("SUMMARY_MODEL=modelo-do-dotenv\n", encoding="utf-8")
+    monkeypatch.delenv("YT_TRANSCRIBER_ENV_FILE", raising=False)
+
+    settings = AppSettings()
+
+    assert find_project_root() == tmp_path
+    assert resolve_settings_env_file() == tmp_path / ".env"
+    assert settings.summary_model == "modelo-do-dotenv"
+
+
+def test_summary_model_can_be_forced_with_env_file_override(
+    env_no_dotenv: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    forced_env = tmp_path / "config" / "bot.env"
+    forced_env.parent.mkdir()
+    forced_env.write_text("SUMMARY_MODEL=modelo-forcado\n", encoding="utf-8")
+    other_cwd = tmp_path / "other-cwd"
+    other_cwd.mkdir()
+    monkeypatch.chdir(other_cwd)
+    monkeypatch.setenv("YT_TRANSCRIBER_ENV_FILE", str(forced_env))
+
+    settings = AppSettings()
+
+    assert settings.summary_model == "modelo-forcado"
+
+
+def test_env_example_is_not_loaded_as_runtime_default(
+    env_no_dotenv: None, tmp_path: Path
+) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "yt-transcriber-bot"\n', encoding="utf-8"
+    )
+    (tmp_path / ".env.example").write_text(
+        "SUMMARY_MODEL=modelo-errado-do-example\n", encoding="utf-8"
+    )
+
+    settings = AppSettings()
+
+    assert resolve_settings_env_file() == tmp_path / ".env"
+    _assert_defined(settings.summary_model)
+    assert settings.summary_model != "modelo-errado-do-example"
+
+
+def test_forced_env_file_rejects_env_example(
+    env_no_dotenv: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    example = tmp_path / ".env.example"
+    example.write_text("SUMMARY_MODEL=modelo-errado-do-example\n", encoding="utf-8")
+    monkeypatch.setenv("YT_TRANSCRIBER_ENV_FILE", str(example))
+
+    with pytest.raises(ValueError, match=".env.example"):
+        AppSettings()
+
+
+
+def test_summary_model_real_environment_overrides_dotenv_and_is_diagnosable(
+    env_no_dotenv: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    (tmp_path / ".env").write_text("SUMMARY_MODEL=modelo-do-dotenv\n", encoding="utf-8")
+    monkeypatch.setenv("SUMMARY_MODEL", "modelo-do-ambiente-real")
+
+    settings = AppSettings()
+
+    assert settings.summary_model == "modelo-do-ambiente-real"
+
+    from scripts.config.print_effective_settings import build_report_lines
+
+    report = "\n".join(build_report_lines(settings))
+    assert "summary_model=modelo-do-ambiente-real" in report
+    assert "origem: ambiente real SUMMARY_MODEL" in report
+    assert "sobrescreve .env" in report

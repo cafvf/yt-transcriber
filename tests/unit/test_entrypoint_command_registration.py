@@ -16,3 +16,9 @@ def test_entrypoint_registers_queue_and_callback_handlers() -> None:
     assert 'CommandHandler(["video_subs", "videosubs"], on_video_subs)' in source
     assert 'CallbackQueryHandler(on_callback, pattern=r"^rename:")' in source
     assert 'MessageHandler(filters.COMMAND, on_text)' in source
+
+
+def test_help_text_lists_summary_command() -> None:
+    source = Path("src/yt_transcriber_bot/infrastructure/telegram/bot_adapter.py").read_text()
+    assert "• /summary [n]" in source
+    assert "gera um resumo estruturado" in source

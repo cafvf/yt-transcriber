@@ -55,6 +55,7 @@ from yt_transcriber_bot.infrastructure.summarization.openai_compatible_client im
 )
 from yt_transcriber_bot.infrastructure.summarization.transcript_summarizer import (
     SummaryError,
+    SummaryProgress,
     TranscriptSummaryService,
 )
 from yt_transcriber_bot.infrastructure.telegram.job_queue import (
@@ -739,17 +740,35 @@ class TelegramBotAdapter:
             await self._send_text(chat_id, "Não consegui localizar o snapshot dessa transcrição.")
             return
         output_base = Path(selected.md_path) if selected.md_path else self._settings.summaries_dir() / slug
-        await self._send_text(
+        progress_message_id = await self._send_text(
             chat_id,
             f"🧠 Gerando resumo da transcrição #{index} com {self._settings.summary_model}. "
-            "Isso pode levar alguns minutos em modelo local.",
+            "Preparando transcrição para a LLM…",
         )
+        loop = asyncio.get_running_loop()
+        progress = (
+            ProgressReporter(
+                _make_editor(self._client, chat_id, progress_message_id),
+                min_interval_s=self._settings.telegram_message_edit_min_interval_s,
+            )
+            if progress_message_id
+            else None
+        )
+
+        def summary_progress_cb(event: SummaryProgress) -> None:
+            if progress is None:
+                return
+            asyncio.run_coroutine_threadsafe(
+                progress.stage(_humanize_summary_progress(event)), loop
+            )
+
         try:
             result = await asyncio.to_thread(
                 self._summary_service.summarize,
                 slug=slug,
                 output_base_path=output_base,
                 speaker_aliases=selected.speaker_renames,
+                on_progress=summary_progress_cb,
             )
         except FileNotFoundError:
             await self._send_text(chat_id, "Snapshot dessa transcrição expirou. Reprocesse o vídeo.")
@@ -760,11 +779,17 @@ class TelegramBotAdapter:
         except SummaryError as exc:
             await self._send_text(chat_id, f"Falha ao gerar resumo: {exc}")
             return
-        await self._send_text(
-            chat_id,
-            f"✅ Resumo gerado para a transcrição #{index} "
-            f"({result.chunks} bloco(s), modelo {result.model}). Enviando arquivo…",
-        )
+        if progress is not None:
+            await progress.finish(
+                f"✅ Resumo gerado para a transcrição #{index} "
+                f"({result.chunks} bloco(s), modelo {result.model}). Enviando arquivo…"
+            )
+        else:
+            await self._send_text(
+                chat_id,
+                f"✅ Resumo gerado para a transcrição #{index} "
+                f"({result.chunks} bloco(s), modelo {result.model}). Enviando arquivo…",
+            )
         await self._send_document_with_retry(chat_id, result.path)
 
     async def handle_command_export_shortcut(
@@ -1125,6 +1150,30 @@ class TelegramBotAdapter:
 # ----------------------------------------------------------------------
 # Helpers
 # ----------------------------------------------------------------------
+
+
+def _humanize_summary_progress(event: SummaryProgress) -> str:
+    """Converte eventos de sumarização em texto curto para o painel do Telegram."""
+
+    if event.kind == "planned":
+        return f"🧩 {event.message}"
+    if event.kind == "single_started":
+        return "🧠 Enviando transcrição completa para a LLM…"
+    if event.kind == "single_completed":
+        return "✅ Resumo em passagem única concluído."
+    if event.kind == "chunk_started":
+        return f"🧠 {event.message}"
+    if event.kind == "chunk_completed":
+        return f"✅ {event.message}"
+    if event.kind == "chunk_split":
+        return f"⚠️ {event.message}"
+    if event.kind == "synthesis_started":
+        return "🧩 Blocos resumidos. Gerando síntese final…"
+    if event.kind == "synthesis_completed":
+        return "✅ Síntese final concluída. Preparando arquivo…"
+    if event.kind == "synthesis_split":
+        return f"⚠️ {event.message}"
+    return event.message
 
 
 def _make_editor(

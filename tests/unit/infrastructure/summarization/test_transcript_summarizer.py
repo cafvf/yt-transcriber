@@ -17,8 +17,10 @@ from yt_transcriber_bot.infrastructure.persistence.filesystem.transcript_snapsho
 from yt_transcriber_bot.infrastructure.rendering.markdown_renderer import RenderContext
 from yt_transcriber_bot.infrastructure.summarization.openai_compatible_client import (
     ChatCompletionRequest,
+    ChatCompletionTimeoutError,
 )
 from yt_transcriber_bot.infrastructure.summarization.transcript_summarizer import (
+    SummaryProgress,
     TranscriptSummaryService,
 )
 
@@ -26,15 +28,19 @@ from yt_transcriber_bot.infrastructure.summarization.transcript_summarizer impor
 class FakeChatClient:
     model = "qwen3.5-9b"
 
-    def __init__(self, responses: list[str] | None = None) -> None:
+    def __init__(self, responses: list[str | BaseException] | None = None) -> None:
         self.requests: list[ChatCompletionRequest] = []
         self._responses = responses or ["## Resumo executivo\nResumo final."]
 
     def complete(self, request: ChatCompletionRequest) -> str:
         self.requests.append(request)
         if len(self.requests) <= len(self._responses):
-            return self._responses[len(self.requests) - 1]
-        return self._responses[-1]
+            response = self._responses[len(self.requests) - 1]
+        else:
+            response = self._responses[-1]
+        if isinstance(response, BaseException):
+            raise response
+        return response
 
 
 def _snapshot_repo(tmp_path: Path) -> TranscriptSnapshotRepository:
@@ -127,6 +133,161 @@ def test_summary_service_uses_map_reduce_for_long_transcript(tmp_path: Path) -> 
     assert "final" in result.path.read_text()
 
 
+def test_summary_service_uses_partial_and_final_token_budgets(tmp_path: Path) -> None:
+    repo = _snapshot_repo(tmp_path)
+    snap = repo.load("video")
+    assert snap is not None
+    long_segments = tuple(
+        TranscriptSegment(i * 2, i * 2 + 1, f"Trecho longo {i} " + "x" * 120, "SPEAKER_00")
+        for i in range(30)
+    )
+    repo.save(
+        "video",
+        TranscriptSnapshot(
+            metadata=snap.metadata,
+            transcript=Transcript(long_segments, Language("pt"), 0.9, "whisperx"),
+            context=snap.context,
+        ),
+    )
+    fake = FakeChatClient(["parcial 1", "parcial 2", "## Resumo executivo\nfinal"])
+    service = TranscriptSummaryService(
+        snapshots=repo,
+        chat_client=fake,
+        output_dir=tmp_path / "summaries",
+        max_chars_per_chunk=2000,
+        partial_max_tokens=333,
+        final_max_tokens=777,
+    )
+
+    result = service.summarize(slug="video", output_base_path=tmp_path / "video.md")
+
+    assert result.chunks > 1
+    assert {request.max_tokens for request in fake.requests[:-1]} == {333}
+    assert fake.requests[-1].max_tokens == 777
+
+
+def test_summary_service_uses_final_token_budget_for_single_pass(tmp_path: Path) -> None:
+    fake = FakeChatClient(["## Resumo executivo\nConteúdo resumido."])
+    service = TranscriptSummaryService(
+        snapshots=_snapshot_repo(tmp_path),
+        chat_client=fake,
+        output_dir=tmp_path / "summaries",
+        max_chars_per_chunk=12000,
+        final_max_tokens=888,
+    )
+
+    service.summarize(slug="video", output_base_path=tmp_path / "video.md")
+
+    assert len(fake.requests) == 1
+    assert fake.requests[0].max_tokens == 888
+
+
+
+def test_summary_service_emits_progress_events_for_map_reduce(tmp_path: Path) -> None:
+    repo = _snapshot_repo(tmp_path)
+    snap = repo.load("video")
+    assert snap is not None
+    long_segments = tuple(
+        TranscriptSegment(i * 2, i * 2 + 1, f"Trecho {i} " + "x" * 120, "SPEAKER_00")
+        for i in range(30)
+    )
+    repo.save(
+        "video",
+        TranscriptSnapshot(
+            metadata=snap.metadata,
+            transcript=Transcript(long_segments, Language("pt"), 0.9, "whisperx"),
+            context=snap.context,
+        ),
+    )
+    fake = FakeChatClient(["parcial", "parcial", "## Resumo executivo\nfinal"])
+    events: list[SummaryProgress] = []
+    service = TranscriptSummaryService(
+        snapshots=repo,
+        chat_client=fake,
+        output_dir=tmp_path / "summaries",
+        max_chars_per_chunk=2000,
+    )
+
+    result = service.summarize(
+        slug="video",
+        output_base_path=tmp_path / "video.md",
+        on_progress=events.append,
+    )
+
+    assert result.chunks > 1
+    kinds = [event.kind for event in events]
+    assert kinds[0] == "planned"
+    assert "chunk_started" in kinds
+    assert "chunk_completed" in kinds
+    assert "synthesis_started" in kinds
+    assert kinds[-1] == "synthesis_completed"
+
+
+def test_summary_service_splits_single_pass_after_timeout(tmp_path: Path) -> None:
+    repo = _snapshot_repo(tmp_path)
+    snap = repo.load("video")
+    assert snap is not None
+    repo.save(
+        "video",
+        TranscriptSnapshot(
+            metadata=snap.metadata,
+            transcript=Transcript(
+                (TranscriptSegment(0, 60, "texto " * 1200, "SPEAKER_00"),),
+                Language("pt"),
+                0.9,
+                "whisperx",
+            ),
+            context=snap.context,
+        ),
+    )
+    fake = FakeChatClient(
+        [
+            ChatCompletionTimeoutError("timeout da passagem única"),
+            "parcial 1",
+            "parcial 2",
+            "## Resumo executivo\nfinal",
+        ]
+    )
+    events: list[SummaryProgress] = []
+    service = TranscriptSummaryService(
+        snapshots=repo,
+        chat_client=fake,
+        output_dir=tmp_path / "summaries",
+        max_chars_per_chunk=100000,
+        max_input_tokens=20000,
+        timeout_split_retries=2,
+        deduplicate_transcript=False,
+    )
+
+    result = service.summarize(
+        slug="video",
+        output_base_path=tmp_path / "video.md",
+        on_progress=events.append,
+    )
+
+    assert result.chunks > 1
+    assert len(fake.requests) == result.chunks + 2  # tentativa única com timeout + parciais + síntese
+    assert fake.requests[0].max_tokens == 1024
+    assert {request.max_tokens for request in fake.requests[1:-1]} == {512}
+    assert fake.requests[-1].max_tokens == 1024
+    assert "final" in result.path.read_text()
+    assert "chunk_split" in [event.kind for event in events]
+
+
+def test_summary_service_reraises_timeout_when_adaptive_split_is_disabled(tmp_path: Path) -> None:
+    fake = FakeChatClient([ChatCompletionTimeoutError("timeout")])
+    service = TranscriptSummaryService(
+        snapshots=_snapshot_repo(tmp_path),
+        chat_client=fake,
+        output_dir=tmp_path / "summaries",
+        timeout_split_retries=0,
+    )
+
+    with pytest.raises(ChatCompletionTimeoutError):
+        service.summarize(slug="video", output_base_path=tmp_path / "video.md")
+
+
+
 def test_summary_service_raises_for_missing_snapshot(tmp_path: Path) -> None:
     service = TranscriptSummaryService(
         snapshots=TranscriptSnapshotRepository(tmp_path / "segments"),
@@ -161,6 +322,7 @@ def test_summary_service_caps_chunks_by_input_token_budget(tmp_path: Path) -> No
         max_chars_per_chunk=12000,
         max_input_tokens=2500,
         chars_per_token=2.0,
+        deduplicate_transcript=False,
     )
 
     result = service.summarize(slug="video", output_base_path=tmp_path / "video.md")
@@ -197,6 +359,7 @@ def test_summary_service_splits_single_very_long_segment(tmp_path: Path) -> None
         max_chars_per_chunk=12000,
         max_input_tokens=2000,
         chars_per_token=2.0,
+        deduplicate_transcript=False,
     )
 
     result = service.summarize(slug="video", output_base_path=tmp_path / "video.md")
@@ -235,3 +398,86 @@ def test_summary_service_can_allow_thinking_instruction_to_be_omitted(tmp_path: 
     service.summarize(slug="video", output_base_path=tmp_path / "video.md")
 
     assert "Responda diretamente" not in fake.requests[0].system_prompt
+
+
+class FakeWordTokenizer:
+    description = "fake word tokenizer"
+    is_exact = True
+
+    def count(self, text: str) -> int:
+        return len(text.split())
+
+    def split(self, text: str, max_tokens: int) -> list[str]:
+        words = text.split()
+        return [" ".join(words[i : i + max_tokens]) for i in range(0, len(words), max_tokens)]
+
+
+def test_summary_service_can_chunk_with_model_tokenizer(tmp_path: Path) -> None:
+    repo = _snapshot_repo(tmp_path)
+    snap = repo.load("video")
+    assert snap is not None
+    long_segments = tuple(
+        TranscriptSegment(
+            i * 2,
+            i * 2 + 1,
+            " ".join(f"palavra{i}_{j}" for j in range(30)),
+            "SPEAKER_00",
+        )
+        for i in range(25)
+    )
+    repo.save(
+        "video",
+        TranscriptSnapshot(
+            metadata=snap.metadata,
+            transcript=Transcript(long_segments, Language("pt"), 0.9, "whisperx"),
+            context=snap.context,
+        ),
+    )
+    fake = FakeChatClient(["parcial", "## Resumo executivo\nfinal"])
+    service = TranscriptSummaryService(
+        snapshots=repo,
+        chat_client=fake,
+        output_dir=tmp_path / "summaries",
+        max_chars_per_chunk=100000,
+        max_input_tokens=1000,
+        tokenizer=FakeWordTokenizer(),
+        deduplicate_transcript=False,
+    )
+
+    result = service.summarize(slug="video", output_base_path=tmp_path / "video.md")
+
+    assert result.chunks > 1
+    assert "**Tokenização para chunking**: fake word tokenizer" in result.path.read_text()
+
+
+def test_summary_service_deduplicates_repeated_adjacent_segments(tmp_path: Path) -> None:
+    repo = _snapshot_repo(tmp_path)
+    snap = repo.load("video")
+    assert snap is not None
+    segments = (
+        TranscriptSegment(0, 2, "alpha beta gamma delta", "SPEAKER_00"),
+        TranscriptSegment(2, 4, "alpha beta gamma delta", "SPEAKER_00"),
+        TranscriptSegment(4, 6, "gamma delta epsilon zeta", "SPEAKER_00"),
+    )
+    repo.save(
+        "video",
+        TranscriptSnapshot(
+            metadata=snap.metadata,
+            transcript=Transcript(segments, Language("pt"), 0.9, "whisperx"),
+            context=snap.context,
+        ),
+    )
+    fake = FakeChatClient(["## Resumo executivo\nResumo final."])
+    service = TranscriptSummaryService(
+        snapshots=repo,
+        chat_client=fake,
+        output_dir=tmp_path / "summaries",
+        min_overlap_words=2,
+    )
+
+    service.summarize(slug="video", output_base_path=tmp_path / "video.md")
+
+    prompt = fake.requests[0].user_prompt
+    assert prompt.count("SPEAKER_00:") == 1
+    assert prompt.count("alpha beta gamma delta") == 1
+    assert "epsilon zeta" in prompt

@@ -48,9 +48,14 @@ def env_clean(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:  # type: ignor
         "HF_TOKEN",
         "DEVICE",
         "WHISPER_MODEL",
+        "WHISPER_MODEL_PT",
+        "WHISPER_MODEL_EN",
+        "WHISPER_MODEL_DEFAULT",
         "COMPUTE_TYPE",
+        "YT_TRANSCRIBER_ENV_FILE",
     ):
         monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("YT_TRANSCRIBER_ENV_FILE", str(tmp_path / ".env"))
 
 
 class TestForcedDevice:
@@ -141,22 +146,24 @@ class TestComputeTypeResolution:
 
 
 class TestLanguageAwareModelPolicy:
-    def test_auto_model_uses_large_v3_for_portuguese(self, env_clean: None) -> None:
+    def test_auto_model_uses_configured_model_for_portuguese(self, env_clean: None) -> None:
+        settings = _settings(whisper_model="auto", whisper_model_pt="small")
         plan = select_runtime(
-            _settings(whisper_model="auto"),
+            settings,
             _hw(has_cuda=False),
             language_code="pt",
         )
-        assert plan.model.name == "large-v3"
+        assert plan.model.name == settings.whisper_model_pt
         assert "idioma pt" in plan.reason
 
-    def test_auto_model_uses_medium_for_english(self, env_clean: None) -> None:
+    def test_auto_model_uses_configured_model_for_english(self, env_clean: None) -> None:
+        settings = _settings(whisper_model="auto", whisper_model_en="base")
         plan = select_runtime(
-            _settings(whisper_model="auto"),
+            settings,
             _hw(has_cuda=False),
             language_code="en",
         )
-        assert plan.model.name == "medium"
+        assert plan.model.name == settings.whisper_model_en
         assert "idioma en" in plan.reason
 
     def test_explicit_model_overrides_language_policy(self, env_clean: None) -> None:

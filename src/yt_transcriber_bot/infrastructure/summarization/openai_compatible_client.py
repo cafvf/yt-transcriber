@@ -21,6 +21,10 @@ class ChatCompletionError(RuntimeError):
     """Falha ao solicitar ou interpretar uma resposta da LLM."""
 
 
+class ChatCompletionTimeoutError(ChatCompletionError):
+    """A chamada à LLM excedeu o tempo limite configurado."""
+
+
 Transport = Callable[[str, Mapping[str, Any], Mapping[str, str], float], Mapping[str, Any]]
 ModelsTransport = Callable[[str, Mapping[str, str], float], Mapping[str, Any]]
 
@@ -31,6 +35,7 @@ class ChatCompletionRequest:
 
     system_prompt: str
     user_prompt: str
+    max_tokens: int | None = None
 
 
 class OpenAICompatibleChatClient:
@@ -75,6 +80,7 @@ class OpenAICompatibleChatClient:
     def complete(self, request: ChatCompletionRequest) -> str:
         if self._validate_model:
             self._ensure_model_available()
+        max_tokens = request.max_tokens if request.max_tokens is not None else self._max_tokens
         payload: dict[str, Any] = {
             "model": self._model,
             "messages": [
@@ -82,16 +88,19 @@ class OpenAICompatibleChatClient:
                 {"role": "user", "content": _maybe_add_no_think_prefix(request.user_prompt, self._disable_thinking)},
             ],
             "temperature": self._temperature,
-            "max_tokens": self._max_tokens,
+            "max_tokens": max(1, max_tokens),
             "stream": False,
         }
-        # Qwen3.5/llama.cpp/LM Studio podem aceitar esse parâmetro não padrão
+        # Qwen3.5/llama.cpp/LM Studio podem aceitar parâmetros não padrão
         # no corpo da requisição OpenAI-compatible para desabilitar thinking.
+        # ``reasoning_effort="none"`` é enviado junto com ``enable_thinking=false``
+        # para cobrir servidores/presets que expõem o controle como esforço de raciocínio.
         # A instrução textual, o prefixo /no_think e o pós-processamento abaixo
-        # continuam como proteção caso o servidor ignore o parâmetro.
+        # continuam como proteção caso o servidor ignore algum desses parâmetros.
         if self._disable_thinking:
             payload["enable_thinking"] = False
             payload["chat_template_kwargs"] = {"enable_thinking": False}
+            payload["reasoning_effort"] = "none"
         headers = self._headers()
         try:
             data = self._transport(
@@ -115,6 +124,14 @@ class OpenAICompatibleChatClient:
                 f"Status: {exc.code}. Detalhe: {detail or exc.reason}.{hint}"
             ) from exc
         except (urllib.error.URLError, TimeoutError, socket.timeout, OSError) as exc:
+            if _is_timeout_error(exc):
+                raise ChatCompletionTimeoutError(
+                    "Timeout ao chamar a API OpenAI-compatible. "
+                    "A chamada demorou mais que SUMMARY_TIMEOUT_S. "
+                    "O bot pode reduzir automaticamente o chunk atual, mas considere também diminuir "
+                    "SUMMARY_MAX_INPUT_TOKENS/SUMMARY_MAX_CHARS_PER_CHUNK ou aumentar SUMMARY_TIMEOUT_S. "
+                    f"Detalhe: {exc}"
+                ) from exc
             raise ChatCompletionError(
                 "Falha ao chamar a API OpenAI-compatible. "
                 "Verifique se o servidor do LM Studio está ativo e se SUMMARY_BASE_URL está correto. "
@@ -213,6 +230,16 @@ def _urllib_get_transport(
     if not isinstance(parsed, dict):
         raise ChatCompletionError("Resposta de /v1/models não é um objeto JSON.")
     return parsed
+
+
+def _is_timeout_error(exc: BaseException) -> bool:
+    if isinstance(exc, (TimeoutError, socket.timeout)):
+        return True
+    reason = getattr(exc, "reason", None)
+    if isinstance(reason, (TimeoutError, socket.timeout)):
+        return True
+    message = str(exc).lower()
+    return "timed out" in message or "timeout" in message
 
 
 def _maybe_add_no_think_prefix(user_prompt: str, disable_thinking: bool) -> str:

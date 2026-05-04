@@ -33,6 +33,7 @@ from yt_transcriber_bot.infrastructure.rendering.markdown_renderer import (
     MarkdownTranscriptRenderer,
     RenderContext,
 )
+from yt_transcriber_bot.infrastructure.summarization.transcript_summarizer import SummaryProgress
 from yt_transcriber_bot.infrastructure.telegram.bot_adapter import (
     TelegramBotAdapter,
     _parse_rename_mapping,
@@ -77,6 +78,40 @@ class FakeSummaryService:
 
     def summarize(self, **kwargs: object) -> object:
         self.calls.append(kwargs)
+        on_progress = kwargs.get("on_progress")
+        if callable(on_progress):
+            on_progress(
+                SummaryProgress(
+                    kind="planned",
+                    current=0,
+                    total=2,
+                    message="Transcrição preparada em 2 bloco(s).",
+                )
+            )
+            on_progress(
+                SummaryProgress(
+                    kind="chunk_started",
+                    current=1,
+                    total=2,
+                    message="Iniciando resumo parcial 1/2.",
+                )
+            )
+            on_progress(
+                SummaryProgress(
+                    kind="chunk_completed",
+                    current=1,
+                    total=2,
+                    message="Resumo parcial 1/2 concluído.",
+                )
+            )
+            on_progress(
+                SummaryProgress(
+                    kind="synthesis_started",
+                    current=2,
+                    total=2,
+                    message="Gerando síntese final.",
+                )
+            )
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
         self.output_path.write_text("# Resumo\n\nConteúdo resumido.")
         return type(
@@ -806,8 +841,11 @@ async def test_summary_latest_generates_and_sends_markdown(
 
     assert summary_service.calls
     assert summary_service.calls[0]["slug"] == "hello"
+    assert "on_progress" in summary_service.calls[0]
     assert summary_service.output_path in client.docs
-    assert any("Resumo gerado" in text for _, text, *_ in client.sent)
+    assert any("Gerando resumo" in text for _, text, *_ in client.sent)
+    assert any("Transcrição preparada" in text for *_, text in client.edits)
+    assert any("Resumo gerado" in text for *_, text in client.edits)
 
 
 @pytest.mark.asyncio

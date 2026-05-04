@@ -222,8 +222,16 @@ def build(settings: AppSettings) -> Composition:
             max_chars_per_chunk=settings.summary_max_chars_per_chunk,
             max_input_tokens=settings.summary_max_input_tokens,
             chars_per_token=settings.summary_chars_per_token,
+            partial_max_tokens=settings.summary_partial_max_tokens,
+            final_max_tokens=settings.summary_final_max_tokens,
+            timeout_split_retries=settings.summary_timeout_split_retries,
             output_language=settings.summary_output_language,
             disable_thinking=settings.summary_disable_thinking,
+            tokenizer_backend=settings.summary_tokenizer_backend,
+            tokenizer_model=settings.summary_tokenizer_model,
+            deduplicate_transcript=settings.summary_deduplicate_transcript,
+            merge_same_speaker_gap_s=settings.summary_merge_same_speaker_gap_s,
+            min_overlap_words=settings.summary_min_overlap_words,
         )
     video_subtitle_export_service = VideoSoftSubtitleExportService(
         snapshots=snapshots,
