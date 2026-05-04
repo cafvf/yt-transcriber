@@ -215,16 +215,18 @@ ADRs documentam **por que** uma decisão foi tomada, não apenas **qual** decis�
 
 ---
 
-## ADR-008 — `.md` como único formato de transcrição, sem PDF nem resumo no chat
+## ADR-008 — Markdown como fonte literal e artefatos derivados auditáveis
 
-**Contexto.** Usuário pediu explicitamente entrega como `.md`, sem PDF, sem resumo inline no chat.
+**Contexto.** A decisão inicial priorizou um `.md` literal, sem PDF e sem resumo inline no chat. O projeto evoluiu para incluir artefatos derivados — JSON, SRT, VTT, vídeo com legenda selecionável e resumo via LLM — sem abandonar a transcrição literal como fonte da verdade.
 
-**Decisão.** A transcrição final é **um único arquivo `.md`** com cabeçalho de auditoria e turnos de fala. Sem variantes.
+**Decisão.** A transcrição literal em Markdown continua sendo o artefato primário e auditável. Resumos, legendas e exports são derivados versionáveis/regeráveis, com metadados explícitos e sem sobrescrever o conteúdo literal.
 
 **Consequências.**
-- (+) Simplicidade absoluta.
-- (+) MDs são tiny (KBs), preserváveis indefinidamente como histórico.
-- (−) Quem precisar de PDF terá de converter externamente (pandoc, weasyprint).
+- (+) O histórico textual permanece simples, pequeno e auditável.
+- (+) Artefatos derivados podem evoluir sem corromper a transcrição original.
+- (+) Resumos via LLM são úteis, mas permanecem explicitamente interpretativos.
+- (−) Há mais documentação e testes para manter alinhados.
+- (−) Quem precisar de PDF ainda deve converter externamente ou promover a feature no roadmap.
 
 ---
 
