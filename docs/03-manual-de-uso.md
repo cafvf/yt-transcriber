@@ -404,11 +404,23 @@ SUMMARY_MAX_INPUT_TOKENS=2500
 SUMMARY_CHARS_PER_TOKEN=2.0
 SUMMARY_OUTPUT_LANGUAGE=auto
 SUMMARY_DISABLE_THINKING=true
+SUMMARY_VALIDATE_MODEL=true
+SUMMARY_STRICT_MODEL_MATCH=true
 ```
 
-Antes de usar, abra o LM Studio, carregue o modelo desejado e inicie o servidor local. O bot chama `POST /v1/chat/completions`.
+Antes de usar, abra o LM Studio, carregue o modelo desejado e inicie o servidor local. O bot chama `GET /v1/models` para validar o `SUMMARY_MODEL` e depois `POST /v1/chat/completions`.
 
-`SUMMARY_DISABLE_THINKING=true` é recomendado para resumos. Nessa configuração, o bot envia uma instrução de resposta direta, inclui `enable_thinking=false` no corpo da chamada OpenAI-compatible e remove blocos `<think>...</think>` caso o servidor ainda os retorne.
+Use em `SUMMARY_MODEL` exatamente o `id` retornado por:
+
+```bash
+curl http://127.0.0.1:1234/v1/models
+```
+
+Se o LM Studio responder com um modelo diferente daquele configurado, o bot falha com diagnóstico claro. Isso evita resumos pouco reprodutíveis quando o servidor usa outro modelo carregado. Se você quiser aceitar aliases do servidor, defina `SUMMARY_STRICT_MODEL_MATCH=false`; se quiser pular a validação em `/v1/models`, defina `SUMMARY_VALIDATE_MODEL=false`.
+
+`SUMMARY_DISABLE_THINKING=true` é recomendado para resumos. Nessa configuração, o bot envia uma instrução de resposta direta, inclui `enable_thinking=false` e `chat_template_kwargs={"enable_thinking": false}` no corpo da chamada OpenAI-compatible e remove blocos `<think>...</think>` caso o servidor ainda os retorne.
+
+Se o LM Studio retornar `content=""` e preencher apenas `reasoning_content`, o bot rejeita a resposta e mostra um diagnóstico. Isso indica que o modelo/preset ainda está em modo thinking. Nesse caso, desative **Enable Thinking** no LM Studio ou use um preset non-thinking; o bot não transforma `reasoning_content` em resumo para não expor raciocínio interno nem gerar artefatos incorretos.
 
 Para confirmar que o `.env` está sendo lido pela mesma configuração usada pelo bot, rode na raiz do projeto:
 

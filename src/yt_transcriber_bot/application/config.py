@@ -138,6 +138,14 @@ class AppSettings(BaseSettings):
         default=True,
         description="Desabilita thinking/reasoning explícito em chamadas de resumo quando suportado",
     )
+    summary_validate_model: bool = Field(
+        default=True,
+        description="Valida SUMMARY_MODEL contra GET /v1/models antes de chamar a LLM",
+    )
+    summary_strict_model_match: bool = Field(
+        default=True,
+        description="Falha se a resposta declarar um modelo diferente de SUMMARY_MODEL",
+    )
     summaries_dir_name: str = Field(default="summaries")
 
     # ===== Vídeo com legenda selecionável =====

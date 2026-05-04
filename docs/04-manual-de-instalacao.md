@@ -289,7 +289,9 @@ Para modelos Qwen com reasoning/thinking, mantenha:
 SUMMARY_DISABLE_THINKING=true
 ```
 
-Essa opção não transforma o resumo em uma tarefa de raciocínio: o bot pede resposta direta, envia `enable_thinking=false` quando suportado pelo servidor OpenAI-compatible e limpa blocos `<think>...</think>` residuais antes de salvar o Markdown.
+Essa opção não transforma o resumo em uma tarefa de raciocínio: o bot pede resposta direta, envia `enable_thinking=false` e `chat_template_kwargs={"enable_thinking": false}` quando suportado pelo servidor OpenAI-compatible e limpa blocos `<think>...</think>` residuais antes de salvar o Markdown.
+
+Se o log do LM Studio mostrar que a resposta veio com `content` vazio e `reasoning_content` preenchido, o preset/modelo ainda está operando em thinking mode. Desative **Enable Thinking** no LM Studio ou selecione um preset non-thinking. O bot rejeita esse caso de propósito, porque `reasoning_content` não deve ser usado como artefato final.
 
 Para verificar se o `.env` foi carregado corretamente, rode na raiz do projeto:
 

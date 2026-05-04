@@ -188,6 +188,8 @@ def test_summary_settings_defaults_are_lm_studio_compatible(tmp_path):
     assert settings.summary_chars_per_token == 2.0
     assert settings.summary_timeout_s == 300.0
     assert settings.summary_disable_thinking is True
+    assert settings.summary_validate_model is True
+    assert settings.summary_strict_model_match is True
     assert settings.summaries_dir() == tmp_path / "data" / "summaries"
 
 
@@ -195,3 +197,11 @@ def test_summary_disable_thinking_can_be_disabled_from_env(env_no_dotenv: None, 
     monkeypatch.setenv("SUMMARY_DISABLE_THINKING", "false")
     settings = AppSettings()
     assert settings.summary_disable_thinking is False
+
+
+def test_summary_model_guard_can_be_disabled_from_env(env_no_dotenv: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SUMMARY_VALIDATE_MODEL", "false")
+    monkeypatch.setenv("SUMMARY_STRICT_MODEL_MATCH", "false")
+    settings = AppSettings()
+    assert settings.summary_validate_model is False
+    assert settings.summary_strict_model_match is False

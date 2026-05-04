@@ -1,8 +1,8 @@
 """Cliente mínimo para APIs OpenAI-compatible, incluindo LM Studio.
 
 O LM Studio expõe um servidor local compatível com OpenAI. Para esta feature,
-usamos apenas ``POST /v1/chat/completions`` para evitar dependência adicional
-no SDK oficial da OpenAI.
+usamos ``GET /v1/models`` para validar o modelo selecionado e
+``POST /v1/chat/completions`` para gerar o resumo.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ class ChatCompletionError(RuntimeError):
 
 
 Transport = Callable[[str, Mapping[str, Any], Mapping[str, str], float], Mapping[str, Any]]
+ModelsTransport = Callable[[str, Mapping[str, str], float], Mapping[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -49,27 +50,36 @@ class OpenAICompatibleChatClient:
         timeout_s: float = 120.0,
         api_key: str = "",
         disable_thinking: bool = True,
+        validate_model: bool = True,
+        strict_model_match: bool = True,
         transport: Transport | None = None,
+        models_transport: ModelsTransport | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
-        self._model = model
+        self._model = model.strip()
         self._temperature = temperature
         self._max_tokens = max_tokens
         self._timeout_s = timeout_s
         self._api_key = api_key.strip()
         self._disable_thinking = disable_thinking
+        self._validate_model = validate_model
+        self._strict_model_match = strict_model_match
         self._transport = transport or _urllib_transport
+        self._models_transport = models_transport or _urllib_get_transport
+        self._model_checked = False
 
     @property
     def model(self) -> str:
         return self._model
 
     def complete(self, request: ChatCompletionRequest) -> str:
+        if self._validate_model:
+            self._ensure_model_available()
         payload: dict[str, Any] = {
             "model": self._model,
             "messages": [
                 {"role": "system", "content": request.system_prompt},
-                {"role": "user", "content": request.user_prompt},
+                {"role": "user", "content": _maybe_add_no_think_prefix(request.user_prompt, self._disable_thinking)},
             ],
             "temperature": self._temperature,
             "max_tokens": self._max_tokens,
@@ -77,13 +87,12 @@ class OpenAICompatibleChatClient:
         }
         # Qwen3.5/llama.cpp/LM Studio podem aceitar esse parâmetro não padrão
         # no corpo da requisição OpenAI-compatible para desabilitar thinking.
-        # A instrução textual e o pós-processamento abaixo continuam como
-        # proteção caso o servidor ignore o parâmetro.
+        # A instrução textual, o prefixo /no_think e o pós-processamento abaixo
+        # continuam como proteção caso o servidor ignore o parâmetro.
         if self._disable_thinking:
             payload["enable_thinking"] = False
-        headers = {"Content-Type": "application/json"}
-        if self._api_key:
-            headers["Authorization"] = f"Bearer {self._api_key}"
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
+        headers = self._headers()
         try:
             data = self._transport(
                 f"{self._base_url}/chat/completions",
@@ -115,13 +124,65 @@ class OpenAICompatibleChatClient:
             choices = data["choices"]
             message = choices[0]["message"]
             content = str(message.get("content", "")).strip()
+            reasoning_content = str(message.get("reasoning_content", "")).strip()
+            response_model = str(data.get("model", "")).strip()
         except (KeyError, IndexError, TypeError) as exc:
             raise ChatCompletionError("Resposta da LLM não tem formato Chat Completions válido.") from exc
+        if self._strict_model_match and response_model and response_model != self._model:
+            raise ChatCompletionError(
+                "O servidor OpenAI-compatible respondeu com um modelo diferente do configurado. "
+                f"SUMMARY_MODEL='{self._model}', modelo usado pelo servidor='{response_model}'. "
+                "Use exatamente o id listado por /v1/models em SUMMARY_MODEL ou desative "
+                "SUMMARY_STRICT_MODEL_MATCH=false se aceitar aliases do servidor."
+            )
         if self._disable_thinking:
             content = _strip_thinking_blocks(content).strip()
+        if not content and reasoning_content:
+            raise ChatCompletionError(
+                "A LLM retornou apenas reasoning_content e deixou content vazio. "
+                "Isso indica que o modelo ainda está em modo thinking. "
+                "O reasoning_content não contém um resumo final confiável; em Qwen ele pode ser apenas o prompt/roteiro interno. "
+                "No LM Studio, desative Enable Thinking no preset/modelo ou use um preset non-thinking; "
+                "mantenha SUMMARY_DISABLE_THINKING=true. O bot não usa reasoning_content como resumo para "
+                "evitar expor raciocínio interno e gerar artefatos incorretos."
+            )
         if not content:
             raise ChatCompletionError("A LLM retornou conteúdo vazio.")
         return content
+
+    def _ensure_model_available(self) -> None:
+        if self._model_checked:
+            return
+        try:
+            data = self._models_transport(f"{self._base_url}/models", self._headers(), self._timeout_s)
+        except urllib.error.HTTPError as exc:
+            detail = _read_http_error_body(exc)
+            raise ChatCompletionError(
+                "Não consegui validar SUMMARY_MODEL em /v1/models. "
+                f"Status: {exc.code}. Detalhe: {detail or exc.reason}. "
+                "Verifique SUMMARY_BASE_URL ou defina SUMMARY_VALIDATE_MODEL=false para pular a validação."
+            ) from exc
+        except (urllib.error.URLError, TimeoutError, socket.timeout, OSError) as exc:
+            raise ChatCompletionError(
+                "Não consegui consultar /v1/models para validar SUMMARY_MODEL. "
+                "Verifique se o LM Studio Server está ativo e acessível pelo WSL2/host. "
+                f"Detalhe: {exc}"
+            ) from exc
+        model_ids = _extract_model_ids(data)
+        if self._model not in model_ids:
+            shown = ", ".join(model_ids[:20]) if model_ids else "<nenhum modelo retornado>"
+            raise ChatCompletionError(
+                f"SUMMARY_MODEL='{self._model}' não está disponível em {self._base_url}/models. "
+                f"Modelos disponíveis: {shown}. "
+                "Use em SUMMARY_MODEL exatamente o id retornado por `curl $SUMMARY_BASE_URL/models`."
+            )
+        self._model_checked = True
+
+    def _headers(self) -> dict[str, str]:
+        headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        return headers
 
 
 def _urllib_transport(
@@ -140,6 +201,29 @@ def _urllib_transport(
     return parsed
 
 
+def _urllib_get_transport(
+    url: str,
+    headers: Mapping[str, str],
+    timeout_s: float,
+) -> Mapping[str, Any]:
+    request = urllib.request.Request(url, headers=dict(headers), method="GET")
+    with urllib.request.urlopen(request, timeout=timeout_s) as response:  # noqa: S310 - URL local/configurada pelo usuário
+        raw = response.read().decode("utf-8")
+    parsed = json.loads(raw)
+    if not isinstance(parsed, dict):
+        raise ChatCompletionError("Resposta de /v1/models não é um objeto JSON.")
+    return parsed
+
+
+def _maybe_add_no_think_prefix(user_prompt: str, disable_thinking: bool) -> str:
+    if not disable_thinking:
+        return user_prompt
+    # Qwen costuma aceitar /no_think como controle textual em vários templates.
+    # Quando o template não honrar esse prefixo, os parâmetros estruturados e a
+    # checagem de reasoning_content continuam protegendo o artefato final.
+    return f"/no_think\n\n{user_prompt}"
+
+
 def _strip_thinking_blocks(content: str) -> str:
     """Remove blocos explícitos de raciocínio de modelos Qwen/compatíveis.
 
@@ -151,6 +235,18 @@ def _strip_thinking_blocks(content: str) -> str:
     cleaned = re.sub(r"(?is)<think>.*?</think>", "", content)
     cleaned = re.sub(r"(?is)^\s*thinking:\s*.*?(?=\n#{1,6}\s|\n\*\*|\nResumo|\Z)", "", cleaned)
     return cleaned.strip()
+
+
+def _extract_model_ids(data: Mapping[str, Any]) -> list[str]:
+    raw_models = data.get("data", [])
+    ids: list[str] = []
+    if isinstance(raw_models, list):
+        for item in raw_models:
+            if isinstance(item, Mapping):
+                model_id = str(item.get("id", "")).strip()
+                if model_id:
+                    ids.append(model_id)
+    return ids
 
 
 def _read_http_error_body(exc: urllib.error.HTTPError) -> str:

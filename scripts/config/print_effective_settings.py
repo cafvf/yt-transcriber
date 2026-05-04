@@ -43,6 +43,8 @@ _FIELDS = (
     "summary_timeout_s",
     "summary_output_language",
     "summary_disable_thinking",
+    "summary_validate_model",
+    "summary_strict_model_match",
     "summaries_dir_name",
     "telegram_max_queue_size",
     "max_video_subtitles_duration_min",

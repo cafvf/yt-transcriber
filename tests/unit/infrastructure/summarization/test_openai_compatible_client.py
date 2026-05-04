@@ -27,6 +27,7 @@ def test_openai_compatible_client_posts_chat_completion_payload() -> None:
         max_tokens=1234,
         timeout_s=77,
         api_key="local-key",
+        validate_model=False,
         transport=transport,
     )
 
@@ -40,9 +41,10 @@ def test_openai_compatible_client_posts_chat_completion_payload() -> None:
     assert payload["max_tokens"] == 1234
     assert payload["stream"] is False
     assert payload["enable_thinking"] is False
+    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
     assert payload["messages"] == [
         {"role": "system", "content": "sistema"},
-        {"role": "user", "content": "usuário"},
+        {"role": "user", "content": "/no_think\n\nusuário"},
     ]
     assert headers["Authorization"] == "Bearer local-key"
     assert timeout_s == 77
@@ -57,6 +59,7 @@ def test_openai_compatible_client_rejects_invalid_response() -> None:
     client = OpenAICompatibleChatClient(
         base_url="http://localhost:1234/v1",
         model="qwen3.5-9b",
+        validate_model=False,
         transport=transport,
     )
 
@@ -77,6 +80,7 @@ def test_openai_compatible_client_reports_context_overflow_hint() -> None:
     client = OpenAICompatibleChatClient(
         base_url="http://localhost:1234/v1",
         model="qwen3.5-9b",
+        validate_model=False,
         transport=transport,
     )
 
@@ -101,11 +105,13 @@ def test_openai_compatible_client_can_leave_thinking_untouched() -> None:
         base_url="http://localhost:1234/v1",
         model="qwen3.5-9b",
         disable_thinking=False,
+        validate_model=False,
         transport=transport,
     )
 
     assert client.complete(ChatCompletionRequest("s", "u")) == "Resposta direta"
     assert "enable_thinking" not in calls[0][1]
+    assert "chat_template_kwargs" not in calls[0][1]
 
 
 def test_openai_compatible_client_strips_qwen_think_blocks() -> None:
@@ -126,6 +132,7 @@ def test_openai_compatible_client_strips_qwen_think_blocks() -> None:
         base_url="http://localhost:1234/v1",
         model="qwen3.5-9b",
         disable_thinking=True,
+        validate_model=False,
         transport=transport,
     )
 
@@ -134,3 +141,161 @@ def test_openai_compatible_client_strips_qwen_think_blocks() -> None:
     assert "<think>" not in result
     assert "raciocínio interno" not in result
     assert result.startswith("## Resumo executivo")
+
+def test_openai_compatible_client_rejects_reasoning_only_response() -> None:
+    def transport(
+        url: str, payload: Mapping[str, Any], headers: Mapping[str, str], timeout_s: float
+    ) -> Mapping[str, Any]:
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": "",
+                        "reasoning_content": "Thinking Process: raciocínio que não deve virar resumo",
+                    }
+                }
+            ]
+        }
+
+    client = OpenAICompatibleChatClient(
+        base_url="http://localhost:1234/v1",
+        model="qwen3.5-9b",
+        disable_thinking=True,
+        validate_model=False,
+        transport=transport,
+    )
+
+    with pytest.raises(ChatCompletionError) as exc_info:
+        client.complete(ChatCompletionRequest("s", "u"))
+
+    message = str(exc_info.value)
+    assert "reasoning_content" in message
+    assert "Enable Thinking" in message
+    assert "SUMMARY_DISABLE_THINKING" in message
+
+
+def test_openai_compatible_client_accepts_content_even_when_reasoning_content_exists() -> None:
+    def transport(
+        url: str, payload: Mapping[str, Any], headers: Mapping[str, str], timeout_s: float
+    ) -> Mapping[str, Any]:
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": "## Resumo executivo\nConteúdo final.",
+                        "reasoning_content": "Thinking Process: deve ser ignorado",
+                    }
+                }
+            ]
+        }
+
+    client = OpenAICompatibleChatClient(
+        base_url="http://localhost:1234/v1",
+        model="qwen3.5-9b",
+        disable_thinking=True,
+        validate_model=False,
+        transport=transport,
+    )
+
+    result = client.complete(ChatCompletionRequest("s", "u"))
+
+    assert result == "## Resumo executivo\nConteúdo final."
+    assert "Thinking Process" not in result
+
+
+
+def test_openai_compatible_client_validates_configured_model_before_completion() -> None:
+    model_calls: list[str] = []
+    completion_calls: list[str] = []
+
+    def models_transport(url: str, headers: Mapping[str, str], timeout_s: float) -> Mapping[str, Any]:
+        model_calls.append(url)
+        return {"data": [{"id": "modelo-correto"}]}
+
+    def transport(
+        url: str, payload: Mapping[str, Any], headers: Mapping[str, str], timeout_s: float
+    ) -> Mapping[str, Any]:
+        completion_calls.append(url)
+        return {"model": "modelo-correto", "choices": [{"message": {"content": "ok"}}]}
+
+    client = OpenAICompatibleChatClient(
+        base_url="http://localhost:1234/v1",
+        model="modelo-correto",
+        transport=transport,
+        models_transport=models_transport,
+    )
+
+    assert client.complete(ChatCompletionRequest("s", "u")) == "ok"
+    assert model_calls == ["http://localhost:1234/v1/models"]
+    assert completion_calls == ["http://localhost:1234/v1/chat/completions"]
+
+
+def test_openai_compatible_client_rejects_model_missing_from_lm_studio() -> None:
+    def models_transport(url: str, headers: Mapping[str, str], timeout_s: float) -> Mapping[str, Any]:
+        return {"data": [{"id": "qwen3.5-9b@q4_k_m"}]}
+
+    def transport(
+        url: str, payload: Mapping[str, Any], headers: Mapping[str, str], timeout_s: float
+    ) -> Mapping[str, Any]:  # pragma: no cover - não deve ser chamado
+        raise AssertionError("completion não deveria ser chamada")
+
+    client = OpenAICompatibleChatClient(
+        base_url="http://localhost:1234/v1",
+        model="modelo-do-env",
+        transport=transport,
+        models_transport=models_transport,
+    )
+
+    with pytest.raises(ChatCompletionError) as exc_info:
+        client.complete(ChatCompletionRequest("s", "u"))
+
+    message = str(exc_info.value)
+    assert "SUMMARY_MODEL='modelo-do-env'" in message
+    assert "qwen3.5-9b@q4_k_m" in message
+    assert "/v1/models" in message
+
+
+def test_openai_compatible_client_rejects_response_model_mismatch() -> None:
+    def transport(
+        url: str, payload: Mapping[str, Any], headers: Mapping[str, str], timeout_s: float
+    ) -> Mapping[str, Any]:
+        return {
+            "model": "qwen3.5-9b@q4_k_m",
+            "choices": [{"message": {"content": "resumo"}}],
+        }
+
+    client = OpenAICompatibleChatClient(
+        base_url="http://localhost:1234/v1",
+        model="modelo-configurado",
+        validate_model=False,
+        strict_model_match=True,
+        transport=transport,
+    )
+
+    with pytest.raises(ChatCompletionError) as exc_info:
+        client.complete(ChatCompletionRequest("s", "u"))
+
+    message = str(exc_info.value)
+    assert "modelo diferente" in message
+    assert "SUMMARY_MODEL='modelo-configurado'" in message
+    assert "qwen3.5-9b@q4_k_m" in message
+
+
+def test_openai_compatible_client_can_allow_response_model_alias() -> None:
+    def transport(
+        url: str, payload: Mapping[str, Any], headers: Mapping[str, str], timeout_s: float
+    ) -> Mapping[str, Any]:
+        return {
+            "model": "alias-do-servidor",
+            "choices": [{"message": {"content": "resumo"}}],
+        }
+
+    client = OpenAICompatibleChatClient(
+        base_url="http://localhost:1234/v1",
+        model="modelo-configurado",
+        validate_model=False,
+        strict_model_match=False,
+        transport=transport,
+    )
+
+    assert client.complete(ChatCompletionRequest("s", "u")) == "resumo"

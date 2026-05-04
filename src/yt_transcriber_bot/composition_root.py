@@ -212,6 +212,8 @@ def build(settings: AppSettings) -> Composition:
             timeout_s=settings.summary_timeout_s,
             api_key=settings.summary_api_key,
             disable_thinking=settings.summary_disable_thinking,
+            validate_model=settings.summary_validate_model,
+            strict_model_match=settings.summary_strict_model_match,
         )
         summary_service = TranscriptSummaryService(
             snapshots=snapshots,
