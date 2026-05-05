@@ -2,9 +2,7 @@
 
 Bot privado do Telegram para processar vídeos do YouTube e gerar artefatos auditáveis de transcrição. O fluxo principal recebe um link, baixa metadados/áudio com `yt-dlp`, usa legendas do YouTube quando a qualidade é aceitável, transcreve com WhisperX quando necessário, diariza falantes com pyannote, renderiza Markdown e permite exportações derivadas.
 
-A versão atual também inclui exportação JSON/SRT/VTT, MP4 com legenda selecionável, renomeação/mesclagem de falantes por botões inline, histórico local em SQLite e sumarização via LM Studio/OpenAI-compatible com controle de contexto, tokenizer opcional, deduplicação, progresso no Telegram e retentativa adaptativa em caso de timeout.
-
-O projeto é desenvolvido com **Spec-Driven Development (SDD)** apoiado por IA, combinando especificação funcional, testes de regressão e arquitetura hexagonal/Ports & Adapters. A IA atua como assistente de implementação, revisão, geração de patches e ampliação de testes; a validação final, as decisões de produto e a curadoria técnica permanecem humanas.
+A versão atual também inclui exportação JSON/SRT/VTT, MP4 com legenda selecionável, renomeação/mesclagem de falantes por botões inline, histórico local em SQLite, sumarização via LM Studio/OpenAI-compatible com controle de contexto, tokenizer opcional, deduplicação, progresso no Telegram e retentativa adaptativa em caso de timeout, além de comandos de observabilidade operacional (`/healthcheck` e `/lasterror`).
 
 ## Paradigma de desenvolvimento
 
@@ -31,7 +29,7 @@ Toda a documentação detalhada está na pasta [`docs/`](./docs/):
 | [`docs/03-manual-de-uso.md`](./docs/03-manual-de-uso.md) | Comandos atuais do bot, fluxos de uso, sumarização, exportações e troubleshooting. |
 | [`docs/04-manual-de-instalacao.md`](./docs/04-manual-de-instalacao.md) | Instalação em Linux/WSL2, `uv`, dependências de sistema, cookies, pyannote e LM Studio. |
 | [`docs/05-plano-de-execucao.md`](./docs/05-plano-de-execucao.md) | Histórico do plano em gates e critérios de aceitação. |
-| [`docs/06-funcionalidades-futuras.md`](./docs/06-funcionalidades-futuras.md) | Roadmap revisado: `/healthcheck`, `/lasterror`, busca, upload de áudio, tradução, Obsidian e melhorias futuras. |
+| [`docs/06-funcionalidades-futuras.md`](./docs/06-funcionalidades-futuras.md) | Roadmap revisado: busca, upload de áudio, tradução, Obsidian e melhorias futuras. |
 | [`docs/07-glossario-e-decisoes.md`](./docs/07-glossario-e-decisoes.md) | Glossário técnico e registros de decisão arquitetural. |
 | [`docs/08-seguranca-e-segredos.md`](./docs/08-seguranca-e-segredos.md) | Política de segredos, `.gitignore`, pre-commit, scanners locais e cuidados operacionais. |
 
@@ -85,6 +83,13 @@ Toda a documentação detalhada está na pasta [`docs/`](./docs/):
 - Em caso de timeout, subdivide o chunk e tenta novamente até o limite configurado.
 - Mostra progresso no Telegram durante o processamento.
 
+
+### Observabilidade operacional
+
+- `/healthcheck` executa um diagnóstico consolidado do ambiente, incluindo configuração obrigatória, `.env` efetivo, `ffmpeg`/`ffprobe`, `yt-dlp`, módulos Python essenciais, diretórios graváveis, SQLite, espaço em disco, cookies do YouTube, LM Studio e presença de `SUMMARY_MODEL` em `/v1/models`.
+- `/lasterror` exibe o último erro operacional sanitizado, cobrindo jobs de transcrição falhos e falhas derivadas de `/summary`, exportações, vídeo com legenda, limpeza de cache, `/clearcache` e exceções defensivas no pipeline.
+- Erros operacionais derivados são registrados em `data/logs/operational_errors.jsonl` com operação, etapa, severidade, classe da exceção, contexto, traceback final sanitizado e sugestões de verificação quando disponíveis.
+
 ---
 
 ## Status atual
@@ -101,13 +106,14 @@ Toda a documentação detalhada está na pasta [`docs/`](./docs/):
 | MP4 com legenda selecionável | Implementado |
 | Sumarização via LM Studio/OpenAI-compatible | Implementada e estabilizada operacionalmente |
 | Segurança local e pre-commit | Implementados |
-| `/healthcheck` e `/lasterror` | Próxima implementação planejada |
+| `/healthcheck` e `/lasterror` | Implementados |
 | Busca full-text nas transcrições | Funcionalidade futura priorizada |
 | Transcrição de arquivo de áudio enviado ao Telegram | Funcionalidade futura registrada |
 
 Limitações atuais importantes:
 
-- `/healthcheck` e `/lasterror` ainda não estão implementados; por enquanto, o diagnóstico técnico depende dos logs e de `scripts/config/print_effective_settings.py`.
+- `/healthcheck` não substitui logs completos: ele resume o estado operacional e deve ser usado como triagem inicial.
+- `/lasterror` depende de erro persistido no banco de jobs ou em `data/logs/operational_errors.jsonl`; falhas catastróficas antes da inicialização completa do bot ainda exigem consulta ao terminal, systemd ou arquivo de log.
 - `/redo <link>` reprocessa imediatamente como novo job; confirmação inline com diff de configuração permanece futura.
 - `/video_subs` gera apenas legenda selecionável; legenda queimada não está no escopo atual.
 - O bot ainda não aceita upload direto de áudio como entrada; apenas links do YouTube.
@@ -218,21 +224,23 @@ Nunca publique tokens, cookies, logs completos com segredos, bancos SQLite de pr
 
 ## Próximo gate recomendado
 
-**Gate 7 — Observabilidade operacional**
+**Gate 8 — Busca e recuperação de conhecimento**
+
+A observabilidade operacional (`/healthcheck` e `/lasterror`) está implementada. O próximo incremento recomendado é transformar o histórico local em uma base consultável.
 
 Escopo proposto:
 
-- `/healthcheck`: valida configuração, dependências, diretórios, SQLite, ffmpeg, yt-dlp, Telegram, LM Studio e modelo configurado.
-- `/lasterror`: mostra o último erro operacional de forma sanitizada, sem vazar tokens, cookies ou caminhos sensíveis desnecessários.
-- Atualização de `/help` e testes de comando.
-- Testes de não vazamento de segredos.
+- `/search <texto>` para busca full-text em transcrições, resumos e metadados.
+- Indexação de Markdown, summaries, título, canal, URL, `video_id`, idioma e falantes renomeados.
+- Uso de SQLite FTS5 quando disponível, com fallback documentado se o ambiente não suportar FTS5.
+- Atualização automática do índice após nova transcrição, `/rename` e `/summary`.
+- Testes de ranking básico, sanitização e compatibilidade com transcrições antigas.
 
 Depois desse gate, as próximas funcionalidades candidatas são:
 
-1. `/search <texto>` para busca full-text em transcrições e resumos.
-2. Upload de arquivo de áudio pelo Telegram para transcrição sem YouTube.
-3. Integração com Obsidian/Notion.
-4. Tradução controlada como artefato derivado.
+1. Upload de arquivo de áudio pelo Telegram para transcrição sem YouTube.
+2. Integração com Obsidian/Notion.
+3. Tradução controlada como artefato derivado.
 
 ---
 

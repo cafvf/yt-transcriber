@@ -114,7 +114,7 @@ Se a transcrição falhar no meio (ex.: out-of-memory, crash do CUDA, timeout), 
 1. Limpa arquivos parciais e libera memória.
 2. **Retenta uma vez**, forçando CPU e descendo um nível no modelo (ex.: `medium` → `small`).
 3. **Notifica o usuário** sobre a falha e sobre a retentativa em curso, em mensagem clara.
-4. Se a retentativa também falhar, o job é marcado como `failed` e o usuário recebe mensagem clara. Até `/lasterror` ser implementado, o diagnóstico técnico fica nos logs do processo/serviço.
+4. Se a retentativa também falhar, o job é marcado como `failed` e o usuário recebe instruções para usar `/lasterror`.
 
 ### D.4 Detecção e validação de idioma
 - O WhisperX detecta o idioma automaticamente nos primeiros segundos de áudio.
@@ -258,15 +258,8 @@ Todas as mensagens do bot ao usuário são em **português brasileiro**.
 - Mensagens de texto: limite Telegram de 4096 chars (não relevante para nosso fluxo, pois transcrições vão em arquivo).
 - Upload: 50 MB. Vídeos > 3h são bloqueados (ver B.4); o particionamento descrito em C.2 cobre o caso raro de vídeos longos com fala muito densa.
 
-### I.5 Artefatos principais e derivados
-A entrega primária continua sendo a transcrição literal em `.md` e o áudio comprimido `.ogg` quando aplicável. Artefatos derivados são opcionais e sempre preservam a transcrição literal como fonte da verdade:
-
-- JSON estruturado;
-- legendas SRT/VTT;
-- MP4 com legenda selecionável;
-- resumo em Markdown via LLM local/OpenAI-compatible.
-
-PDF automático não faz parte do escopo atual.
+### I.5 Sem PDF, sem resumo no chat
+A entrega é **estritamente** o `.md` + o `.ogg` (e/ou múltiplos `.ogg` particionados). Sem versão PDF, sem resumo inline no chat.
 
 ---
 
@@ -277,31 +270,16 @@ PDF automático não faz parte do escopo atual.
 | Comando | O que faz |
 |---|---|
 | `/start` | Boas-vindas e confirmação de que o bot está vivo. |
-| `/help` | Lista todos os comandos públicos implementados. |
-| `/status` | Mostra job em processamento, progresso conhecido e tamanho da fila. |
-| `/queue`, `/fila` | Mostra a fila completa. |
-| `/clearqueue`, `/cancelqueue`, `/limparfila` | Remove jobs pendentes, sem cancelar necessariamente o atual. |
+| `/help` | Lista todos os comandos com descrição curta. |
+| `/status` | Mostra job em processamento (se houver) e tamanho atual da fila. |
+| `/last` | Reenvia o último `.md` (e o `.ogg`, se ainda existir). |
+| `/list` | Lista os últimos N jobs com `video_id`, título e status (artefatos disponíveis ou expirados). |
+| `/redo <link>` | Solicita reprocessamento imediato de um link como novo job. Confirmação com diff de configuração permanece como evolução futura. |
 | `/cancel` | Cancela o job em andamento ou interrompe um diálogo de `/rename`. |
-| `/cancelall`, `/cancelartudo` | Cancela o job atual e limpa pendentes. |
-| `/transcribe <link>` | Enfileira explicitamente um link do YouTube. |
-| `/pt <link>`, `/en <link>` | Enfileira link informando idioma manualmente. |
-| `/redo <link>` | Reprocessa um link como novo job. Confirmação com diff de configuração permanece futura. |
-| `/list` | Lista transcrições concluídas com título, data e `video_id` quando disponíveis. |
-| `/last [n]` | Reenvia a n-ésima transcrição concluída. |
-| `/rename [n]` | Abre fluxo de renomeação/mesclagem de falantes. |
-| `/json [n]`, `/export json [n]` | Exporta JSON estruturado. |
-| `/srt [n]`, `/export srt [n]` | Exporta legenda SRT. |
-| `/vtt [n]`, `/export vtt [n]` | Exporta legenda VTT. |
-| `/video_subs [n]`, `/videosubs [n]` | Gera MP4 com legenda selecionável. |
-| `/summary [n]` | Gera resumo em Markdown via backend LLM configurado. |
-| `/clearcache` | Apaga os modelos baixados no diretório de cache configurado. |
-
-Comandos planejados para o próximo gate operacional:
-
-| Comando | Status |
-|---|---|
-| `/healthcheck` | Planejado; diagnóstico de ambiente, dependências, Telegram, SQLite e LM Studio. |
-| `/lasterror` | Planejado; último erro sanitizado, sem vazamento de segredos. |
+| `/rename` | Inicia diálogo interativo para renomear os falantes do último vídeo processado. |
+| `/clearcache` | Apaga os modelos do Whisper/pyannote baixados, liberando disco. |
+| `/clearqueue` | Esvazia a fila pendente, sem cancelar o job em andamento. |
+| `/lasterror` | Mostra o stack trace técnico do último erro ocorrido. |
 
 ### J.2 Confirmação no `/redo`
 Na versão atual, `/redo <link>` executa imediatamente como novo job. A confirmação antes da execução, com diff de configuração entre a transcrição anterior e a corrente, permanece como evolução futura para reduzir o risco de reprocessamento involuntário de vídeos longos.
@@ -317,7 +295,7 @@ Na versão atual, `/redo <link>` executa imediatamente como novo job. A confirma
 2. Se o áudio do vídeo expirou (vídeo legado), o bot avisa e pede confirmação para prosseguir sem áudio.
 3. O bot inicia um diálogo: "Vídeo *<título>*. Renomear `SPEAKER_00` (apareceu primeiro, X% do tempo) para? (envie o nome ou /skip)" — repete para cada `SPEAKER_XX`.
 4. Ao final, regenera o `.md` substituindo todos os labels pelas novas atribuições.
-5. Se dois ou mais labels receberem o mesmo nome, o renderer trata isso como **mesclagem manual de falantes**: agrega o tempo no sumário de diarização e une blocos consecutivos no Markdown quando o nome exibido for o mesmo.
+5. Se dois ou mais labels receberem o mesmo nome, o renderer trata isso como **mesclagem manual de falantes**: agrega o tempo no resumo da diarização e une blocos consecutivos no Markdown quando o nome exibido for o mesmo.
 6. Atualiza o registro em `speakers` no SQLite.
 7. Reenvia o `.md` (e o `.ogg`, se ainda existir).
 
@@ -327,6 +305,18 @@ Na versão atual, `/redo <link>` executa imediatamente como novo job. A confirma
 Quando o usuário envia um link cujo `video_id` já existe no banco:
 - Se a configuração corrente é **igual** à anterior: bot reenvia o `.md` (e `.ogg` se disponível) e pergunta "Reprocessar mesmo assim?" com botões `[Reprocessar]` `[Manter]`.
 - Se a configuração mudou desde a última: bot mostra o diff e pergunta da mesma forma.
+
+
+### J.6 Observabilidade operacional
+
+`/healthcheck` deve funcionar como triagem operacional rápida. Ele não imprime segredos, mas reporta se os segredos mínimos existem, qual `.env` efetivo foi usado, se `.env.example` não entrou como runtime, se binários e módulos essenciais estão disponíveis, se diretórios e SQLite estão acessíveis, se há espaço em disco, se cookies configurados existem e se o backend de sumarização local responde com o modelo esperado.
+
+`/lasterror` deve consolidar duas fontes:
+
+1. jobs de transcrição marcados como `failed` no repositório principal;
+2. erros operacionais derivados registrados em `data/logs/operational_errors.jsonl`, por exemplo falhas de `/summary`, `/export`, `/video_subs`, `/clearcache` e exceções defensivas no pipeline.
+
+A saída deve conter operação, etapa, severidade, classe da exceção, mensagem sanitizada, contexto limitado, traceback final sanitizado quando disponível e sugestões de verificação. Tokens, cookies, API keys, cabeçalhos `Authorization` e valores de `.env` nunca devem ser exibidos.
 
 ---
 
@@ -478,7 +468,7 @@ Para auditoria, abaixo o mapeamento entre cada dúvida original e a seção que 
 | 29 | Rename em legado: permitido com aviso | H.5 |
 | 30 | Sem hint de speakers; mitigar por nomes iguais | E.2 |
 | 31 | Legenda traduzida = inválida | B.3 |
-| 32 | Sem PDF automático; resumos apenas como artefato derivado opcional | I.5 |
+| 32 | Sem PDF, sem resumo no chat | I.5 |
 | 33 | Reinício: notificar usuário | L.2 |
 | 34 | Avisar download/conclusão de modelo | L.3 |
 | 35 | Mocks com fixtures gravados | M.1 |

@@ -614,6 +614,12 @@ Fechar as funcionalidades restantes: política de retenção FIFO efetiva, coman
 
 ---
 
+## Nota pós-Gate — Observabilidade operacional
+
+Após a estabilização da sumarização via LM Studio, foram promovidos e implementados dois comandos de observabilidade operacional: `/healthcheck` e `/lasterror`. Eles não substituem a validação E2E, mas reduzem o custo de diagnóstico manual e passam a fazer parte do smoke manual antes de merges relevantes.
+
+---
+
 ## Gate 7 — E2E com vídeo real + documentação final
 
 ### Objetivo
@@ -649,9 +655,11 @@ Validar **ponta-a-ponta** o sistema com o vídeo de referência `https://www.you
 7. `/cancel` durante novo processamento → ver abortamento.
 8. `/status` durante e fora de processamento.
 9. `/clearcache` → ver remoção de modelos.
-10. `/lasterror` se houver algum.
-11. Mandar 6 vídeos seguidos → confirmar que o 1º perde áudio mas mantém MD.
-12. Reiniciar o bot → ver mensagem de recuperação.
+10. `/healthcheck` → validar ambiente.
+11. `/lasterror` se houver algum.
+12. Provocar falha controlada de `/summary` com LM Studio desligado e confirmar que `/lasterror` registra o erro.
+13. Mandar 6 vídeos seguidos → confirmar que o 1º perde áudio mas mantém MD.
+14. Reiniciar o bot → ver mensagem de recuperação.
 
 ### Critérios de aceitação adicionais
 - Pipeline completo executou no sandbox sem erros (com mock do download se necessário).

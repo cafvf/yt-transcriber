@@ -262,28 +262,16 @@ Configuração típica no `.env`:
 ```env
 SUMMARY_BACKEND=openai_compatible
 SUMMARY_BASE_URL=http://127.0.0.1:1234/v1
-SUMMARY_MODEL=qwen/qwen3.5-9b
+SUMMARY_MODEL=qwen3.5-9b
 SUMMARY_API_KEY=
 SUMMARY_TEMPERATURE=0.2
-
-SUMMARY_TOKENIZER_BACKEND=auto
-SUMMARY_TOKENIZER_MODEL=
-SUMMARY_MAX_INPUT_TOKENS=6000
-SUMMARY_MAX_CHARS_PER_CHUNK=18000
-SUMMARY_CHARS_PER_TOKEN=2.5
-SUMMARY_PARTIAL_MAX_TOKENS=512
-SUMMARY_FINAL_MAX_TOKENS=1024
-SUMMARY_TIMEOUT_S=600
-SUMMARY_TIMEOUT_SPLIT_RETRIES=2
-
-SUMMARY_DEDUPLICATE_TRANSCRIPT=true
-SUMMARY_MERGE_SAME_SPEAKER_GAP_S=2.0
-SUMMARY_MIN_OVERLAP_WORDS=6
-
+SUMMARY_MAX_TOKENS=1024
+SUMMARY_MAX_CHARS_PER_CHUNK=4000
+SUMMARY_MAX_INPUT_TOKENS=2500
+SUMMARY_CHARS_PER_TOKEN=2.0
+SUMMARY_TIMEOUT_S=300
 SUMMARY_OUTPUT_LANGUAGE=auto
 SUMMARY_DISABLE_THINKING=true
-SUMMARY_VALIDATE_MODEL=true
-SUMMARY_STRICT_MODEL_MATCH=true
 SUMMARIES_DIR_NAME=summaries
 ```
 
@@ -301,7 +289,7 @@ Para modelos Qwen com reasoning/thinking, mantenha:
 SUMMARY_DISABLE_THINKING=true
 ```
 
-Essa opção não transforma o resumo em uma tarefa de raciocínio: o bot pede resposta direta, envia `enable_thinking=false`, `chat_template_kwargs={"enable_thinking": false}` e `reasoning_effort="none"` quando suportado pelo servidor OpenAI-compatible, e limpa blocos `<think>...</think>` residuais antes de salvar o Markdown.
+Essa opção não transforma o resumo em uma tarefa de raciocínio: o bot pede resposta direta, envia `enable_thinking=false` e `chat_template_kwargs={"enable_thinking": false}` quando suportado pelo servidor OpenAI-compatible e limpa blocos `<think>...</think>` residuais antes de salvar o Markdown.
 
 Se o log do LM Studio mostrar que a resposta veio com `content` vazio e `reasoning_content` preenchido, o preset/modelo ainda está operando em thinking mode. Desative **Enable Thinking** no LM Studio ou selecione um preset non-thinking. O bot rejeita esse caso de propósito, porque `reasoning_content` não deve ser usado como artefato final.
 
@@ -313,16 +301,12 @@ uv run python scripts/config/print_effective_settings.py
 
 O script mostra as configurações efetivas e mascara segredos.
 
-O bot tenta fazer chunking por tokenizer Hugging Face local quando `SUMMARY_TOKENIZER_BACKEND=auto` encontra um tokenizer compatível. Se não encontrar, usa a estimativa `SUMMARY_CHARS_PER_TOKEN`. Em hardware local, prefira reduzir `SUMMARY_MAX_INPUT_TOKENS` antes de apenas aumentar timeout; chunks grandes podem caber no contexto, mas ainda assim demorar demais.
-
-Se houver timeout frequente, teste uma configuração mais conservadora:
+Para servidores locais com janela de contexto de 4096 tokens, use a configuração conservadora acima. O bot não tem acesso ao tokenizer exato do modelo carregado no LM Studio; por isso, o chunking usa uma estimativa segura com `SUMMARY_MAX_INPUT_TOKENS` e `SUMMARY_CHARS_PER_TOKEN`. Se aparecer no LM Studio um erro como `request (...) exceeds the available context size (4096 tokens)`, reduza:
 
 ```env
-SUMMARY_MAX_INPUT_TOKENS=4500
-SUMMARY_MAX_CHARS_PER_CHUNK=14000
-SUMMARY_PARTIAL_MAX_TOKENS=512
-SUMMARY_FINAL_MAX_TOKENS=768
-SUMMARY_TIMEOUT_S=600
+SUMMARY_MAX_INPUT_TOKENS=2000
+SUMMARY_MAX_CHARS_PER_CHUNK=3000
+SUMMARY_MAX_TOKENS=768
 ```
 
 ### 9.2 WSL2 + LM Studio no Windows: habilitar Mirrored Mode
@@ -369,6 +353,41 @@ Se ainda houver `Connection refused`, verifique:
 3. se o firewall do Windows está bloqueando o acesso;
 4. se o WSL foi reiniciado com `wsl --shutdown` depois da alteração em `.wslconfig`.
 
+
+
+---
+
+## Diagnóstico operacional após instalação
+
+Depois de configurar `.env`, dependências, cookies e LM Studio, use os diagnósticos em duas camadas:
+
+```bash
+uv run python scripts/config/print_effective_settings.py
+```
+
+Esse script mostra a configuração efetiva no terminal e é útil antes de iniciar o bot. Depois que o bot estiver rodando, use no Telegram:
+
+```text
+/healthcheck
+```
+
+O `/healthcheck` verifica configuração obrigatória, `.env` efetivo, binários (`ffmpeg`, `ffprobe`, `yt-dlp`), módulos Python, diretórios graváveis, SQLite, espaço em disco, cookies, backend de sumarização e disponibilidade de `SUMMARY_MODEL` em `/v1/models` quando a validação estiver habilitada.
+
+Se uma operação falhar durante o uso, consulte:
+
+```text
+/lasterror
+```
+
+O `/lasterror` mostra o último erro sanitizado registrado para o usuário autorizado. Ele cobre tanto jobs de transcrição com status `failed` quanto erros derivados, como falhas de `/summary`, exportações e vídeo com legenda selecionável. Para falhas antes da inicialização completa do bot, consulte os logs do terminal ou do serviço systemd.
+
+O registro de erros derivados fica em:
+
+```text
+data/logs/operational_errors.jsonl
+```
+
+Esse arquivo não deve ser versionado e pode conter caminhos locais e trechos técnicos sanitizados.
 
 ---
 

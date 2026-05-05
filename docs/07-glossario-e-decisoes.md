@@ -215,18 +215,16 @@ ADRs documentam **por que** uma decisão foi tomada, não apenas **qual** decis�
 
 ---
 
-## ADR-008 — Markdown como fonte literal e artefatos derivados auditáveis
+## ADR-008 — `.md` como único formato de transcrição, sem PDF nem resumo no chat
 
-**Contexto.** A decisão inicial priorizou um `.md` literal, sem PDF e sem resumo inline no chat. O projeto evoluiu para incluir artefatos derivados — JSON, SRT, VTT, vídeo com legenda selecionável e resumo via LLM — sem abandonar a transcrição literal como fonte da verdade.
+**Contexto.** Usuário pediu explicitamente entrega como `.md`, sem PDF, sem resumo inline no chat.
 
-**Decisão.** A transcrição literal em Markdown continua sendo o artefato primário e auditável. Resumos, legendas e exports são derivados versionáveis/regeráveis, com metadados explícitos e sem sobrescrever o conteúdo literal.
+**Decisão.** A transcrição final é **um único arquivo `.md`** com cabeçalho de auditoria e turnos de fala. Sem variantes.
 
 **Consequências.**
-- (+) O histórico textual permanece simples, pequeno e auditável.
-- (+) Artefatos derivados podem evoluir sem corromper a transcrição original.
-- (+) Resumos via LLM são úteis, mas permanecem explicitamente interpretativos.
-- (−) Há mais documentação e testes para manter alinhados.
-- (−) Quem precisar de PDF ainda deve converter externamente ou promover a feature no roadmap.
+- (+) Simplicidade absoluta.
+- (+) MDs são tiny (KBs), preserváveis indefinidamente como histórico.
+- (−) Quem precisar de PDF terá de converter externamente (pandoc, weasyprint).
 
 ---
 
@@ -360,3 +358,26 @@ ADRs documentam **por que** uma decisão foi tomada, não apenas **qual** decis�
 **Consequências.**
 - (+) Independência total de Manus em runtime.
 - (+) Funciona em qualquer máquina sem dependência de serviço externo.
+
+
+---
+
+## ADR-014 — Observabilidade operacional via `/healthcheck` e `/lasterror`
+
+**Contexto.** Durante a estabilização de sumarização local com LM Studio, os erros mais custosos não estavam no algoritmo de transcrição, mas na operação: `.env` incorreto, modelo divergente, servidor LM Studio desligado, timeouts, tokenizer indisponível e falhas de rede do Telegram. Depender apenas de logs completos do terminal tornava a depuração lenta e propensa a vazamento acidental de segredos.
+
+**Decisão.** O bot expõe dois comandos de observabilidade para o usuário autorizado:
+
+- `/healthcheck`, para triagem ativa de configuração, dependências, diretórios, SQLite, cookies, LM Studio, modelo configurado, tokenizer/orçamento de sumarização e espaço em disco;
+- `/lasterror`, para recuperar o último erro operacional sanitizado, combinando jobs `failed` com erros derivados persistidos em `data/logs/operational_errors.jsonl`.
+
+Erros derivados de comandos como `/summary`, `/export`, `/video_subs` e `/clearcache` não devem transformar automaticamente uma transcrição concluída em job `failed`; eles são registrados como eventos operacionais separados.
+
+**Consequências.**
+
+- (+) Diagnóstico rápido direto no Telegram, sem copiar tracebacks longos.
+- (+) Menor risco de expor tokens, cookies ou `.env` ao pedir suporte.
+- (+) Falhas de artefatos derivados ficam rastreáveis sem corromper o estado do job original.
+- (+) `/healthcheck` vira checklist operacional antes de tarefas longas.
+- (−) Falhas catastróficas antes da inicialização completa ainda dependem de logs externos.
+- (−) O arquivo JSONL de erros precisa de política futura de retenção se crescer demais.

@@ -208,6 +208,7 @@ yt-transcriber-bot/
 │       │       ├── rename_command.py
 │       │       ├── clearcache_command.py
 │       │       ├── clearqueue_command.py
+│       │       ├── healthcheck_command.py
 │       │       ├── lasterror_command.py
 │       │       └── url_message_handler.py
 │       ├── youtube/
@@ -336,6 +337,8 @@ Cada stage emite eventos de progresso (`ProgressEvent(percent, message)`) que s�
 | `error_traceback` | `TEXT` | stack trace para `/lasterror` |
 
 Índices: `(video_id)`, `(status)`, `(completed_at)`.
+
+Além da tabela `jobs`, falhas derivadas de comandos que não alteram o status do job principal — por exemplo `/summary`, exportações e `/video_subs` — são registradas em `data/logs/operational_errors.jsonl`. Esse arquivo JSONL é intencionalmente simples: cada linha representa um erro operacional sanitizado com usuário, operação, etapa, severidade, classe da exceção, contexto limitado, traceback final e sugestões de verificação. O `/lasterror` combina essa fonte com jobs `failed` para apresentar o erro mais recente.
 
 ### 5.2 Tabela `speakers`
 | Coluna | Tipo | Notas |

@@ -106,20 +106,6 @@ VIDEO_EXPORTS_DIR_NAME=video_exports
 
 O bot usa o snapshot da transcrição para gerar um `.srt`, baixa um MP4 compatível e faz o mux da legenda com `ffmpeg` como `mov_text`.
 
-
-### `/summary [n]`
-Gera e envia um arquivo Markdown de resumo a partir da n-ésima transcrição concluída, sem reprocessar áudio, WhisperX ou diarização. Sem índice, usa a transcrição mais recente.
-
-Exemplos:
-
-```text
-/summary
-/summary 2
-```
-
-O resumo é artefato derivado: não substitui a transcrição literal. A integração usa o backend configurado em `SUMMARY_BACKEND`; no uso local, o alvo recomendado é LM Studio via API OpenAI-compatible.
-
-
 ### `/redo <link>`
 Reprocessa explicitamente um link do YouTube como um **novo job** na fila.
 
@@ -168,6 +154,49 @@ Remove arquivos dentro do diretório `models_dir` configurado. Por segurança, a
 
 Na próxima transcrição que exigir modelos ausentes, eles precisarão ser baixados novamente.
 
+
+### `/healthcheck`
+Executa uma checagem operacional do ambiente e envia um relatório compacto no Telegram.
+
+O relatório cobre, quando aplicável:
+
+- configuração obrigatória e presença dos segredos mínimos, sem imprimir valores sensíveis;
+- arquivo `.env` efetivo e rejeição de `.env.example` como runtime;
+- `ffmpeg`, `ffprobe` e `yt-dlp`;
+- módulos Python essenciais (`python-telegram-bot`, SQLAlchemy, WhisperX, pyannote, etc.);
+- diretórios de dados, downloads, processed, transcripts, logs, summaries, video exports e models;
+- SQLite com teste de acesso;
+- espaço livre em disco;
+- cookies do YouTube configurados;
+- LM Studio/OpenAI-compatible e disponibilidade de `SUMMARY_MODEL` em `/v1/models`;
+- orçamento de sumarização, tokenizer e modo sem thinking quando configurados.
+
+Exemplo de uso:
+
+```text
+/healthcheck
+```
+
+Use este comando depois de mudar `.env`, atualizar dependências, reiniciar WSL2, trocar modelo no LM Studio ou antes de rodar um processamento longo.
+
+### `/lasterror`
+Mostra o último erro operacional relevante registrado para o usuário autorizado.
+
+O comando consulta:
+
+- jobs de transcrição marcados como `failed`;
+- erros derivados registrados em `data/logs/operational_errors.jsonl`, como falhas de `/summary`, exportações, geração de vídeo legendado, limpeza de cache e exceções defensivas do pipeline.
+
+A resposta pode incluir operação, etapa, severidade, classe da exceção, mensagem sanitizada, contexto, traceback final sanitizado e sugestões de verificação. Segredos, tokens, cookies e cabeçalhos `Authorization` são mascarados.
+
+Exemplo de uso:
+
+```text
+/lasterror
+```
+
+Se não houver erro recente persistido, o bot responde que nenhum erro foi encontrado. Falhas catastróficas antes da inicialização completa do bot ainda devem ser investigadas nos logs do processo, systemd ou terminal.
+
 ### Comandos de fila
 
 - `/queue` ou `/fila`: mostra a fila completa.
@@ -176,12 +205,9 @@ Na próxima transcrição que exigir modelos ausentes, eles precisarão ser baix
 
 ### Comandos planejados, mas não implementados nesta versão
 
-- `/healthcheck` — diagnóstico rápido de configuração, dependências, Telegram, LM Studio, diretórios e banco.
-- `/lasterror` — último erro operacional sanitizado, sem vazar tokens ou cookies.
-- `/search <texto>` — busca full-text em transcrições e resumos.
-- Recebimento de arquivo de áudio enviado ao Telegram como entrada de transcrição.
-- `/redo` com confirmação inline e diff de configuração.
-- Botões inline como `[Refazer com WhisperX]`.
+- `/lasterror`
+- `/redo` com confirmação inline e diff de configuração
+- botões inline como `[Refazer com WhisperX]`
 
 ## 3. Cenários comuns
 
@@ -229,7 +255,7 @@ Se ocorrer um erro (OOM, crash, etc.), o bot tenta uma vez com modelo menor em C
 Se a retentativa também falhar:
 ```
 ✗ Falha persistente na transcrição. Job marcado como falho.
-Para detalhes técnicos, consulte os logs. Quando implementado, use /lasterror.
+Para detalhes técnicos: /lasterror
 ```
 
 ### 3.6 Bot reiniciou no meio de um processamento
@@ -319,7 +345,7 @@ Obrigado pelo convite, é um prazer estar aqui novamente...
 | Transcrição muito lenta | Rodando em CPU sem necessidade | Configure GPU (`DEVICE=cuda`) ou modelo menor (`WHISPER_MODEL=small`). |
 | Diarização cria muitos falantes para 1 pessoa | Variação acústica acentuada | Use `/rename` atribuindo o mesmo nome a múltiplos labels. |
 | Mensagem "Vídeo é majoritariamente música" em vídeo de palestra | Áudio com música de abertura longa | Não é tratado no MVP; veja [funcionalidades futuras](./06-funcionalidades-futuras.md). |
-| Erros não rastreados | — | Consulte os logs do processo/serviço. Quando `/lasterror` estiver implementado, use-o para recuperar o último erro sanitizado. |
+| Erros não rastreados | — | Use `/lasterror` para ver o stack trace e cole no log do projeto. |
 
 
 ## Política de modelo por idioma
@@ -390,21 +416,13 @@ O comando `/help` no Telegram deve listar todos os comandos públicos atuais. A 
 - `/export vtt [n]`, `/vtt [n]` — exporta legenda VTT.
 - `/video_subs [n]` ou `/videosubs [n]` — envia MP4 com legenda selecionável.
 
-### Sumarização
-
-- `/summary [n]` — gera Markdown de resumo derivado da transcrição concluída.
-
 ### Manutenção
 
 - `/start` — mostra a mensagem inicial.
 - `/help` — mostra a referência de comandos.
 - `/clearcache` — apaga modelos baixados no diretório de cache configurado.
-
-### Planejados
-
-- `/healthcheck` — próximo comando de diagnóstico operacional.
-- `/lasterror` — recuperação sanitizada do último erro.
-- `/search <texto>` — busca full-text em transcrições/resumos.
+- `/healthcheck` — executa diagnóstico operacional do ambiente.
+- `/lasterror` — mostra o último erro operacional sanitizado.
 
 
 ## Sumarização com LM Studio
@@ -423,23 +441,12 @@ A integração usa uma API compatível com OpenAI, como o servidor local do LM S
 ```env
 SUMMARY_BACKEND=openai_compatible
 SUMMARY_BASE_URL=http://127.0.0.1:1234/v1
-SUMMARY_MODEL=qwen/qwen3.5-9b
+SUMMARY_MODEL=qwen3.5-9b
 SUMMARY_TEMPERATURE=0.2
-
-SUMMARY_TOKENIZER_BACKEND=auto
-SUMMARY_TOKENIZER_MODEL=
-SUMMARY_MAX_INPUT_TOKENS=6000
-SUMMARY_MAX_CHARS_PER_CHUNK=18000
-SUMMARY_CHARS_PER_TOKEN=2.5
-SUMMARY_PARTIAL_MAX_TOKENS=512
-SUMMARY_FINAL_MAX_TOKENS=1024
-SUMMARY_TIMEOUT_S=600
-SUMMARY_TIMEOUT_SPLIT_RETRIES=2
-
-SUMMARY_DEDUPLICATE_TRANSCRIPT=true
-SUMMARY_MERGE_SAME_SPEAKER_GAP_S=2.0
-SUMMARY_MIN_OVERLAP_WORDS=6
-
+SUMMARY_MAX_TOKENS=1024
+SUMMARY_MAX_CHARS_PER_CHUNK=4000
+SUMMARY_MAX_INPUT_TOKENS=2500
+SUMMARY_CHARS_PER_TOKEN=2.0
 SUMMARY_OUTPUT_LANGUAGE=auto
 SUMMARY_DISABLE_THINKING=true
 SUMMARY_VALIDATE_MODEL=true
@@ -456,7 +463,7 @@ curl http://127.0.0.1:1234/v1/models
 
 Se o LM Studio responder com um modelo diferente daquele configurado, o bot falha com diagnóstico claro. Isso evita resumos pouco reprodutíveis quando o servidor usa outro modelo carregado. Se você quiser aceitar aliases do servidor, defina `SUMMARY_STRICT_MODEL_MATCH=false`; se quiser pular a validação em `/v1/models`, defina `SUMMARY_VALIDATE_MODEL=false`.
 
-`SUMMARY_DISABLE_THINKING=true` é recomendado para resumos. Nessa configuração, o bot envia instrução de resposta direta, inclui `enable_thinking=false`, `chat_template_kwargs={"enable_thinking": false}` e `reasoning_effort="none"` no corpo da chamada OpenAI-compatible, além de remover blocos `<think>...</think>` caso o servidor ainda os retorne.
+`SUMMARY_DISABLE_THINKING=true` é recomendado para resumos. Nessa configuração, o bot envia uma instrução de resposta direta, inclui `enable_thinking=false` e `chat_template_kwargs={"enable_thinking": false}` no corpo da chamada OpenAI-compatible e remove blocos `<think>...</think>` caso o servidor ainda os retorne.
 
 Se o LM Studio retornar `content=""` e preencher apenas `reasoning_content`, o bot rejeita a resposta e mostra um diagnóstico. Isso indica que o modelo/preset ainda está em modo thinking. Nesse caso, desative **Enable Thinking** no LM Studio ou use um preset non-thinking; o bot não transforma `reasoning_content` em resumo para não expor raciocínio interno nem gerar artefatos incorretos.
 
@@ -466,19 +473,15 @@ Para confirmar que o `.env` está sendo lido pela mesma configuração usada pel
 uv run python scripts/config/print_effective_settings.py
 ```
 
-Confira principalmente `summary_base_url`, `summary_model`, `summary_tokenizer_backend`, `summary_max_input_tokens`, `summary_partial_max_tokens`, `summary_final_max_tokens`, `summary_timeout_s` e `summary_disable_thinking`.
+Confira principalmente `summary_base_url`, `summary_model`, `summary_max_input_tokens` e `summary_disable_thinking`.
 
-O bot divide a transcrição por orçamento de tokens. Quando há tokenizer Hugging Face local compatível, `SUMMARY_TOKENIZER_BACKEND=auto` usa esse tokenizer; caso contrário, usa a estimativa `SUMMARY_CHARS_PER_TOKEN`. Para modelos locais em hardware modesto, trate a janela de contexto como limite físico, não como alvo operacional. Uma faixa inicial robusta é:
+Para modelos com contexto de 4096 tokens, como alguns presets locais do Qwen, mantenha `SUMMARY_MAX_INPUT_TOKENS` entre `2000` e `2500`. O bot usa esse valor para dividir a transcrição antes de chamar a LLM. Se o LM Studio registrar erro semelhante a `request (...) exceeds the available context size (4096 tokens)`, reduza primeiro:
 
 ```env
-SUMMARY_MAX_INPUT_TOKENS=6000
-SUMMARY_MAX_CHARS_PER_CHUNK=18000
-SUMMARY_PARTIAL_MAX_TOKENS=512
-SUMMARY_FINAL_MAX_TOKENS=1024
-SUMMARY_TIMEOUT_S=600
+SUMMARY_MAX_INPUT_TOKENS=2000
+SUMMARY_MAX_CHARS_PER_CHUNK=3000
+SUMMARY_MAX_TOKENS=768
 ```
-
-Se houver timeout frequente, reduza `SUMMARY_MAX_INPUT_TOKENS` antes de apenas aumentar `SUMMARY_TIMEOUT_S`. O serviço também subdivide automaticamente chunks que excedem timeout, até `SUMMARY_TIMEOUT_SPLIT_RETRIES`.
 
 ### LM Studio rodando no Windows e bot rodando no WSL2
 
