@@ -8,6 +8,7 @@ pipeline agnóstico das implementações concretas.
 
 from __future__ import annotations
 
+import itertools
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -168,7 +169,9 @@ class TryYouTubeSubtitlesStep(PipelineStep):
         meta = ctx.metadata
         if meta is None:
             return
-        target_language = ctx.requested_language or (meta.original_language.code if meta.original_language else None)
+        target_language = ctx.requested_language or (
+            meta.original_language.code if meta.original_language else None
+        )
         if target_language is None:
             return
 
@@ -218,7 +221,9 @@ class TryYouTubeSubtitlesStep(PipelineStep):
         ctx.youtube_subtitle_used = True
         ctx.youtube_subtitle_kind = "auto" if chosen.is_auto_generated else "manual"
         ctx.language_source = "youtube_auto" if chosen.is_auto_generated else "youtube_manual"
-        ctx.add_diagnostic(f"Usando legendas do YouTube ({ctx.youtube_subtitle_kind}, idioma={target_language}).")
+        ctx.add_diagnostic(
+            f"Usando legendas do YouTube ({ctx.youtube_subtitle_kind}, idioma={target_language})."
+        )
 
     @staticmethod
     def _pick_best(
@@ -346,7 +351,7 @@ def _consecutive_high_overlap_ratio(texts: list[str]) -> float:
         return 0.0
     high = 0
     total = 0
-    for prev, cur in zip(texts, texts[1:], strict=False):
+    for prev, cur in itertools.pairwise(texts):
         prev_words = prev.split()
         cur_words = cur.split()
         if not prev_words or not cur_words:

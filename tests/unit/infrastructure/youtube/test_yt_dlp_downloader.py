@@ -176,11 +176,7 @@ class TestErrorMapping:
         calls: list[_FakeYDL] = []
 
         def factory(params: dict[str, Any]) -> _FakeYDL:
-            payload: Any
-            if not calls:
-                payload = RuntimeError("Requested format is not available")
-            else:
-                payload = info
+            payload: Any = RuntimeError("Requested format is not available") if not calls else info
             ydl = _FakeYDL(params, payload)
             calls.append(ydl)
             return ydl
@@ -456,7 +452,6 @@ class TestDownloadAudio:
         assert result.audio_path.parent == tmp_path
         assert result.container == "m4a"
 
-
     def test_download_uses_audio_format_with_muxed_fallbacks(self, tmp_path: Path) -> None:
         info = {"title": "x", "uploader": "y", "duration": 10, "ext": "m4a"}
         downloader = _make(info)
@@ -548,7 +543,6 @@ class TestDownloadAudio:
         assert calls[1].params["listformats"] is True
         assert calls[1].params["simulate"] is True
 
-
     def test_discovered_formats_failure_reports_diagnostic_without_default_selector(
         self, tmp_path: Path
     ) -> None:
@@ -574,7 +568,9 @@ class TestDownloadAudio:
 
         # Não deve haver tentativa final com format=None em modo download; isso
         # apenas repete o seletor padrão problemático do yt-dlp.
-        download_formats = [c.params.get("format") for c in calls if c.params.get("skip_download") is False]
+        download_formats = [
+            c.params.get("format") for c in calls if c.params.get("skip_download") is False
+        ]
         assert download_formats == [
             "18/22/"
             "best[ext=mp4][acodec!=none][vcodec!=none]/"
@@ -703,8 +699,7 @@ a dia há muito tempo, Claude Code, Cursor e Copilot
         result = downloader.fetch_subtitle(VideoId(value="dQw4w9WgXcQ"), track)
         text = " ".join(seg[2] for seg in result.segments)
         assert text == (
-            "Eu venho usando agentes no meu dia a dia há muito tempo "
-            "Claude Code, Cursor e Copilot"
+            "Eu venho usando agentes no meu dia a dia há muito tempo Claude Code, Cursor e Copilot"
         )
 
     def test_collapses_repeated_phrase_inside_single_cue(self) -> None:

@@ -14,8 +14,8 @@ import os
 import re
 import subprocess
 import sys
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 MAX_TEXT_BYTES = 2_000_000
 DEFAULT_MAX_KB = 2048
@@ -61,7 +61,9 @@ SECRET_REGEXES: list[tuple[str, re.Pattern[str]]] = [
     ),
     (
         "github-token",
-        re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{30,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
+        re.compile(
+            r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{30,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b"
+        ),
     ),
     (
         "google-api-key",
@@ -190,12 +192,25 @@ def _scan_text(path: str, text: str) -> list[str]:
     return problems
 
 
+def _git_visible_files() -> list[str]:
+    try:
+        out = subprocess.check_output(
+            ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
+            text=True,
+        )
+        return [line.strip() for line in out.splitlines() if line.strip()]
+    except Exception:
+        files: list[str] = []
+        for root, dirs, names in os.walk("."):
+            dirs[:] = [d for d in dirs if d not in {".git", ".venv", "venv", "__pycache__"}]
+            files.extend(_normalize(Path(root) / name) for name in names)
+        return files
+
+
 def _iter_paths(args: argparse.Namespace, filenames: list[str]) -> Iterable[str]:
     if args.all:
-        for root, dirs, files in os.walk("."):
-            dirs[:] = [d for d in dirs if d not in {".git", ".venv", "venv", "__pycache__"}]
-            for name in files:
-                yield _normalize(Path(root) / name)
+        for name in _git_visible_files():
+            yield _normalize(name)
         return
     if filenames:
         for name in filenames:
@@ -207,7 +222,9 @@ def _iter_paths(args: argparse.Namespace, filenames: list[str]) -> Iterable[str]
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Block project-specific secrets before commit.")
-    parser.add_argument("--all", action="store_true", help="scan the working tree instead of staged files")
+    parser.add_argument(
+        "--all", action="store_true", help="scan the working tree instead of staged files"
+    )
     parser.add_argument("--max-kb", type=int, default=DEFAULT_MAX_KB)
     parser.add_argument("filenames", nargs="*")
     args = parser.parse_args(argv)

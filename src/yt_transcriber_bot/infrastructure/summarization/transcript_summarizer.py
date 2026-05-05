@@ -10,11 +10,10 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from collections.abc import Callable
 from typing import Protocol
 
 from yt_transcriber_bot.domain.entities.transcript import TranscriptSegment
@@ -282,7 +281,9 @@ class TranscriptSummaryService:
             ),
             encoding="utf-8",
         )
-        return SummaryResult(path=output_path, chunks=effective_chunks, model=self._chat_client.model)
+        return SummaryResult(
+            path=output_path, chunks=effective_chunks, model=self._chat_client.model
+        )
 
     def _summarize_chunk_adaptively(
         self,
@@ -466,7 +467,9 @@ def _emit_summary_progress(
     callback(SummaryProgress(kind=kind, current=current, total=total, message=message))
 
 
-def _system_prompt(output_language: str, transcript_language: str, disable_thinking: bool = True) -> str:
+def _system_prompt(
+    output_language: str, transcript_language: str, disable_thinking: bool = True
+) -> str:
     language_instruction = (
         "Responda no mesmo idioma predominante da transcrição."
         if output_language == "auto"
@@ -490,7 +493,7 @@ def _system_prompt(output_language: str, transcript_language: str, disable_think
 
 def _single_pass_prompt(snap: TranscriptSnapshot, transcript_text: str) -> str:
     return (
-        f"Gere um resumo estruturado do vídeo \"{snap.metadata.title}\".\n\n"
+        f'Gere um resumo estruturado do vídeo "{snap.metadata.title}".\n\n'
         "A saída deve conter exatamente estas seções:\n"
         "## Resumo executivo\n"
         "## Tese ou ideia central\n"
@@ -507,7 +510,7 @@ def _single_pass_prompt(snap: TranscriptSnapshot, transcript_text: str) -> str:
 
 def _chunk_prompt(snap: TranscriptSnapshot, chunk: str, index: str | int, total: str | int) -> str:
     return (
-        f"Este é o bloco {index}/{total} da transcrição do vídeo \"{snap.metadata.title}\".\n"
+        f'Este é o bloco {index}/{total} da transcrição do vídeo "{snap.metadata.title}".\n'
         "Resuma apenas este bloco, preservando timestamps úteis e sem concluir além do trecho recebido.\n"
         "Use seções curtas: Tópicos, Timestamps importantes, Conceitos, Pontos de atenção.\n\n"
         f"Bloco {index}/{total}:\n{chunk}"
@@ -516,7 +519,7 @@ def _chunk_prompt(snap: TranscriptSnapshot, chunk: str, index: str | int, total:
 
 def _synthesis_prompt(snap: TranscriptSnapshot, partials: str) -> str:
     return (
-        f"A seguir estão resumos parciais do vídeo \"{snap.metadata.title}\".\n"
+        f'A seguir estão resumos parciais do vídeo "{snap.metadata.title}".\n'
         "Sintetize em um resumo final sem duplicar tópicos. Preserve timestamps úteis.\n\n"
         "A saída deve conter exatamente estas seções:\n"
         "## Resumo executivo\n"
@@ -783,7 +786,9 @@ def _split_long_line(
     max_tokens: int | None = None,
     tokenizer: TextTokenizer | None = None,
 ) -> list[str]:
-    if len(line) <= max_chars and (tokenizer is None or max_tokens is None or tokenizer.count(line) <= max_tokens):
+    if len(line) <= max_chars and (
+        tokenizer is None or max_tokens is None or tokenizer.count(line) <= max_tokens
+    ):
         return [line]
     prefix = ""
     body = line
@@ -799,7 +804,10 @@ def _split_long_line(
         for body_part in body_parts:
             parts.extend(_split_text_by_chars(body_part, available_chars))
         return [f"{prefix}{part}" if prefix else part for part in parts if part.strip()]
-    return [f"{prefix}{part}" if prefix else part for part in _split_text_by_chars(body, available_chars)]
+    return [
+        f"{prefix}{part}" if prefix else part
+        for part in _split_text_by_chars(body, available_chars)
+    ]
 
 
 def _split_text_by_chars(text: str, max_chars: int) -> list[str]:
@@ -850,7 +858,9 @@ def _drop_adjacent_duplicate_sentences(text: str) -> str:
     return " ".join(kept).strip()
 
 
-def _remove_repeated_prefix(*, previous_text: str, current_text: str, min_overlap_words: int) -> str:
+def _remove_repeated_prefix(
+    *, previous_text: str, current_text: str, min_overlap_words: int
+) -> str:
     previous_words = _word_spans(previous_text)
     current_words = _word_spans(current_text)
     if len(previous_words) < min_overlap_words or len(current_words) < min_overlap_words:
@@ -861,7 +871,7 @@ def _remove_repeated_prefix(*, previous_text: str, current_text: str, min_overla
     for overlap in range(max_overlap, min_overlap_words - 1, -1):
         if previous_keys[-overlap:] == current_keys[:overlap]:
             cut_at = current_words[overlap - 1][2]
-            return current_text[cut_at:].lstrip(" ,.;:—-–")
+            return re.sub(r"^[ ,.;:\u2014\u2013-]+", "", current_text[cut_at:])
     return current_text
 
 

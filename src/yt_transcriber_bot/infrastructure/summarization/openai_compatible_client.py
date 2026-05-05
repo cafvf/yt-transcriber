@@ -85,7 +85,12 @@ class OpenAICompatibleChatClient:
             "model": self._model,
             "messages": [
                 {"role": "system", "content": request.system_prompt},
-                {"role": "user", "content": _maybe_add_no_think_prefix(request.user_prompt, self._disable_thinking)},
+                {
+                    "role": "user",
+                    "content": _maybe_add_no_think_prefix(
+                        request.user_prompt, self._disable_thinking
+                    ),
+                },
             ],
             "temperature": self._temperature,
             "max_tokens": max(1, max_tokens),
@@ -123,7 +128,7 @@ class OpenAICompatibleChatClient:
                 "Falha HTTP ao chamar a API OpenAI-compatible. "
                 f"Status: {exc.code}. Detalhe: {detail or exc.reason}.{hint}"
             ) from exc
-        except (urllib.error.URLError, TimeoutError, socket.timeout, OSError) as exc:
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
             if _is_timeout_error(exc):
                 raise ChatCompletionTimeoutError(
                     "Timeout ao chamar a API OpenAI-compatible. "
@@ -144,7 +149,9 @@ class OpenAICompatibleChatClient:
             reasoning_content = str(message.get("reasoning_content", "")).strip()
             response_model = str(data.get("model", "")).strip()
         except (KeyError, IndexError, TypeError) as exc:
-            raise ChatCompletionError("Resposta da LLM não tem formato Chat Completions válido.") from exc
+            raise ChatCompletionError(
+                "Resposta da LLM não tem formato Chat Completions válido."
+            ) from exc
         if self._strict_model_match and response_model and response_model != self._model:
             raise ChatCompletionError(
                 "O servidor OpenAI-compatible respondeu com um modelo diferente do configurado. "
@@ -171,7 +178,9 @@ class OpenAICompatibleChatClient:
         if self._model_checked:
             return
         try:
-            data = self._models_transport(f"{self._base_url}/models", self._headers(), self._timeout_s)
+            data = self._models_transport(
+                f"{self._base_url}/models", self._headers(), self._timeout_s
+            )
         except urllib.error.HTTPError as exc:
             detail = _read_http_error_body(exc)
             raise ChatCompletionError(
@@ -179,7 +188,7 @@ class OpenAICompatibleChatClient:
                 f"Status: {exc.code}. Detalhe: {detail or exc.reason}. "
                 "Verifique SUMMARY_BASE_URL ou defina SUMMARY_VALIDATE_MODEL=false para pular a validação."
             ) from exc
-        except (urllib.error.URLError, TimeoutError, socket.timeout, OSError) as exc:
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise ChatCompletionError(
                 "Não consegui consultar /v1/models para validar SUMMARY_MODEL. "
                 "Verifique se o LM Studio Server está ativo e acessível pelo WSL2/host. "
@@ -210,7 +219,7 @@ def _urllib_transport(
 ) -> Mapping[str, Any]:
     body = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(url, data=body, headers=dict(headers), method="POST")
-    with urllib.request.urlopen(request, timeout=timeout_s) as response:  # noqa: S310 - URL local/configurada pelo usuário
+    with urllib.request.urlopen(request, timeout=timeout_s) as response:
         raw = response.read().decode("utf-8")
     parsed = json.loads(raw)
     if not isinstance(parsed, dict):
@@ -224,7 +233,7 @@ def _urllib_get_transport(
     timeout_s: float,
 ) -> Mapping[str, Any]:
     request = urllib.request.Request(url, headers=dict(headers), method="GET")
-    with urllib.request.urlopen(request, timeout=timeout_s) as response:  # noqa: S310 - URL local/configurada pelo usuário
+    with urllib.request.urlopen(request, timeout=timeout_s) as response:
         raw = response.read().decode("utf-8")
     parsed = json.loads(raw)
     if not isinstance(parsed, dict):

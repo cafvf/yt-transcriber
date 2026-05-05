@@ -16,6 +16,8 @@ Saída esperada:
 - log em data/logs/
 """
 
+# ruff: noqa: E402
+
 from __future__ import annotations
 
 import argparse
@@ -75,14 +77,10 @@ class StubYouTubeDownloader(YouTubeDownloader):
     def list_subtitles(self, video_id: VideoId) -> tuple[SubtitleTrack, ...]:
         return ()  # nada de legenda — força transcrição real
 
-    def fetch_subtitle(
-        self, video_id: VideoId, track: SubtitleTrack
-    ) -> FetchedSubtitle:
+    def fetch_subtitle(self, video_id: VideoId, track: SubtitleTrack) -> FetchedSubtitle:
         raise NotImplementedError
 
-    def download_audio(
-        self, video_id: VideoId, dest_dir: Path
-    ) -> DownloadedAudio:
+    def download_audio(self, video_id: VideoId, dest_dir: Path) -> DownloadedAudio:
         # Copia o arquivo original para dest_dir mantendo o container
         import shutil
 
@@ -122,9 +120,13 @@ class StubDiarizationEngine(DiarizationEngine):
 
             out = subprocess.check_output(
                 [
-                    "ffprobe", "-v", "error",
-                    "-show_entries", "format=duration",
-                    "-of", "csv=p=0",
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "csv=p=0",
                     str(audio_path),
                 ],
                 text=True,
@@ -139,15 +141,11 @@ class StubDiarizationEngine(DiarizationEngine):
             end = min(t + block, dur)
             label = f"SPEAKER_{i % 2:02d}"
             segs.append(
-                DiarizedSpeakerSegment(
-                    start_seconds=t, end_seconds=end, speaker_label=label
-                )
+                DiarizedSpeakerSegment(start_seconds=t, end_seconds=end, speaker_label=label)
             )
             t = end
             i += 1
-        return DiarizationResult(
-            speaker_segments=tuple(segs), total_speakers=2
-        )
+        return DiarizationResult(speaker_segments=tuple(segs), total_speakers=2)
 
 
 def main() -> int:

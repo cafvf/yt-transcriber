@@ -15,9 +15,9 @@ from yt_transcriber_bot.domain.value_objects.video_id import VideoId
 from yt_transcriber_bot.infrastructure.exporting.transcript_exporter import TranscriptExportService
 from yt_transcriber_bot.infrastructure.exporting.video_subtitles_exporter import (
     VideoSoftSubtitleExportService,
+    VideoSubtitleExportLimits,
     VideoSubtitleTooLargeError,
     VideoSubtitleTooLongError,
-    VideoSubtitleExportLimits,
 )
 from yt_transcriber_bot.infrastructure.persistence.filesystem.transcript_snapshot import (
     TranscriptSnapshot,
@@ -31,7 +31,7 @@ class FakeYDL:
         self.params = params
         self.payload_size = payload_size
 
-    def __enter__(self) -> "FakeYDL":
+    def __enter__(self) -> FakeYDL:
         return self
 
     def __exit__(self, *args: object) -> None:
@@ -112,8 +112,10 @@ def test_export_creates_mp4_with_selectable_subtitle_ffmpeg_command(tmp_path: Pa
     assert result.subtitle_path.name == "video.srt"
     assert commands
     cmd = commands[0]
-    assert "-c:v" in cmd and "copy" in cmd
-    assert "-c:s" in cmd and "mov_text" in cmd
+    assert "-c:v" in cmd
+    assert "copy" in cmd
+    assert "-c:s" in cmd
+    assert "mov_text" in cmd
     assert "-map" in cmd
 
 

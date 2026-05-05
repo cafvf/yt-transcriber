@@ -10,6 +10,7 @@ possa avisar o usuário.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import re
 from datetime import date, datetime
@@ -422,7 +423,9 @@ class YtDlpDownloader(YouTubeDownloader):
             # embora formatos progressivos usuais ainda estejam disponíveis.
             candidate_ids = ("18", "22", "140", "139", "251", "250", "249")
 
-        logger.info("tentando %d formato(s) concreto(s) para %s", len(candidate_ids), video_id.value)
+        logger.info(
+            "tentando %d formato(s) concreto(s) para %s", len(candidate_ids), video_id.value
+        )
         for format_id in candidate_ids:
             try:
                 info = self._download_audio_with_selector(video_id, dest_dir, format_id)
@@ -433,7 +436,9 @@ class YtDlpDownloader(YouTubeDownloader):
                 return info
             except Exception as exc:  # pragma: no cover - mapeamento de mensagens
                 mapped = self._map_exception(exc)
-                if isinstance(mapped, MembersOnlyError | AgeRestrictedError | VideoUnavailableError):
+                if isinstance(
+                    mapped, MembersOnlyError | AgeRestrictedError | VideoUnavailableError
+                ):
                     raise mapped from exc
                 last_exc = exc
                 logger.warning("formato %s falhou para %s: %s", format_id, video_id.value, exc)
@@ -553,7 +558,9 @@ class YtDlpDownloader(YouTubeDownloader):
         # Audio-only primeiro, com preferência por faixa original. Entre candidatos
         # equivalentes, prefira m4a/mp4 e bitrate razoável. Se esses falharem por
         # restrição do YouTube, os progressivos pequenos entram logo depois.
-        audio_only.sort(key=lambda f: (not is_original(f), ext_rank(f), -abr_value(f), size_value(f)))
+        audio_only.sort(
+            key=lambda f: (not is_original(f), ext_rank(f), -abr_value(f), size_value(f))
+        )
         progressive.sort(
             key=lambda f: (
                 0 if format_id(f) == "18" else 1 if format_id(f) == "22" else 2,
@@ -576,10 +583,8 @@ class YtDlpDownloader(YouTubeDownloader):
     def _cleanup_previous_downloads(dest_dir: Path, video_id: VideoId) -> None:
         for candidate in dest_dir.glob(f"{video_id.value}.*"):
             if candidate.is_file():
-                try:
+                with contextlib.suppress(OSError):
                     candidate.unlink()
-                except OSError:
-                    pass
 
     @staticmethod
     def _extract_downloaded_path(info: dict[str, Any], dest_dir: Path, video_id: VideoId) -> Path:
@@ -713,7 +718,9 @@ def _collapse_adjacent_repeated_phrases(text: str, *, max_phrase_words: int = 18
     return " ".join(out)
 
 
-def _strip_prefix_overlap(previous_text: str, current_text: str, *, max_overlap_words: int = 40) -> str:
+def _strip_prefix_overlap(
+    previous_text: str, current_text: str, *, max_overlap_words: int = 40
+) -> str:
     """Remove do cue atual a parte que já apareceu no final do contexto anterior."""
     prev_words = previous_text.split()
     cur_words = current_text.split()

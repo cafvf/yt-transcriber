@@ -14,7 +14,6 @@ from typing import Any
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-
 SETTINGS_ENV_FILE_ENV_VAR = "YT_TRANSCRIBER_ENV_FILE"
 PROJECT_NAME = "yt-transcriber-bot"
 
@@ -131,8 +130,7 @@ class AppSettings(BaseSettings):
     whisper_model: str = Field(
         default="auto",
         description=(
-            "auto|tiny|base|small|medium|large-v2|large-v3. "
-            "Em auto, escolhe o modelo por idioma."
+            "auto|tiny|base|small|medium|large-v2|large-v3. Em auto, escolhe o modelo por idioma."
         ),
     )
     whisper_model_pt: str = Field(
@@ -495,6 +493,4 @@ def _is_model_reference(value: str) -> bool:
     if "/" in value and not any(ch.isspace() for ch in value):
         return True
     # Caminho local absoluto ou relativo explícito.
-    if value.startswith((".", "~", "/")) and not any(ch.isspace() for ch in value):
-        return True
-    return False
+    return value.startswith((".", "~", "/")) and not any(ch.isspace() for ch in value)

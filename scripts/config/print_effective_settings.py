@@ -23,7 +23,6 @@ from yt_transcriber_bot.application.config import (
     resolve_settings_env_file,
 )
 
-
 _SECRET_FIELDS = {
     "telegram_bot_token",
     "hf_token",

@@ -42,7 +42,6 @@ class RenameSpeakersService:
             raise FileNotFoundError(f"Snapshot inexistente: {slug}")
         return snap.transcript.speaker_labels()
 
-
     def metadata_for(self, slug: str) -> VideoMetadata | None:
         """Retorna metadados do snapshot, quando ele ainda existe.
 

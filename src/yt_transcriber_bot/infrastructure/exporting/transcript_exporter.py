@@ -159,11 +159,13 @@ def _render_vtt(snap: TranscriptSnapshot, aliases: Mapping[str, str]) -> str:
 
 
 def _valid_segments(segments: tuple[TranscriptSegment, ...]) -> tuple[TranscriptSegment, ...]:
-    return tuple(seg for seg in segments if seg.text.strip() and seg.end_seconds >= seg.start_seconds)
+    return tuple(
+        seg for seg in segments if seg.text.strip() and seg.end_seconds >= seg.start_seconds
+    )
 
 
 def _format_timestamp_srt(seconds: float) -> str:
-    total_ms = max(0, int(round(seconds * 1000)))
+    total_ms = max(0, round(seconds * 1000))
     ms = total_ms % 1000
     total_seconds = total_ms // 1000
     s = total_seconds % 60
@@ -174,7 +176,7 @@ def _format_timestamp_srt(seconds: float) -> str:
 
 
 def _format_timestamp_vtt(seconds: float) -> str:
-    total_ms = max(0, int(round(seconds * 1000)))
+    total_ms = max(0, round(seconds * 1000))
     ms = total_ms % 1000
     total_seconds = total_ms // 1000
     s = total_seconds % 60

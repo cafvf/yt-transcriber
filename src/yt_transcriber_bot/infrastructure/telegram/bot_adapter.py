@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import threading
 import re
+import threading
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -122,7 +122,6 @@ Manutenção e ajuda
 • /help → mostra esta lista de comandos.
 • /clearcache → apaga modelos baixados no diretório de cache configurado.
 """
-
 
 
 # ----------------------------------------------------------------------
@@ -267,7 +266,10 @@ class TelegramBotAdapter:
             await self._send_text(chat_id, "Envie um link do YouTube para transcrever.")
             return
         requested_language = self._extract_language_hint(raw_text)
-        if requested_language is not None and requested_language not in self._settings.allowed_languages:
+        if (
+            requested_language is not None
+            and requested_language not in self._settings.allowed_languages
+        ):
             await self._send_text(
                 chat_id,
                 f"Idioma '{requested_language}' não está permitido. "
@@ -344,7 +346,9 @@ class TelegramBotAdapter:
         elif command == "clearcache":
             await self.handle_command_clearcache(chat_id=chat_id, user_id=user_id)
         else:
-            await self._send_text(chat_id, "Comando não reconhecido. Use /help para ver os comandos disponíveis.")
+            await self._send_text(
+                chat_id, "Comando não reconhecido. Use /help para ver os comandos disponíveis."
+            )
         return True
 
     async def _enqueue_url(
@@ -400,7 +404,6 @@ class TelegramBotAdapter:
         item = await self._queue.enqueue(payload, item_id=str(uuid.uuid4()))
         if item.enqueued_position > 1:
             await self._send_text(chat_id, f"⏳ Posição na fila: {item.enqueued_position}.")
-
 
     def _is_already_queued(self, video_id: VideoId, requested_language: str | None) -> bool:
         current, pending = self._queue.snapshot()
@@ -518,10 +521,12 @@ class TelegramBotAdapter:
         if current is None and not pending:
             lines.append("\n✅ Fila vazia. Envie um link do YouTube para começar.")
         if current is not None:
-            lines.extend([
-                "\n▶️ Em execução:",
-                f"1. {current.payload.url}{_payload_language_suffix(current.payload)}",
-            ])
+            lines.extend(
+                [
+                    "\n▶️ Em execução:",
+                    f"1. {current.payload.url}{_payload_language_suffix(current.payload)}",
+                ]
+            )
         if pending:
             lines.append("\n⏳ Aguardando:")
             start = 2 if current is not None else 1
@@ -537,7 +542,9 @@ class TelegramBotAdapter:
         if removed == 0:
             await self._send_text(chat_id, "Não havia jobs pendentes para remover da fila.")
         else:
-            await self._send_text(chat_id, f"🧹 Fila limpa. {removed} job(s) pendente(s) removido(s).")
+            await self._send_text(
+                chat_id, f"🧹 Fila limpa. {removed} job(s) pendente(s) removido(s)."
+            )
 
     async def handle_command_cancelall(self, *, chat_id: int, user_id: int) -> None:
         if not self._is_authorized(user_id):
@@ -551,7 +558,9 @@ class TelegramBotAdapter:
             parts.append("job atual sinalizado para cancelamento")
         if pending_cancelled:
             parts.append(f"{pending_cancelled} pendente(s) removido(s)")
-        await self._send_text(chat_id, "🛑 Cancelamento geral solicitado: " + "; ".join(parts) + ".")
+        await self._send_text(
+            chat_id, "🛑 Cancelamento geral solicitado: " + "; ".join(parts) + "."
+        )
 
     async def handle_command_cancel(self, *, chat_id: int, user_id: int) -> None:
         if not self._is_authorized(user_id):
@@ -591,7 +600,10 @@ class TelegramBotAdapter:
             await self._send_text(chat_id, "Uso: /redo <link do YouTube>")
             return
         requested_language = self._extract_language_hint(text or "")
-        if requested_language is not None and requested_language not in self._settings.allowed_languages:
+        if (
+            requested_language is not None
+            and requested_language not in self._settings.allowed_languages
+        ):
             await self._send_text(
                 chat_id,
                 f"Idioma '{requested_language}' não está permitido. "
@@ -655,9 +667,7 @@ class TelegramBotAdapter:
             lines.append(f"{idx}. {self._format_history_job(job)}")
         await self._send_text(chat_id, "\n".join(lines))
 
-    async def handle_command_last(
-        self, *, chat_id: int, user_id: int, text: str = ""
-    ) -> None:
+    async def handle_command_last(self, *, chat_id: int, user_id: int, text: str = "") -> None:
         if not self._is_authorized(user_id):
             return
         if self._repository is None:
@@ -676,9 +686,7 @@ class TelegramBotAdapter:
             return
         await self._send_document_with_retry(chat_id, path)
 
-    async def handle_command_rename(
-        self, *, chat_id: int, user_id: int, text: str = ""
-    ) -> None:
+    async def handle_command_rename(self, *, chat_id: int, user_id: int, text: str = "") -> None:
         if not self._is_authorized(user_id):
             return
         if self._repository is None or self._rename_service is None:
@@ -690,9 +698,7 @@ class TelegramBotAdapter:
             return
         slug = self._slug_from_md_path(selected.md_path)
         if slug is None:
-            await self._send_text(
-                chat_id, "Não consegui localizar o snapshot dessa transcrição."
-            )
+            await self._send_text(chat_id, "Não consegui localizar o snapshot dessa transcrição.")
             return
         try:
             speakers = self._rename_service.list_speakers(slug)
@@ -721,9 +727,7 @@ class TelegramBotAdapter:
             reply_markup=keyboard,
         )
 
-    async def handle_callback_query(
-        self, *, chat_id: int, user_id: int, data: str
-    ) -> None:
+    async def handle_callback_query(self, *, chat_id: int, user_id: int, data: str) -> None:
         """Trata botões inline de renomeação/mesclagem."""
         if not self._is_authorized(user_id):
             return
@@ -769,9 +773,7 @@ class TelegramBotAdapter:
         completed.sort(key=lambda job: job.updated_at, reverse=True)
         return completed[:limit]
 
-    async def _select_completed_job(
-        self, *, chat_id: int, user_id: int, index: int
-    ) -> Job | None:
+    async def _select_completed_job(self, *, chat_id: int, user_id: int, index: int) -> Job | None:
         if index <= 0:
             await self._send_text(chat_id, "Use um número positivo. Exemplo: /last 2 ou /rename 2.")
             return None
@@ -787,9 +789,7 @@ class TelegramBotAdapter:
             return None
         return jobs[index - 1]
 
-    async def handle_command_summary(
-        self, *, chat_id: int, user_id: int, text: str = ""
-    ) -> None:
+    async def handle_command_summary(self, *, chat_id: int, user_id: int, text: str = "") -> None:
         """Gera resumo estruturado em Markdown para uma transcrição concluída."""
         if not self._is_authorized(user_id):
             return
@@ -807,7 +807,9 @@ class TelegramBotAdapter:
         if slug is None:
             await self._send_text(chat_id, "Não consegui localizar o snapshot dessa transcrição.")
             return
-        output_base = Path(selected.md_path) if selected.md_path else self._settings.summaries_dir() / slug
+        output_base = (
+            Path(selected.md_path) if selected.md_path else self._settings.summaries_dir() / slug
+        )
         progress_message_id = await self._send_text(
             chat_id,
             f"🧠 Gerando resumo da transcrição #{index} com {self._settings.summary_model}. "
@@ -843,18 +845,24 @@ class TelegramBotAdapter:
                 user_id=user_id,
                 operation="summary",
                 message="Snapshot dessa transcrição expirou. Reprocesse o vídeo.",
-                context=_artifact_error_context(selected, index=index, error=exc, artifact="summary"),
+                context=_artifact_error_context(
+                    selected, index=index, error=exc, artifact="summary"
+                ),
                 error=exc,
                 stage="snapshot",
             )
-            await self._send_text(chat_id, "Snapshot dessa transcrição expirou. Reprocesse o vídeo.")
+            await self._send_text(
+                chat_id, "Snapshot dessa transcrição expirou. Reprocesse o vídeo."
+            )
             return
         except ChatCompletionError as exc:
             await self._record_operational_error(
                 user_id=user_id,
                 operation="summary",
                 message=f"Falha ao chamar a LLM de resumo: {exc}",
-                context=_artifact_error_context(selected, index=index, error=exc, artifact="summary"),
+                context=_artifact_error_context(
+                    selected, index=index, error=exc, artifact="summary"
+                ),
                 error=exc,
                 stage="llm",
             )
@@ -865,7 +873,9 @@ class TelegramBotAdapter:
                 user_id=user_id,
                 operation="summary",
                 message=f"Falha ao gerar resumo: {exc}",
-                context=_artifact_error_context(selected, index=index, error=exc, artifact="summary"),
+                context=_artifact_error_context(
+                    selected, index=index, error=exc, artifact="summary"
+                ),
                 error=exc,
                 stage="summary",
             )
@@ -896,9 +906,7 @@ class TelegramBotAdapter:
             text=(f"/export {format} {rest}" if rest else f"/export {format}"),
         )
 
-    async def handle_command_export(
-        self, *, chat_id: int, user_id: int, text: str = ""
-    ) -> None:
+    async def handle_command_export(self, *, chat_id: int, user_id: int, text: str = "") -> None:
         """Exporta JSON/SRT/VTT de uma transcrição concluída sem reprocessar."""
         if not self._is_authorized(user_id):
             return
@@ -921,7 +929,9 @@ class TelegramBotAdapter:
         if slug is None:
             await self._send_text(chat_id, "Não consegui localizar o snapshot dessa transcrição.")
             return
-        output_base = Path(selected.md_path) if selected.md_path else self._settings.transcripts_dir() / slug
+        output_base = (
+            Path(selected.md_path) if selected.md_path else self._settings.transcripts_dir() / slug
+        )
         try:
             result = self._export_service.export(
                 slug=slug,
@@ -938,7 +948,9 @@ class TelegramBotAdapter:
                 error=exc,
                 stage="snapshot",
             )
-            await self._send_text(chat_id, "Snapshot dessa transcrição expirou. Reprocesse o vídeo.")
+            await self._send_text(
+                chat_id, "Snapshot dessa transcrição expirou. Reprocesse o vídeo."
+            )
             return
         except ValueError as exc:
             await self._record_operational_error(
@@ -992,18 +1004,24 @@ class TelegramBotAdapter:
                 user_id=user_id,
                 operation="video_subs",
                 message="Snapshot dessa transcrição expirou. Reprocesse o vídeo.",
-                context=_artifact_error_context(selected, index=index, error=exc, artifact="video_subs"),
+                context=_artifact_error_context(
+                    selected, index=index, error=exc, artifact="video_subs"
+                ),
                 error=exc,
                 stage="snapshot",
             )
-            await self._send_text(chat_id, "Snapshot dessa transcrição expirou. Reprocesse o vídeo.")
+            await self._send_text(
+                chat_id, "Snapshot dessa transcrição expirou. Reprocesse o vídeo."
+            )
             return
         except VideoSubtitleTooLongError as exc:
             await self._record_operational_error(
                 user_id=user_id,
                 operation="video_subs",
                 message=f"Vídeo não exportado: {exc}",
-                context=_artifact_error_context(selected, index=index, error=exc, artifact="video_subs"),
+                context=_artifact_error_context(
+                    selected, index=index, error=exc, artifact="video_subs"
+                ),
                 error=exc,
                 stage="limits",
                 severity="warn",
@@ -1015,7 +1033,9 @@ class TelegramBotAdapter:
                 user_id=user_id,
                 operation="video_subs",
                 message=f"Vídeo não exportado: {exc}",
-                context=_artifact_error_context(selected, index=index, error=exc, artifact="video_subs"),
+                context=_artifact_error_context(
+                    selected, index=index, error=exc, artifact="video_subs"
+                ),
                 error=exc,
                 stage="limits",
                 severity="warn",
@@ -1027,7 +1047,9 @@ class TelegramBotAdapter:
                 user_id=user_id,
                 operation="video_subs",
                 message=f"Falha ao gerar vídeo legendado: {exc}",
-                context=_artifact_error_context(selected, index=index, error=exc, artifact="video_subs"),
+                context=_artifact_error_context(
+                    selected, index=index, error=exc, artifact="video_subs"
+                ),
                 error=exc,
                 stage="ffmpeg",
             )

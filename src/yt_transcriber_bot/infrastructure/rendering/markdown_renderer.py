@@ -10,8 +10,8 @@ O template foi acordado no contrato funcional (§ Renderização) e contém:
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 

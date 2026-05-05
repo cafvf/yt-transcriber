@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import importlib.util
 import logging
 import shutil
@@ -92,9 +93,7 @@ async def _run() -> None:
 
     composition = build(settings)
 
-    application: Application = (
-        Application.builder().token(settings.telegram_bot_token).build()
-    )
+    application: Application = Application.builder().token(settings.telegram_bot_token).build()
     client = PTBBotClient(application.bot)
     adapter = TelegramBotAdapter(
         settings=settings,
@@ -150,7 +149,9 @@ async def _run() -> None:
 
     async def on_redo(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         text = update.effective_message.text if update.effective_message else ""
-        await adapter.handle_command_redo(chat_id=_cid(update), user_id=_uid(update), text=text or "")
+        await adapter.handle_command_redo(
+            chat_id=_cid(update), user_id=_uid(update), text=text or ""
+        )
 
     async def on_pt(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         text = update.effective_message.text if update.effective_message else ""
@@ -227,7 +228,9 @@ async def _run() -> None:
     application.add_handler(CommandHandler("healthcheck", on_healthcheck))
     application.add_handler(CommandHandler("lasterror", on_lasterror))
     application.add_handler(CommandHandler(["queue", "fila"], on_queue))
-    application.add_handler(CommandHandler(["clearqueue", "cancelqueue", "limparfila"], on_clearqueue))
+    application.add_handler(
+        CommandHandler(["clearqueue", "cancelqueue", "limparfila"], on_clearqueue)
+    )
     application.add_handler(CommandHandler(["cancelall", "cancelartudo"], on_cancelall))
     application.add_handler(CommandHandler("cancel", on_cancel))
     application.add_handler(CommandHandler("redo", on_redo))
@@ -255,10 +258,8 @@ async def _run() -> None:
             await application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
             logger.info("Bot em polling. Pressione Ctrl+C para parar.")
             stop_event = asyncio.Event()
-            try:
+            with contextlib.suppress(KeyboardInterrupt, asyncio.CancelledError):
                 await stop_event.wait()
-            except (KeyboardInterrupt, asyncio.CancelledError):
-                pass
             await application.updater.stop()
             await application.stop()
     finally:

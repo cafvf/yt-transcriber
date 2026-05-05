@@ -182,7 +182,6 @@ def test_summary_service_uses_final_token_budget_for_single_pass(tmp_path: Path)
     assert fake.requests[0].max_tokens == 888
 
 
-
 def test_summary_service_emits_progress_events_for_map_reduce(tmp_path: Path) -> None:
     repo = _snapshot_repo(tmp_path)
     snap = repo.load("video")
@@ -266,7 +265,9 @@ def test_summary_service_splits_single_pass_after_timeout(tmp_path: Path) -> Non
     )
 
     assert result.chunks > 1
-    assert len(fake.requests) == result.chunks + 2  # tentativa única com timeout + parciais + síntese
+    assert (
+        len(fake.requests) == result.chunks + 2
+    )  # tentativa única com timeout + parciais + síntese
     assert fake.requests[0].max_tokens == 1024
     assert {request.max_tokens for request in fake.requests[1:-1]} == {512}
     assert fake.requests[-1].max_tokens == 1024
@@ -287,7 +288,6 @@ def test_summary_service_reraises_timeout_when_adaptive_split_is_disabled(tmp_pa
         service.summarize(slug="video", output_base_path=tmp_path / "video.md")
 
 
-
 def test_summary_service_raises_for_missing_snapshot(tmp_path: Path) -> None:
     service = TranscriptSummaryService(
         snapshots=TranscriptSnapshotRepository(tmp_path / "segments"),
@@ -303,8 +303,7 @@ def test_summary_service_caps_chunks_by_input_token_budget(tmp_path: Path) -> No
     snap = repo.load("video")
     assert snap is not None
     long_segments = tuple(
-        TranscriptSegment(i * 2, i * 2 + 1, "texto " + ("x" * 180), "SPEAKER_00")
-        for i in range(80)
+        TranscriptSegment(i * 2, i * 2 + 1, "texto " + ("x" * 180), "SPEAKER_00") for i in range(80)
     )
     repo.save(
         "video",

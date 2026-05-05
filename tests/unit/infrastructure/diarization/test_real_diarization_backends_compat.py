@@ -95,7 +95,7 @@ def test_real_pyannote_backend_uses_token_keyword_and_new_output(
 
     class FakePipeline:
         @staticmethod
-        def from_pretrained(model_name: str, **kwargs: Any) -> "FakePipeline":
+        def from_pretrained(model_name: str, **kwargs: Any) -> FakePipeline:
             seen["model_name"] = model_name
             seen.update(kwargs)
             if "use_auth_token" in kwargs:
@@ -152,7 +152,7 @@ def test_real_pyannote_backend_still_reads_classic_annotation(
 
     class FakePipeline:
         @staticmethod
-        def from_pretrained(model_name: str, **kwargs: Any) -> "FakePipeline":
+        def from_pretrained(model_name: str, **kwargs: Any) -> FakePipeline:
             return FakePipeline()
 
         def __call__(self, audio_path: str, **kwargs: Any) -> _ClassicAnnotation:

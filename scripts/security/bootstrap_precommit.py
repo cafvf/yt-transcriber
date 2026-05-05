@@ -37,7 +37,9 @@ def main() -> int:
             )
             return 1
         shutil.copy2(fallback, config)
-        print(f"[pre-commit] Criado {config.relative_to(root)} a partir de config/pre-commit-config.yaml")
+        print(
+            f"[pre-commit] Criado {config.relative_to(root)} a partir de config/pre-commit-config.yaml"
+        )
     elif not config.is_file():
         print(f"[pre-commit] ERRO: {config} existe, mas não é arquivo.", file=sys.stderr)
         return 1

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 import pytest
 
@@ -188,6 +189,7 @@ def test_openai_compatible_client_strips_qwen_think_blocks() -> None:
     assert "raciocínio interno" not in result
     assert result.startswith("## Resumo executivo")
 
+
 def test_openai_compatible_client_rejects_reasoning_only_response() -> None:
     def transport(
         url: str, payload: Mapping[str, Any], headers: Mapping[str, str], timeout_s: float
@@ -249,12 +251,13 @@ def test_openai_compatible_client_accepts_content_even_when_reasoning_content_ex
     assert "Thinking Process" not in result
 
 
-
 def test_openai_compatible_client_validates_configured_model_before_completion() -> None:
     model_calls: list[str] = []
     completion_calls: list[str] = []
 
-    def models_transport(url: str, headers: Mapping[str, str], timeout_s: float) -> Mapping[str, Any]:
+    def models_transport(
+        url: str, headers: Mapping[str, str], timeout_s: float
+    ) -> Mapping[str, Any]:
         model_calls.append(url)
         return {"data": [{"id": "modelo-correto"}]}
 
@@ -277,7 +280,9 @@ def test_openai_compatible_client_validates_configured_model_before_completion()
 
 
 def test_openai_compatible_client_rejects_model_missing_from_lm_studio() -> None:
-    def models_transport(url: str, headers: Mapping[str, str], timeout_s: float) -> Mapping[str, Any]:
+    def models_transport(
+        url: str, headers: Mapping[str, str], timeout_s: float
+    ) -> Mapping[str, Any]:
         return {"data": [{"id": "qwen3.5-9b@q4_k_m"}]}
 
     def transport(

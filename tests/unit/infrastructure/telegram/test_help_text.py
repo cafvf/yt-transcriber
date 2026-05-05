@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from yt_transcriber_bot.infrastructure.telegram.bot_adapter import HELP_TEXT
 
-
 PUBLIC_COMMANDS = [
     "/start",
     "/help",

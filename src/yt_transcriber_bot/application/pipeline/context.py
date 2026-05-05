@@ -32,7 +32,9 @@ class PipelineContext:
     youtube_subtitle_used: bool = False
     youtube_subtitle_kind: str | None = None  # 'manual' | 'auto'
     requested_language: str | None = None
-    language_source: str | None = None  # 'user' | 'metadata' | 'asr' | 'youtube_manual' | 'youtube_auto'
+    language_source: str | None = (
+        None  # 'user' | 'metadata' | 'asr' | 'youtube_manual' | 'youtube_auto'
+    )
     transcribed_segments: tuple[TranscribedSegment, ...] = ()
     transcription_language: str | None = None
     transcription_confidence: float | None = None

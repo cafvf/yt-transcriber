@@ -105,7 +105,7 @@ def test_export_vtt_starts_with_webvtt_and_uses_dot_milliseconds(
 def test_export_invalid_format_raises_value_error(
     service: TranscriptExportService, tmp_path: Path
 ) -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Formato de exportação inválido"):
         service.export(slug="video", output_base_path=tmp_path / "video.md", format="pdf")
 
 

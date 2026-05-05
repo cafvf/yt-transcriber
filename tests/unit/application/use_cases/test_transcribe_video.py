@@ -921,4 +921,4 @@ class TestFixedProgressMilestones:
         )
         # O fake de transcrição não emite progresso interno; o teste garante
         # pelo menos os marcos emitidos pelo step de diarização.
-        assert {0.10, 0.75, 0.90}.issubset(set(round(x, 2) for x in diarize_events))
+        assert {0.10, 0.75, 0.90}.issubset({round(x, 2) for x in diarize_events})

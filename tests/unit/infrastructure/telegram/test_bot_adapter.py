@@ -49,7 +49,9 @@ class FakeBotClient:
         self._next_message_id = 100
         self.fail_send_count = 0
 
-    async def send_message(self, chat_id: int, text: str, reply_markup: object | None = None) -> int:
+    async def send_message(
+        self, chat_id: int, text: str, reply_markup: object | None = None
+    ) -> int:
         if self.fail_send_count > 0:
             self.fail_send_count -= 1
             raise RuntimeError("transient")
@@ -332,6 +334,7 @@ async def test_lifecycle_start_stop(settings: AppSettings) -> None:
     await a.stop()
     # Sem exceções → OK
 
+
 # --------------------------------------------------------------------
 # Queue commands / fallback
 # --------------------------------------------------------------------
@@ -422,9 +425,13 @@ async def test_duplicate_link_is_rejected_while_running(
         diagnostics=(),
         canceled=True,
     )
-    await adapter.handle_message(chat_id=10, user_id=42, text="https://youtu.be/ccccccccccc --lang pt")
+    await adapter.handle_message(
+        chat_id=10, user_id=42, text="https://youtu.be/ccccccccccc --lang pt"
+    )
     await asyncio.sleep(0.1)
-    await adapter.handle_message(chat_id=10, user_id=42, text="https://youtu.be/ccccccccccc --lang pt")
+    await adapter.handle_message(
+        chat_id=10, user_id=42, text="https://youtu.be/ccccccccccc --lang pt"
+    )
     assert any("já está em processamento" in m.text for m in client.sent)
 
 

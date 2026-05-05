@@ -89,7 +89,9 @@ class LastErrorService:
         operational_error = self._latest_operational_error(user_id)
 
         if failed_job is None and operational_error is None:
-            return LastErrorReport(job=None, message="✅ Nenhum erro recente registrado para este usuário.")
+            return LastErrorReport(
+                job=None, message="✅ Nenhum erro recente registrado para este usuário."
+            )
 
         if operational_error is not None and (
             failed_job is None or operational_error.occurred_at >= failed_job.updated_at
@@ -146,7 +148,9 @@ class LastErrorService:
         if job.audio_path:
             lines.append(f"Áudio parcial: {job.audio_path}")
         if job.log_path:
-            lines.extend(["", "Trecho final do log:", _tail_log(Path(job.log_path), self._settings)])
+            lines.extend(
+                ["", "Trecho final do log:", _tail_log(Path(job.log_path), self._settings)]
+            )
         hints = _hints_for_text(operation="transcribe", message=job.error_message or "")
         if hints:
             lines.extend(["", "Próximas verificações:"])
@@ -233,9 +237,7 @@ def _record_from_payload(payload: dict[str, Any]) -> OperationalErrorRecord:
         occurred_at = occurred_at.replace(tzinfo=UTC)
     context_raw = payload.get("context", {})
     context = (
-        {str(k): str(v) for k, v in context_raw.items()}
-        if isinstance(context_raw, dict)
-        else {}
+        {str(k): str(v) for k, v in context_raw.items()} if isinstance(context_raw, dict) else {}
     )
     return OperationalErrorRecord(
         user_id=int(payload.get("user_id", 0)),
@@ -291,8 +293,12 @@ def _hints_for_text(*, operation: str, message: str) -> list[str]:
         )
         hints.append("Rode /healthcheck para confirmar se SUMMARY_MODEL aparece em /v1/models.")
     if any(key in text for key in ["timeout", "timed out", "tempo"]):
-        hints.append("Revise SUMMARY_MAX_INPUT_TOKENS, SUMMARY_TIMEOUT_S e SUMMARY_TIMEOUT_SPLIT_RETRIES.")
-    if any(key in text for key in ["snapshot", "expirou", "filenotfound", "não encontrei", "arquivo"]):
+        hints.append(
+            "Revise SUMMARY_MAX_INPUT_TOKENS, SUMMARY_TIMEOUT_S e SUMMARY_TIMEOUT_SPLIT_RETRIES."
+        )
+    if any(
+        key in text for key in ["snapshot", "expirou", "filenotfound", "não encontrei", "arquivo"]
+    ):
         hints.append(
             "Use /list para confirmar se a transcrição ainda existe; se o snapshot expirou, "
             "reprocesse o vídeo."
@@ -302,15 +308,21 @@ def _hints_for_text(*, operation: str, message: str) -> list[str]:
             "Verifique ffmpeg/ffprobe no PATH e os limites "
             "MAX_VIDEO_SUBTITLES_DURATION_MIN/MAX_VIDEO_SUBTITLES_SIZE_MB."
         )
-    if any(key in text for key in ["members", "cookie", "age", "private", "unavailable", "youtube"]):
+    if any(
+        key in text for key in ["members", "cookie", "age", "private", "unavailable", "youtube"]
+    ):
         hints.append(
             "Verifique cookies do YouTube, disponibilidade do vídeo e restrições de "
             "idade/membros/geobloqueio."
         )
     if any(key in text for key in ["cuda", "outofmemory", "oom", "memória"]):
-        hints.append("Reduza modelo/compute_type ou rode em CPU; confira VRAM e configuração WHISPER_MODEL.")
+        hints.append(
+            "Reduza modelo/compute_type ou rode em CPU; confira VRAM e configuração WHISPER_MODEL."
+        )
     if any(key in text for key in ["telegram", "networkerror", "connecterror", "readerror"]):
-        hints.append("Verifique conectividade com api.telegram.org e os timeouts de polling/envio do Telegram.")
+        hints.append(
+            "Verifique conectividade com api.telegram.org e os timeouts de polling/envio do Telegram."
+        )
     out: list[str] = []
     for hint in hints:
         if hint not in out:

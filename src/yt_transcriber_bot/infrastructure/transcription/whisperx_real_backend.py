@@ -61,9 +61,7 @@ class RealWhisperXBackend:
         language = str(result.get("language") or normalized_hint or "en")
         # alguns modelos não devolvem probabilidade explícita; assumimos 1.0
         prob = float(result.get("language_probability", 1.0))
-        return _RawTranscription(
-            segments=segments, language=language, language_probability=prob
-        )
+        return _RawTranscription(segments=segments, language=language, language_probability=prob)
 
     def align(
         self,
@@ -78,9 +76,7 @@ class RealWhisperXBackend:
             _AlignedTranscription,
         )
 
-        align_model, metadata = whisperx.load_align_model(
-            language_code=raw.language, device=device
-        )
+        align_model, metadata = whisperx.load_align_model(language_code=raw.language, device=device)
         audio = whisperx.load_audio(str(audio_path))
         aligned = whisperx.align(
             list(raw.segments),

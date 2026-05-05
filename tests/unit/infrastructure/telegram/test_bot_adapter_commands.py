@@ -60,7 +60,9 @@ class FakeBotClient:
         self.videos: list[tuple[Path, str | None]] = []
         self.edits: list[tuple[int, int, str]] = []
 
-    async def send_message(self, chat_id: int, text: str, reply_markup: object | None = None) -> int:
+    async def send_message(
+        self, chat_id: int, text: str, reply_markup: object | None = None
+    ) -> int:
         self.sent.append((chat_id, text, reply_markup))
         return 100 + len(self.sent)
 
@@ -177,7 +179,9 @@ class FakeLastErrorService:
 
     def latest_for_user(self, user_id: int) -> LastErrorReport:
         self.calls.append(user_id)
-        return LastErrorReport(job=None, message="✅ Nenhum erro recente registrado para este usuário.")
+        return LastErrorReport(
+            job=None, message="✅ Nenhum erro recente registrado para este usuário."
+        )
 
     def record_operation_error(self, **kwargs: object) -> object:
         self.recorded.append(kwargs)
@@ -394,9 +398,7 @@ async def test_list_shows_recent_jobs(
 
 
 @pytest.mark.asyncio
-async def test_healthcheck_sends_report(
-    adapter: TelegramBotAdapter, client: FakeBotClient
-) -> None:
+async def test_healthcheck_sends_report(adapter: TelegramBotAdapter, client: FakeBotClient) -> None:
     await adapter.handle_command_healthcheck(chat_id=1, user_id=42)
 
     assert any("Healthcheck" in text for _, text, *_ in client.sent)
@@ -588,6 +590,7 @@ async def test_clearcache_removes_files(
 def test_parse_rename_mapping(text: str, expected: dict[str, str]) -> None:
     assert _parse_rename_mapping(text) == expected
 
+
 # --------------------------------------------------------------------
 # /redo
 # --------------------------------------------------------------------
@@ -638,6 +641,7 @@ async def test_clearcache_refuses_unconfigured_directory(
     await adapter.handle_command_clearcache(chat_id=1, user_id=42)
     assert protected.exists()
     assert any("Operação recusada" in text for _, text, *_ in client.sent)
+
 
 # --------------------------------------------------------------------
 # Histórico numerado: /list, /last n e /rename n
@@ -797,6 +801,7 @@ async def test_rename_with_out_of_range_index_does_not_open_dialog(
     assert any("link do YouTube" in text for _, text, *_ in client.sent)
     assert client.docs == []
 
+
 # --------------------------------------------------------------------
 # Interface regressions requested in 2026-05-03 review
 # --------------------------------------------------------------------
@@ -912,6 +917,7 @@ async def test_inline_done_button_closes_rename_dialog(
     await adapter.handle_message(chat_id=1, user_id=42, text="João")
     assert any("Renomeação concluída" in text for _, text, *_ in client.sent)
     assert any("link do YouTube" in text for _, text, *_ in client.sent)
+
 
 # --------------------------------------------------------------------
 # /summary

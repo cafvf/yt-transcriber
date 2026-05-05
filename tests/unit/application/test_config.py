@@ -226,13 +226,15 @@ def test_summary_settings_defaults_are_lm_studio_compatible(
     assert settings.summaries_dir() == tmp_path / "data" / "summaries"
 
 
-
 def test_summary_tokenizer_backend_is_normalized(env_no_dotenv: None) -> None:
     assert AppSettings(summary_tokenizer_backend="huggingface").summary_tokenizer_backend == "hf"
-    assert AppSettings(summary_tokenizer_backend="estimated").summary_tokenizer_backend == "estimate"
+    assert (
+        AppSettings(summary_tokenizer_backend="estimated").summary_tokenizer_backend == "estimate"
+    )
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="summary_tokenizer_backend"):
         AppSettings(summary_tokenizer_backend="unknown")
+
 
 def test_summary_disable_thinking_can_be_disabled_from_env(
     env_no_dotenv: None, monkeypatch: pytest.MonkeyPatch
@@ -284,9 +286,7 @@ def test_summary_model_can_be_forced_with_env_file_override(
     assert settings.summary_model == "modelo-forcado"
 
 
-def test_env_example_is_not_loaded_as_runtime_default(
-    env_no_dotenv: None, tmp_path: Path
-) -> None:
+def test_env_example_is_not_loaded_as_runtime_default(env_no_dotenv: None, tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text(
         '[project]\nname = "yt-transcriber-bot"\n', encoding="utf-8"
     )
@@ -308,9 +308,8 @@ def test_forced_env_file_rejects_env_example(
     example.write_text("SUMMARY_MODEL=modelo-errado-do-example\n", encoding="utf-8")
     monkeypatch.setenv("YT_TRANSCRIBER_ENV_FILE", str(example))
 
-    with pytest.raises(ValueError, match=".env.example"):
+    with pytest.raises(ValueError, match=r"\.env\.example"):
         AppSettings()
-
 
 
 def test_summary_model_real_environment_overrides_dotenv_and_is_diagnosable(

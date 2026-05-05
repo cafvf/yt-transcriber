@@ -23,7 +23,9 @@ def _settings(tmp_path: Path, **kwargs: object) -> AppSettings:
     return AppSettings(**values)
 
 
-def test_healthcheck_reports_ok_when_core_dependencies_and_model_are_available(tmp_path: Path) -> None:
+def test_healthcheck_reports_ok_when_core_dependencies_and_model_are_available(
+    tmp_path: Path,
+) -> None:
     settings = _settings(tmp_path)
 
     def models_probe(url: str, headers: dict[str, str], timeout_s: float) -> dict[str, Any]:

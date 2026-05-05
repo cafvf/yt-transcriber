@@ -32,11 +32,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     config = Path(".gitleaks.toml")
-    common = [exe]
     if args.staged:
-        cmd = common + ["protect", "--staged", "--redact", "--verbose"]
+        cmd = [exe, "protect", "--staged", "--redact", "--verbose"]
     else:
-        cmd = common + ["detect", "--source", ".", "--redact", "--verbose"]
+        cmd = [exe, "detect", "--source", ".", "--redact", "--verbose"]
     if config.exists():
         cmd.extend(["--config", str(config)])
 

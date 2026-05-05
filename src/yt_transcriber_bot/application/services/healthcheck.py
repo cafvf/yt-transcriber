@@ -162,10 +162,14 @@ class HealthCheckService:
         try:
             env_file = resolve_settings_env_file()
         except ValueError as exc:
-            items.append(HealthCheckItem("Arquivo .env", "fail", sanitize_text(str(exc), self._settings)))
+            items.append(
+                HealthCheckItem("Arquivo .env", "fail", sanitize_text(str(exc), self._settings))
+            )
         else:
             if env_file.name == ".env.example":
-                items.append(HealthCheckItem("Arquivo .env", "fail", ".env.example não pode ser runtime."))
+                items.append(
+                    HealthCheckItem("Arquivo .env", "fail", ".env.example não pode ser runtime.")
+                )
             elif env_file.exists():
                 items.append(HealthCheckItem("Arquivo .env", "ok", f"{env_file}"))
             else:
@@ -200,7 +204,11 @@ class HealthCheckService:
         for label, module_name in modules.items():
             present = self._module_checker(module_name)
             status = "ok" if present else ("warn" if module_name == "transformers" else "fail")
-            detail = _module_detail(module_name) if present else f"módulo {module_name!r} não encontrado."
+            detail = (
+                _module_detail(module_name)
+                if present
+                else f"módulo {module_name!r} não encontrado."
+            )
             items.append(HealthCheckItem(label, status, detail))
         return items
 
@@ -230,7 +238,9 @@ class HealthCheckService:
                 conn.execute("INSERT INTO healthcheck_ping(x) VALUES (1)")
                 conn.execute("DELETE FROM healthcheck_ping")
         except Exception as exc:
-            return HealthCheckItem("SQLite", "fail", f"falha ao acessar {self._settings.db_path}: {exc}")
+            return HealthCheckItem(
+                "SQLite", "fail", f"falha ao acessar {self._settings.db_path}: {exc}"
+            )
         return HealthCheckItem("SQLite", "ok", f"acessível em {self._settings.db_path}.")
 
     def _check_operational_error_log(self) -> HealthCheckItem:
@@ -285,15 +295,25 @@ class HealthCheckService:
         if cookies_file:
             path = Path(cookies_file).expanduser()
             if path.is_file():
-                return HealthCheckItem("Cookies YouTube", "ok", f"arquivo configurado existe: {path}.")
-            return HealthCheckItem("Cookies YouTube", "warn", f"arquivo configurado não existe: {path}.")
+                return HealthCheckItem(
+                    "Cookies YouTube", "ok", f"arquivo configurado existe: {path}."
+                )
+            return HealthCheckItem(
+                "Cookies YouTube", "warn", f"arquivo configurado não existe: {path}."
+            )
         if cookies_browser:
-            return HealthCheckItem("Cookies YouTube", "ok", f"browser configurado: {cookies_browser}.")
-        return HealthCheckItem("Cookies YouTube", "warn", "não configurados; vídeos restritos podem falhar.")
+            return HealthCheckItem(
+                "Cookies YouTube", "ok", f"browser configurado: {cookies_browser}."
+            )
+        return HealthCheckItem(
+            "Cookies YouTube", "warn", "não configurados; vídeos restritos podem falhar."
+        )
 
     def _check_summary_configuration(self) -> list[HealthCheckItem]:
         if self._settings.summary_backend == "disabled":
-            return [HealthCheckItem("Configuração de sumarização", "warn", "SUMMARY_BACKEND=disabled.")]
+            return [
+                HealthCheckItem("Configuração de sumarização", "warn", "SUMMARY_BACKEND=disabled.")
+            ]
         items: list[HealthCheckItem] = []
         input_tokens = self._settings.summary_max_input_tokens
         final_tokens = self._settings.summary_final_max_tokens
@@ -434,7 +454,7 @@ def _urllib_get_json(
     timeout_s: float,
 ) -> Mapping[str, Any]:
     request = urllib.request.Request(url, headers=dict(headers), method="GET")
-    with urllib.request.urlopen(request, timeout=timeout_s) as response:  # noqa: S310
+    with urllib.request.urlopen(request, timeout=timeout_s) as response:
         raw = response.read().decode("utf-8")
     parsed = json.loads(raw)
     if not isinstance(parsed, Mapping):
