@@ -199,6 +199,11 @@ def test_summary_settings_defaults_are_lm_studio_compatible(
         base_dir=tmp_path / "data",
         models_dir=tmp_path / "models",
     )
+    assert settings.healthcheck_lmstudio_timeout_s > 0
+    assert settings.healthcheck_min_free_disk_mb > 0
+    assert settings.lasterror_recent_limit >= 1
+    assert settings.lasterror_log_tail_lines >= 1
+    assert settings.lasterror_log_tail_chars >= 200
     assert settings.summary_backend == "openai_compatible"
     assert settings.summary_base_url == "http://localhost:1234/v1"
     _assert_defined(settings.summary_model)

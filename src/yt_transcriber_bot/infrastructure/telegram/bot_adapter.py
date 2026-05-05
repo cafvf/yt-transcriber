@@ -26,6 +26,8 @@ from typing import Protocol
 
 from yt_transcriber_bot.application.config import AppSettings
 from yt_transcriber_bot.application.ports.job_repository import JobRepository
+from yt_transcriber_bot.application.services.healthcheck import HealthCheckService
+from yt_transcriber_bot.application.services.last_error import LastErrorService
 from yt_transcriber_bot.application.services.rename_speakers import (
     RenameSpeakersService,
 )
@@ -86,6 +88,8 @@ Entrada e idioma
 
 Estado, fila e cancelamento
 • /status → mostra o job atual e o estado operacional do bot.
+• /healthcheck → valida configuração, dependências, diretórios, SQLite e LM Studio.
+• /lasterror → mostra o último erro registrado de forma sanitizada.
 • /queue → mostra a fila completa de processamento.
 • /fila → alias em português de /queue.
 • /clearqueue → remove apenas os jobs pendentes da fila.
@@ -203,6 +207,8 @@ class TelegramBotAdapter:
         export_service: TranscriptExportService | None = None,
         summary_service: TranscriptSummaryService | None = None,
         video_subtitle_export_service: VideoSoftSubtitleExportService | None = None,
+        healthcheck_service: HealthCheckService | None = None,
+        lasterror_service: LastErrorService | None = None,
         retention_policy: RetentionPolicy | None = None,
         models_dir: Path | None = None,
     ) -> None:
@@ -214,6 +220,8 @@ class TelegramBotAdapter:
         self._export_service = export_service
         self._summary_service = summary_service
         self._video_subtitle_export_service = video_subtitle_export_service
+        self._healthcheck_service = healthcheck_service
+        self._lasterror_service = lasterror_service
         self._retention_policy = retention_policy
         self._models_dir = models_dir
         self._pending_rename_user: int | None = None
@@ -292,6 +300,10 @@ class TelegramBotAdapter:
             await self.handle_command_help(chat_id=chat_id, user_id=user_id)
         elif command == "status":
             await self.handle_command_status(chat_id=chat_id, user_id=user_id)
+        elif command == "healthcheck":
+            await self.handle_command_healthcheck(chat_id=chat_id, user_id=user_id)
+        elif command == "lasterror":
+            await self.handle_command_lasterror(chat_id=chat_id, user_id=user_id)
         elif command in {"queue", "fila"}:
             await self.handle_command_queue(chat_id=chat_id, user_id=user_id)
         elif command in {"clearqueue", "cancelqueue", "limparfila"}:
@@ -438,6 +450,62 @@ class TelegramBotAdapter:
             f"⏳ Fila pendente: {len(pending)} item(ns).\n\n"
             "Use /queue para ver a fila completa.",
         )
+
+    async def handle_command_healthcheck(self, *, chat_id: int, user_id: int) -> None:
+        if not self._is_authorized(user_id):
+            return
+        if self._healthcheck_service is None:
+            await self._send_text(chat_id, "Healthcheck indisponível neste bot.")
+            return
+        try:
+            report = await asyncio.to_thread(self._healthcheck_service.run)
+        except Exception as exc:  # pragma: no cover - caminho defensivo
+            logger.exception("Healthcheck falhou: %s", exc)
+            await self._send_text(chat_id, f"❌ Healthcheck falhou inesperadamente: {exc}")
+            return
+        await self._send_text(chat_id, report.render(self._settings))
+
+    async def handle_command_lasterror(self, *, chat_id: int, user_id: int) -> None:
+        if not self._is_authorized(user_id):
+            return
+        if self._lasterror_service is None:
+            await self._send_text(chat_id, "Consulta de último erro indisponível neste bot.")
+            return
+        try:
+            report = await asyncio.to_thread(self._lasterror_service.latest_for_user, user_id)
+        except Exception as exc:  # pragma: no cover - caminho defensivo
+            logger.exception("/lasterror falhou: %s", exc)
+            await self._send_text(chat_id, f"❌ Falha ao consultar último erro: {exc}")
+            return
+        await self._send_text(chat_id, report.message)
+
+    async def _record_operational_error(
+        self,
+        *,
+        user_id: int,
+        operation: str,
+        message: str,
+        context: dict[str, object] | None = None,
+        error: BaseException | None = None,
+        stage: str = "",
+        severity: str = "error",
+    ) -> None:
+        """Registra falhas de comandos derivados para consulta via /lasterror."""
+        if self._lasterror_service is None:
+            return
+        try:
+            await asyncio.to_thread(
+                self._lasterror_service.record_operation_error,
+                user_id=user_id,
+                operation=operation,
+                message=message,
+                context=context,
+                error=error,
+                stage=stage,
+                severity=severity,
+            )
+        except Exception as exc:  # pragma: no cover - caminho defensivo
+            logger.warning("Não consegui registrar erro operacional %s: %s", operation, exc)
 
     async def handle_command_queue(self, *, chat_id: int, user_id: int) -> None:
         if not self._is_authorized(user_id):
@@ -770,13 +838,37 @@ class TelegramBotAdapter:
                 speaker_aliases=selected.speaker_renames,
                 on_progress=summary_progress_cb,
             )
-        except FileNotFoundError:
+        except FileNotFoundError as exc:
+            await self._record_operational_error(
+                user_id=user_id,
+                operation="summary",
+                message="Snapshot dessa transcrição expirou. Reprocesse o vídeo.",
+                context=_artifact_error_context(selected, index=index, error=exc, artifact="summary"),
+                error=exc,
+                stage="snapshot",
+            )
             await self._send_text(chat_id, "Snapshot dessa transcrição expirou. Reprocesse o vídeo.")
             return
         except ChatCompletionError as exc:
+            await self._record_operational_error(
+                user_id=user_id,
+                operation="summary",
+                message=f"Falha ao chamar a LLM de resumo: {exc}",
+                context=_artifact_error_context(selected, index=index, error=exc, artifact="summary"),
+                error=exc,
+                stage="llm",
+            )
             await self._send_text(chat_id, f"Falha ao chamar a LLM de resumo: {exc}")
             return
         except SummaryError as exc:
+            await self._record_operational_error(
+                user_id=user_id,
+                operation="summary",
+                message=f"Falha ao gerar resumo: {exc}",
+                context=_artifact_error_context(selected, index=index, error=exc, artifact="summary"),
+                error=exc,
+                stage="summary",
+            )
             await self._send_text(chat_id, f"Falha ao gerar resumo: {exc}")
             return
         if progress is not None:
@@ -837,10 +929,26 @@ class TelegramBotAdapter:
                 format=fmt,
                 speaker_aliases=selected.speaker_renames,
             )
-        except FileNotFoundError:
+        except FileNotFoundError as exc:
+            await self._record_operational_error(
+                user_id=user_id,
+                operation="export",
+                message="Snapshot dessa transcrição expirou. Reprocesse o vídeo.",
+                context=_artifact_error_context(selected, index=index, error=exc, artifact=fmt),
+                error=exc,
+                stage="snapshot",
+            )
             await self._send_text(chat_id, "Snapshot dessa transcrição expirou. Reprocesse o vídeo.")
             return
         except ValueError as exc:
+            await self._record_operational_error(
+                user_id=user_id,
+                operation="export",
+                message=str(exc),
+                context=_artifact_error_context(selected, index=index, error=exc, artifact=fmt),
+                error=exc,
+                stage="export",
+            )
             await self._send_text(chat_id, str(exc))
             return
         await self._send_text(
@@ -879,16 +987,50 @@ class TelegramBotAdapter:
                 slug=slug,
                 speaker_aliases=selected.speaker_renames,
             )
-        except FileNotFoundError:
+        except FileNotFoundError as exc:
+            await self._record_operational_error(
+                user_id=user_id,
+                operation="video_subs",
+                message="Snapshot dessa transcrição expirou. Reprocesse o vídeo.",
+                context=_artifact_error_context(selected, index=index, error=exc, artifact="video_subs"),
+                error=exc,
+                stage="snapshot",
+            )
             await self._send_text(chat_id, "Snapshot dessa transcrição expirou. Reprocesse o vídeo.")
             return
         except VideoSubtitleTooLongError as exc:
+            await self._record_operational_error(
+                user_id=user_id,
+                operation="video_subs",
+                message=f"Vídeo não exportado: {exc}",
+                context=_artifact_error_context(selected, index=index, error=exc, artifact="video_subs"),
+                error=exc,
+                stage="limits",
+                severity="warn",
+            )
             await self._send_text(chat_id, f"Vídeo não exportado: {exc}")
             return
         except VideoSubtitleTooLargeError as exc:
+            await self._record_operational_error(
+                user_id=user_id,
+                operation="video_subs",
+                message=f"Vídeo não exportado: {exc}",
+                context=_artifact_error_context(selected, index=index, error=exc, artifact="video_subs"),
+                error=exc,
+                stage="limits",
+                severity="warn",
+            )
             await self._send_text(chat_id, f"Vídeo não exportado: {exc}")
             return
         except VideoSubtitleExportError as exc:
+            await self._record_operational_error(
+                user_id=user_id,
+                operation="video_subs",
+                message=f"Falha ao gerar vídeo legendado: {exc}",
+                context=_artifact_error_context(selected, index=index, error=exc, artifact="video_subs"),
+                error=exc,
+                stage="ffmpeg",
+            )
             await self._send_text(chat_id, f"Falha ao gerar vídeo legendado: {exc}")
             return
         await self._send_text(
@@ -918,14 +1060,28 @@ class TelegramBotAdapter:
             )
             return
         removed = 0
+        failures: list[str] = []
         for entry in self._models_dir.rglob("*"):
             if entry.is_file():
                 try:
                     entry.unlink()
                     removed += 1
-                except OSError:
-                    continue
-        await self._send_text(chat_id, f"Cache limpo. {removed} arquivo(s) removido(s).")
+                except OSError as exc:
+                    failures.append(f"{entry}: {exc}")
+        if failures:
+            await self._record_operational_error(
+                user_id=user_id,
+                operation="clearcache",
+                message=f"Falha ao remover {len(failures)} arquivo(s) do cache de modelos.",
+                context={
+                    "models_dir": self._models_dir,
+                    "failed_files": " | ".join(failures[:5]),
+                },
+                stage="filesystem",
+                severity="warn",
+            )
+        suffix = f" {len(failures)} falha(s) foram registradas em /lasterror." if failures else ""
+        await self._send_text(chat_id, f"Cache limpo. {removed} arquivo(s) removido(s).{suffix}")
 
     def _is_safe_models_cache_dir(self, path: Path) -> bool:
         """Impede que /clearcache apague diretórios amplos por erro de configuração."""
@@ -1077,6 +1233,18 @@ class TelegramBotAdapter:
             )
         except Exception as exc:
             logger.exception("Use case falhou: %s", exc)
+            await self._record_operational_error(
+                user_id=payload.user_id,
+                operation="transcribe",
+                message=f"Erro inesperado no pipeline: {type(exc).__name__}: {exc}",
+                context={
+                    "video_id": payload.video_id.value,
+                    "url": payload.url,
+                    "requested_language": payload.requested_language or "auto",
+                },
+                error=exc,
+                stage="pipeline",
+            )
             await progress.finish(f"❌ Erro inesperado: {exc}")
             return
 
@@ -1150,6 +1318,25 @@ class TelegramBotAdapter:
 # ----------------------------------------------------------------------
 # Helpers
 # ----------------------------------------------------------------------
+
+
+def _artifact_error_context(
+    job: Job, *, index: int, error: BaseException, artifact: str
+) -> dict[str, object]:
+    """Contexto comum para falhas de artefatos derivados."""
+    context: dict[str, object] = {
+        "artifact": artifact,
+        "history_index": index,
+        "job_id": job.job_id,
+        "video_id": job.video_id.value,
+        "job_status": job.status.value,
+        "error_type": type(error).__name__,
+    }
+    if job.md_path:
+        context["md_path"] = job.md_path
+    if job.audio_path:
+        context["audio_path"] = job.audio_path
+    return context
 
 
 def _humanize_summary_progress(event: SummaryProgress) -> str:

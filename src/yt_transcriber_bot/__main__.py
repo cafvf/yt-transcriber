@@ -105,6 +105,8 @@ async def _run() -> None:
         export_service=composition.export_service,
         summary_service=composition.summary_service,
         video_subtitle_export_service=composition.video_subtitle_export_service,
+        healthcheck_service=composition.healthcheck_service,
+        lasterror_service=composition.lasterror_service,
         retention_policy=composition.retention_policy,
         models_dir=settings.models_dir,
     )
@@ -127,6 +129,12 @@ async def _run() -> None:
 
     async def on_status(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await adapter.handle_command_status(chat_id=_cid(update), user_id=_uid(update))
+
+    async def on_healthcheck(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        await adapter.handle_command_healthcheck(chat_id=_cid(update), user_id=_uid(update))
+
+    async def on_lasterror(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        await adapter.handle_command_lasterror(chat_id=_cid(update), user_id=_uid(update))
 
     async def on_queue(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await adapter.handle_command_queue(chat_id=_cid(update), user_id=_uid(update))
@@ -216,6 +224,8 @@ async def _run() -> None:
     application.add_handler(CommandHandler("start", on_start))
     application.add_handler(CommandHandler("help", on_help))
     application.add_handler(CommandHandler("status", on_status))
+    application.add_handler(CommandHandler("healthcheck", on_healthcheck))
+    application.add_handler(CommandHandler("lasterror", on_lasterror))
     application.add_handler(CommandHandler(["queue", "fila"], on_queue))
     application.add_handler(CommandHandler(["clearqueue", "cancelqueue", "limparfila"], on_clearqueue))
     application.add_handler(CommandHandler(["cancelall", "cancelartudo"], on_cancelall))

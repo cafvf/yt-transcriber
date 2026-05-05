@@ -19,6 +19,8 @@ from yt_transcriber_bot.application.ports.transcription_engine import (
     TranscriptionEngine,
 )
 from yt_transcriber_bot.application.ports.youtube_downloader import YouTubeDownloader
+from yt_transcriber_bot.application.services.healthcheck import HealthCheckService
+from yt_transcriber_bot.application.services.last_error import LastErrorService
 from yt_transcriber_bot.application.services.rename_speakers import (
     RenameSpeakersService,
 )
@@ -80,6 +82,8 @@ class Composition:
     export_service: TranscriptExportService
     summary_service: TranscriptSummaryService | None
     video_subtitle_export_service: VideoSoftSubtitleExportService
+    healthcheck_service: HealthCheckService
+    lasterror_service: LastErrorService
     retention_policy: RetentionPolicy
 
 
@@ -245,6 +249,8 @@ def build(settings: AppSettings) -> Composition:
             max_size_bytes=settings.max_video_subtitles_size_mb * 1024 * 1024,
         ),
     )
+    healthcheck_service = HealthCheckService(settings=settings)
+    lasterror_service = LastErrorService(repository=repository, settings=settings)
     retention_policy = RetentionPolicy(
         repository=repository,
         max_volatile_jobs=settings.retention_count,
@@ -260,5 +266,7 @@ def build(settings: AppSettings) -> Composition:
         export_service=export_service,
         summary_service=summary_service,
         video_subtitle_export_service=video_subtitle_export_service,
+        healthcheck_service=healthcheck_service,
+        lasterror_service=lasterror_service,
         retention_policy=retention_policy,
     )

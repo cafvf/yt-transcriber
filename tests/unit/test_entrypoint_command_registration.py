@@ -10,6 +10,8 @@ def test_entrypoint_registers_queue_and_callback_handlers() -> None:
     assert 'CommandHandler(["queue", "fila"], on_queue)' in source
     assert 'CommandHandler(["clearqueue", "cancelqueue", "limparfila"], on_clearqueue)' in source
     assert 'CommandHandler(["cancelall", "cancelartudo"], on_cancelall)' in source
+    assert 'CommandHandler("healthcheck", on_healthcheck)' in source
+    assert 'CommandHandler("lasterror", on_lasterror)' in source
     assert 'CommandHandler("summary", on_summary)' in source
     assert 'CommandHandler("export", on_export)' in source
     assert 'CommandHandler(["json", "srt", "vtt"], on_export_shortcut)' in source
@@ -20,5 +22,7 @@ def test_entrypoint_registers_queue_and_callback_handlers() -> None:
 
 def test_help_text_lists_summary_command() -> None:
     source = Path("src/yt_transcriber_bot/infrastructure/telegram/bot_adapter.py").read_text()
+    assert "• /healthcheck" in source
+    assert "• /lasterror" in source
     assert "• /summary [n]" in source
     assert "gera um resumo estruturado" in source

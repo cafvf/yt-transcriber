@@ -13,6 +13,8 @@ PUBLIC_COMMANDS = [
     "/en",
     "/redo",
     "/status",
+    "/healthcheck",
+    "/lasterror",
     "/queue",
     "/fila",
     "/clearqueue",

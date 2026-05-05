@@ -351,6 +351,8 @@ async def test_help_lists_queue_and_history_commands(
         "/en",
         "/redo",
         "/status",
+        "/healthcheck",
+        "/lasterror",
         "/queue",
         "/fila",
         "/clearqueue",

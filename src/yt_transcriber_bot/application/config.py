@@ -184,6 +184,50 @@ class AppSettings(BaseSettings):
         default=5, ge=1, le=50, description="Limite total de jobs em execução + pendentes"
     )
 
+    # ===== Observabilidade operacional =====
+    healthcheck_lmstudio_timeout_s: float = Field(
+        default=5.0,
+        ge=0.5,
+        le=60.0,
+        description="Timeout curto para /healthcheck consultar o endpoint /models do LM Studio",
+    )
+    healthcheck_min_free_disk_mb: int = Field(
+        default=500,
+        ge=1,
+        le=102400,
+        description="Espaço livre mínimo recomendado em MB para /healthcheck",
+    )
+    lasterror_recent_limit: int = Field(
+        default=50,
+        ge=1,
+        le=500,
+        description="Número de jobs recentes examinados por /lasterror",
+    )
+    lasterror_log_tail_lines: int = Field(
+        default=20,
+        ge=1,
+        le=200,
+        description="Número máximo de linhas do log anexadas ao /lasterror",
+    )
+    lasterror_log_tail_chars: int = Field(
+        default=4000,
+        ge=200,
+        le=20000,
+        description="Número máximo de caracteres do trecho de log anexado ao /lasterror",
+    )
+    lasterror_traceback_tail_lines: int = Field(
+        default=12,
+        ge=1,
+        le=100,
+        description="Número máximo de linhas do traceback operacional anexadas ao /lasterror",
+    )
+    lasterror_traceback_tail_chars: int = Field(
+        default=4000,
+        ge=200,
+        le=20000,
+        description="Número máximo de caracteres do traceback operacional anexado ao /lasterror",
+    )
+
     # ===== Sumarização por LLM local/OpenAI-compatible =====
     summary_backend: str = Field(
         default="openai_compatible",

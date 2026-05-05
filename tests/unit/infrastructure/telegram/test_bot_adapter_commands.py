@@ -10,6 +10,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from yt_transcriber_bot.application.config import AppSettings
+from yt_transcriber_bot.application.services.healthcheck import HealthCheckItem, HealthCheckReport
+from yt_transcriber_bot.application.services.last_error import LastErrorReport
 from yt_transcriber_bot.application.services.rename_speakers import (
     RenameSpeakersService,
 )
@@ -25,6 +27,9 @@ from yt_transcriber_bot.domain.value_objects.video_id import VideoId
 from yt_transcriber_bot.infrastructure.exporting.transcript_exporter import (
     TranscriptExportService,
 )
+from yt_transcriber_bot.infrastructure.exporting.video_subtitles_exporter import (
+    VideoSubtitleExportError,
+)
 from yt_transcriber_bot.infrastructure.persistence.filesystem.transcript_snapshot import (
     TranscriptSnapshot,
     TranscriptSnapshotRepository,
@@ -32,6 +37,9 @@ from yt_transcriber_bot.infrastructure.persistence.filesystem.transcript_snapsho
 from yt_transcriber_bot.infrastructure.rendering.markdown_renderer import (
     MarkdownTranscriptRenderer,
     RenderContext,
+)
+from yt_transcriber_bot.infrastructure.summarization.openai_compatible_client import (
+    ChatCompletionError,
 )
 from yt_transcriber_bot.infrastructure.summarization.transcript_summarizer import SummaryProgress
 from yt_transcriber_bot.infrastructure.telegram.bot_adapter import (
@@ -75,9 +83,12 @@ class FakeSummaryService:
     def __init__(self, output_path: Path) -> None:
         self.output_path = output_path
         self.calls: list[dict[str, object]] = []
+        self.error: BaseException | None = None
 
     def summarize(self, **kwargs: object) -> object:
         self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
         on_progress = kwargs.get("on_progress")
         if callable(on_progress):
             on_progress(
@@ -129,9 +140,12 @@ class FakeVideoSubtitleExportService:
     def __init__(self, output_path: Path) -> None:
         self.output_path = output_path
         self.calls: list[dict[str, object]] = []
+        self.error: BaseException | None = None
 
     def export(self, **kwargs: object) -> object:
         self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
         self.output_path.write_bytes(b"fake-mp4")
         return type(
@@ -144,6 +158,30 @@ class FakeVideoSubtitleExportService:
                 "size_bytes": self.output_path.stat().st_size,
             },
         )()
+
+
+class FakeHealthCheckService:
+    def run(self) -> HealthCheckReport:
+        return HealthCheckReport(
+            (
+                HealthCheckItem("Configuração obrigatória", "ok", "segredos mínimos definidos."),
+                HealthCheckItem("LM Studio", "ok", "modelo disponível."),
+            )
+        )
+
+
+class FakeLastErrorService:
+    def __init__(self) -> None:
+        self.calls: list[int] = []
+        self.recorded: list[dict[str, object]] = []
+
+    def latest_for_user(self, user_id: int) -> LastErrorReport:
+        self.calls.append(user_id)
+        return LastErrorReport(job=None, message="✅ Nenhum erro recente registrado para este usuário.")
+
+    def record_operation_error(self, **kwargs: object) -> object:
+        self.recorded.append(kwargs)
+        return object()
 
 
 class FakeRepo:
@@ -240,6 +278,16 @@ def video_subtitle_service(tmp_path: Path) -> FakeVideoSubtitleExportService:
 
 
 @pytest.fixture
+def healthcheck_service() -> FakeHealthCheckService:
+    return FakeHealthCheckService()
+
+
+@pytest.fixture
+def lasterror_service() -> FakeLastErrorService:
+    return FakeLastErrorService()
+
+
+@pytest.fixture
 async def adapter(
     settings: AppSettings,
     client: FakeBotClient,
@@ -248,6 +296,8 @@ async def adapter(
     export_service: TranscriptExportService,
     summary_service: FakeSummaryService,
     video_subtitle_service: FakeVideoSubtitleExportService,
+    healthcheck_service: FakeHealthCheckService,
+    lasterror_service: FakeLastErrorService,
     tmp_path: Path,
 ) -> TelegramBotAdapter:
     a = TelegramBotAdapter(
@@ -259,6 +309,8 @@ async def adapter(
         export_service=export_service,
         summary_service=summary_service,  # type: ignore[arg-type]
         video_subtitle_export_service=video_subtitle_service,  # type: ignore[arg-type]
+        healthcheck_service=healthcheck_service,  # type: ignore[arg-type]
+        lasterror_service=lasterror_service,  # type: ignore[arg-type]
         models_dir=tmp_path / "models",
     )
     await a.start()
@@ -334,6 +386,49 @@ async def test_list_shows_recent_jobs(
     repo.save(_make_completed_job(42, md, datetime(2026, 5, 1, 12, 0, tzinfo=UTC)))
     await adapter.handle_command_list(chat_id=1, user_id=42)
     assert any("dQw4w9WgXcQ" in t for _, t, *_ in client.sent)
+
+
+# --------------------------------------------------------------------
+# /healthcheck e /lasterror
+# --------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_healthcheck_sends_report(
+    adapter: TelegramBotAdapter, client: FakeBotClient
+) -> None:
+    await adapter.handle_command_healthcheck(chat_id=1, user_id=42)
+
+    assert any("Healthcheck" in text for _, text, *_ in client.sent)
+    assert any("LM Studio" in text for _, text, *_ in client.sent)
+
+
+@pytest.mark.asyncio
+async def test_healthcheck_fallback_text_command(
+    adapter: TelegramBotAdapter, client: FakeBotClient
+) -> None:
+    await adapter.handle_message(chat_id=1, user_id=42, text="/healthcheck")
+
+    assert any("Healthcheck" in text for _, text, *_ in client.sent)
+
+
+@pytest.mark.asyncio
+async def test_lasterror_sends_latest_error_report(
+    adapter: TelegramBotAdapter, client: FakeBotClient, lasterror_service: FakeLastErrorService
+) -> None:
+    await adapter.handle_command_lasterror(chat_id=1, user_id=42)
+
+    assert lasterror_service.calls == [42]
+    assert any("Nenhum erro recente" in text for _, text, *_ in client.sent)
+
+
+@pytest.mark.asyncio
+async def test_lasterror_fallback_text_command(
+    adapter: TelegramBotAdapter, client: FakeBotClient
+) -> None:
+    await adapter.handle_message(chat_id=1, user_id=42, text="/lasterror")
+
+    assert any("Nenhum erro recente" in text for _, text, *_ in client.sent)
 
 
 # --------------------------------------------------------------------
@@ -1054,3 +1149,82 @@ async def test_video_subs_index_selects_penultimate_job(
     await adapter.handle_command_video_subs(chat_id=1, user_id=42, text="/video_subs 2")
 
     assert video_subtitle_service.calls[0]["slug"] == "previous"
+
+
+@pytest.mark.asyncio
+async def test_summary_llm_failure_is_recorded_for_lasterror(
+    adapter: TelegramBotAdapter,
+    client: FakeBotClient,
+    repo: FakeRepo,
+    snapshots: TranscriptSnapshotRepository,
+    summary_service: FakeSummaryService,
+    lasterror_service: FakeLastErrorService,
+    tmp_path: Path,
+) -> None:
+    md = tmp_path / "summary-fails.md"
+    md.write_text("# placeholder")
+    repo.save(_make_completed_job(42, md, datetime(2026, 5, 1, tzinfo=UTC)))
+    _populate_snapshot(snapshots, "summary-fails")
+    summary_service.error = ChatCompletionError("LM Studio recusou conexão")
+
+    await adapter.handle_command_summary(chat_id=1, user_id=42, text="/summary")
+
+    assert any("Falha ao chamar a LLM" in text for _, text, *_ in client.sent)
+    assert lasterror_service.recorded
+    record = lasterror_service.recorded[-1]
+    assert record["user_id"] == 42
+    assert record["operation"] == "summary"
+    assert record["stage"] == "llm"
+    assert record["error"] is not None
+    assert "LM Studio recusou conexão" in str(record["message"])
+    assert record["context"]
+
+
+@pytest.mark.asyncio
+async def test_export_snapshot_failure_is_recorded_for_lasterror(
+    adapter: TelegramBotAdapter,
+    client: FakeBotClient,
+    repo: FakeRepo,
+    lasterror_service: FakeLastErrorService,
+    tmp_path: Path,
+) -> None:
+    md = tmp_path / "missing-snapshot.md"
+    md.write_text("# placeholder")
+    repo.save(_make_completed_job(42, md, datetime(2026, 5, 1, tzinfo=UTC)))
+
+    await adapter.handle_command_export(chat_id=1, user_id=42, text="/export srt")
+
+    assert any("Snapshot dessa transcrição expirou" in text for _, text, *_ in client.sent)
+    assert lasterror_service.recorded
+    record = lasterror_service.recorded[-1]
+    assert record["operation"] == "export"
+    assert record["stage"] == "snapshot"
+    assert record["error"] is not None
+    assert record["context"]
+
+
+@pytest.mark.asyncio
+async def test_video_subs_failure_is_recorded_for_lasterror(
+    adapter: TelegramBotAdapter,
+    client: FakeBotClient,
+    repo: FakeRepo,
+    snapshots: TranscriptSnapshotRepository,
+    video_subtitle_service: FakeVideoSubtitleExportService,
+    lasterror_service: FakeLastErrorService,
+    tmp_path: Path,
+) -> None:
+    md = tmp_path / "video-fails.md"
+    md.write_text("# placeholder")
+    _populate_snapshot(snapshots, "video-fails")
+    repo.save(_make_completed_job(42, md, datetime(2026, 5, 1, tzinfo=UTC)))
+    video_subtitle_service.error = VideoSubtitleExportError("ffmpeg falhou")
+
+    await adapter.handle_command_video_subs(chat_id=1, user_id=42, text="/video_subs")
+
+    assert any("Falha ao gerar vídeo legendado" in text for _, text, *_ in client.sent)
+    assert lasterror_service.recorded
+    record = lasterror_service.recorded[-1]
+    assert record["operation"] == "video_subs"
+    assert record["stage"] == "ffmpeg"
+    assert record["error"] is not None
+    assert "ffmpeg falhou" in str(record["message"])
