@@ -381,3 +381,17 @@ Erros derivados de comandos como `/summary`, `/export`, `/video_subs` e `/clearc
 - (+) `/healthcheck` vira checklist operacional antes de tarefas longas.
 - (−) Falhas catastróficas antes da inicialização completa ainda dependem de logs externos.
 - (−) O arquivo JSONL de erros precisa de política futura de retenção se crescer demais.
+
+
+## ADR-013 — Priorização pós-observabilidade
+
+**Contexto.** Após a estabilização de `/healthcheck` e `/lasterror`, o projeto passou a ter melhor diagnóstico operacional. A discussão de produto indicou que estatísticas operacionais e recuperação avançada após interrupção não são dores imediatas. Por outro lado, busca em transcrições, exportação de texto limpo, entrada por áudio e suporte multilíngue ampliam diretamente a utilidade do bot no fluxo de pesquisa e estudo.
+
+**Decisão.** O roadmap passa a priorizar, nesta ordem: `/search <texto>` com arquitetura preparada para busca semântica, `/text [n]`, upload de áudio pelo Telegram, backend ASR multilíngue, `/translate`, melhorias no `/redo` e, por fim, integração com Obsidian/Notion. `/stats` e recuperação avançada após interrupção deixam a prioridade principal e permanecem apenas como ideias arquivadas/baixa prioridade.
+
+**Consequências.**
+
+- (+) O próximo desenvolvimento foca no reaproveitamento dos artefatos já gerados.
+- (+) A tradução fica dependente de suporte ASR multilíngue mais sólido, reduzindo retrabalho.
+- (+) A integração com Obsidian/Notion será mais rica quando já houver busca, texto limpo, eventual tradução e melhor cobertura de idiomas.
+- (−) Métricas operacionais agregadas e retomada automática de jobs interrompidos não serão tratadas no curto prazo.

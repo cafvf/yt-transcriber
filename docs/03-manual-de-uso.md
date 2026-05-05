@@ -425,6 +425,21 @@ O comando `/help` no Telegram deve listar todos os comandos públicos atuais. A 
 - `/lasterror` — mostra o último erro operacional sanitizado.
 
 
+## Funcionalidades planejadas
+
+A ordem atual de desenvolvimento planejado é:
+
+1. `/search <texto>` para busca textual em transcrições, resumos e metadados, com arquitetura preparada para busca semântica futura.
+2. `/text [n]` para exportação de texto limpo.
+3. Upload de áudio pelo Telegram para transcrição sem YouTube.
+4. Backend alternativo de ASR e suporte multilíngue ampliado.
+5. `/translate` como artefato derivado posterior ao suporte multilíngue.
+6. Melhorias no `/redo`.
+7. Integração com Obsidian/Notion.
+
+`/stats` e recuperação avançada após interrupção não fazem parte da prioridade principal atual.
+
+
 ## Sumarização com LM Studio
 
 O comando `/summary [n]` gera um arquivo Markdown derivado da transcrição já concluída, sem reprocessar áudio, WhisperX ou diarização.
@@ -441,12 +456,15 @@ A integração usa uma API compatível com OpenAI, como o servidor local do LM S
 ```env
 SUMMARY_BACKEND=openai_compatible
 SUMMARY_BASE_URL=http://127.0.0.1:1234/v1
-SUMMARY_MODEL=qwen3.5-9b
+SUMMARY_MODEL=qwen/qwen3.5-9b
 SUMMARY_TEMPERATURE=0.2
-SUMMARY_MAX_TOKENS=1024
-SUMMARY_MAX_CHARS_PER_CHUNK=4000
-SUMMARY_MAX_INPUT_TOKENS=2500
-SUMMARY_CHARS_PER_TOKEN=2.0
+SUMMARY_MAX_INPUT_TOKENS=6000
+SUMMARY_MAX_CHARS_PER_CHUNK=18000
+SUMMARY_CHARS_PER_TOKEN=2.5
+SUMMARY_PARTIAL_MAX_TOKENS=512
+SUMMARY_FINAL_MAX_TOKENS=1024
+SUMMARY_TIMEOUT_S=600
+SUMMARY_TIMEOUT_SPLIT_RETRIES=2
 SUMMARY_OUTPUT_LANGUAGE=auto
 SUMMARY_DISABLE_THINKING=true
 SUMMARY_VALIDATE_MODEL=true
@@ -463,7 +481,7 @@ curl http://127.0.0.1:1234/v1/models
 
 Se o LM Studio responder com um modelo diferente daquele configurado, o bot falha com diagnóstico claro. Isso evita resumos pouco reprodutíveis quando o servidor usa outro modelo carregado. Se você quiser aceitar aliases do servidor, defina `SUMMARY_STRICT_MODEL_MATCH=false`; se quiser pular a validação em `/v1/models`, defina `SUMMARY_VALIDATE_MODEL=false`.
 
-`SUMMARY_DISABLE_THINKING=true` é recomendado para resumos. Nessa configuração, o bot envia uma instrução de resposta direta, inclui `enable_thinking=false` e `chat_template_kwargs={"enable_thinking": false}` no corpo da chamada OpenAI-compatible e remove blocos `<think>...</think>` caso o servidor ainda os retorne.
+`SUMMARY_DISABLE_THINKING=true` é recomendado para resumos. Nessa configuração, o bot envia uma instrução de resposta direta, inclui `enable_thinking=false`, `chat_template_kwargs={"enable_thinking": false}` e `reasoning_effort="none"` no corpo da chamada OpenAI-compatible e remove blocos `<think>...</think>` caso o servidor ainda os retorne.
 
 Se o LM Studio retornar `content=""` e preencher apenas `reasoning_content`, o bot rejeita a resposta e mostra um diagnóstico. Isso indica que o modelo/preset ainda está em modo thinking. Nesse caso, desative **Enable Thinking** no LM Studio ou use um preset non-thinking; o bot não transforma `reasoning_content` em resumo para não expor raciocínio interno nem gerar artefatos incorretos.
 

@@ -334,7 +334,7 @@ OOM, crash do CUDA, timeout, segfault de subprocess. Política descrita em D.3: 
 Rede caiu, Telegram fora do ar, rate limit excedido. Política: **retentativa 5 vezes com backoff exponencial** (1s, 2s, 4s, 8s, 16s); após a última, desiste, marca o job como `delivery_failed` e loga.
 
 ### K.4 Reinício do bot durante processamento
-Política descrita em L.2: jobs em `processing` são marcados como `failed` no startup; o usuário é notificado e o bot oferece reprocessamento.
+Política mínima: jobs em `processing` não devem permanecer indefinidamente como ativos após reinício. Recuperação avançada, retomada seletiva e UX de reprocessamento assistido não fazem parte da prioridade principal atual; se necessárias, devem ser tratadas como evolução futura de baixa prioridade.
 
 ---
 
@@ -353,12 +353,10 @@ Cada job gera um arquivo de log próprio em `logs/<slug-do-titulo>.log`, contend
 
 Um log mínimo `logs/bot.log` adicional captura eventos de ciclo de vida do bot (startup, shutdown, erros gerais). Quando a política FIFO expira um job, o log correspondente é deletado junto.
 
-### L.2 Recuperação de reinício
-No startup, o bot consulta o SQLite por jobs `processing` (que estavam em execução quando o processo morreu):
-- Marca todos como `failed` com mensagem "interrompido por reinício".
-- Limpa os arquivos parciais associados.
-- Envia ao usuário (no chat privado) uma mensagem: "Voltei online. Tinha N jobs em fila e K em processamento (marcados como falhos por interrupção). Reprocessar os falhos? `[Sim]` `[Não]`".
-- Jobs `pending` na fila continuam normalmente.
+### L.2 Reinício e jobs interrompidos
+No startup, o bot deve evitar estados inconsistentes: jobs que estavam em execução antes da queda não podem permanecer indefinidamente como `processing`. A política mínima é marcar esses casos de forma diagnosticável e permitir reprocessamento explícito pelo usuário, quando aplicável.
+
+Recuperação avançada após interrupção — isto é, retomar exatamente do ponto de falha, reaproveitar parcialmente artefatos intermediários ou oferecer UX interativa de retomada — foi removida da prioridade principal atual. O caminho operacional preferido é usar `/healthcheck`, `/lasterror`, logs sanitizados e reprocessamento explícito.
 
 ### L.3 Cache de modelos
 Modelos do Whisper e pyannote são baixados **on-demand** na primeira execução que os requer. Cache em `models/` (configurável). O bot **avisa no chat** quando inicia e quando termina um download de modelo. O comando `/clearcache` apaga todos os modelos baixados.

@@ -702,3 +702,22 @@ A avaliação é **incremental e automatizada**. Em cada gate:
 6. O usuário pode intervir a qualquer momento (pausar, redirecionar, mudar requisitos), mas o fluxo padrão é contínuo, sem necessidade de aprovação manual entre gates.
 
 **Bugs descobertos pelo usuário após o fechamento de um gate** seguem o mesmo protocolo: novo teste de regressão antes da correção; correção entra na suíte permanentemente; Gate Report do gate afetado é atualizado com nota da correção e nova data.
+
+
+---
+
+## Nota pós-observabilidade — Roadmap revisado
+
+Após a implementação de `/healthcheck` e `/lasterror`, o próximo ciclo funcional recomendado é o Gate 8: `/search <texto>` com busca textual em transcrições, resumos e metadados, estruturado para permitir busca semântica futura.
+
+A ordem funcional revisada é:
+
+1. `/search <texto>` + arquitetura para busca semântica.
+2. `/text [n]`.
+3. Upload de áudio pelo Telegram.
+4. Backend alternativo de ASR e suporte multilíngue ampliado.
+5. `/translate`.
+6. Melhorias no `/redo`.
+7. Integração com Obsidian/Notion.
+
+`/stats` e recuperação avançada após interrupção não fazem parte da prioridade principal atual.

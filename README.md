@@ -29,7 +29,7 @@ Toda a documentação detalhada está na pasta [`docs/`](./docs/):
 | [`docs/03-manual-de-uso.md`](./docs/03-manual-de-uso.md) | Comandos atuais do bot, fluxos de uso, sumarização, exportações e troubleshooting. |
 | [`docs/04-manual-de-instalacao.md`](./docs/04-manual-de-instalacao.md) | Instalação em Linux/WSL2, `uv`, dependências de sistema, cookies, pyannote e LM Studio. |
 | [`docs/05-plano-de-execucao.md`](./docs/05-plano-de-execucao.md) | Histórico do plano em gates e critérios de aceitação. |
-| [`docs/06-funcionalidades-futuras.md`](./docs/06-funcionalidades-futuras.md) | Roadmap revisado: busca, upload de áudio, tradução, Obsidian e melhorias futuras. |
+| [`docs/06-funcionalidades-futuras.md`](./docs/06-funcionalidades-futuras.md) | Roadmap revisado: busca textual/semântica, texto limpo, upload de áudio, ASR multilíngue, tradução, `/redo` e Obsidian. |
 | [`docs/07-glossario-e-decisoes.md`](./docs/07-glossario-e-decisoes.md) | Glossário técnico e registros de decisão arquitetural. |
 | [`docs/08-seguranca-e-segredos.md`](./docs/08-seguranca-e-segredos.md) | Política de segredos, `.gitignore`, pre-commit, scanners locais e cuidados operacionais. |
 
@@ -107,8 +107,13 @@ Toda a documentação detalhada está na pasta [`docs/`](./docs/):
 | Sumarização via LM Studio/OpenAI-compatible | Implementada e estabilizada operacionalmente |
 | Segurança local e pre-commit | Implementados |
 | `/healthcheck` e `/lasterror` | Implementados |
-| Busca full-text nas transcrições | Funcionalidade futura priorizada |
+| Busca textual nas transcrições e resumos | Próxima funcionalidade priorizada |
+| Busca semântica | Planejada como evolução arquitetural da busca |
+| Exportação de texto limpo `/text [n]` | Funcionalidade futura priorizada |
 | Transcrição de arquivo de áudio enviado ao Telegram | Funcionalidade futura registrada |
+| Backend ASR multilíngue alternativo | Funcionalidade futura priorizada antes de tradução e Obsidian |
+| Tradução controlada | Funcionalidade futura posterior ao suporte ASR multilíngue |
+| Notas Obsidian/Notion | Funcionalidade futura de menor prioridade relativa |
 
 Limitações atuais importantes:
 
@@ -226,21 +231,35 @@ Nunca publique tokens, cookies, logs completos com segredos, bancos SQLite de pr
 
 **Gate 8 — Busca e recuperação de conhecimento**
 
-A observabilidade operacional (`/healthcheck` e `/lasterror`) está implementada. O próximo incremento recomendado é transformar o histórico local em uma base consultável.
+A observabilidade operacional (`/healthcheck` e `/lasterror`) está implementada. O próximo incremento recomendado é transformar o histórico local em uma base consultável, começando por busca textual e deixando a arquitetura preparada para busca semântica.
 
-Escopo proposto:
+Escopo proposto para o MVP:
 
-- `/search <texto>` para busca full-text em transcrições, resumos e metadados.
+- `/search <texto>` para busca textual em transcrições, resumos e metadados.
 - Indexação de Markdown, summaries, título, canal, URL, `video_id`, idioma e falantes renomeados.
 - Uso de SQLite FTS5 quando disponível, com fallback documentado se o ambiente não suportar FTS5.
 - Atualização automática do índice após nova transcrição, `/rename` e `/summary`.
-- Testes de ranking básico, sanitização e compatibilidade com transcrições antigas.
+- Testes de ranking básico, busca sem resultado, sanitização e compatibilidade com transcrições antigas.
 
-Depois desse gate, as próximas funcionalidades candidatas são:
+Evolução prevista da própria busca:
 
-1. Upload de arquivo de áudio pelo Telegram para transcrição sem YouTube.
-2. Integração com Obsidian/Notion.
-3. Tradução controlada como artefato derivado.
+- `/search semantic <texto>` ou comando equivalente para busca por embeddings locais.
+- `/related [n]` para encontrar transcrições/resumos semanticamente próximos.
+- Separação explícita entre índice textual e índice vetorial, sem substituir a transcrição literal como fonte da verdade.
+
+Roadmap priorizado após o Gate 8:
+
+1. `/text [n]` para exportação de texto limpo.
+2. Upload de arquivo de áudio pelo Telegram para transcrição sem YouTube.
+3. Backend alternativo de ASR e suporte multilíngue ampliado.
+4. `/translate` como artefato derivado posterior ao suporte multilíngue.
+5. Melhorias no `/redo`.
+6. Integração com Obsidian/Notion.
+
+Itens removidos da prioridade principal atual:
+
+- `/stats`, por não ser necessário ao fluxo de uso atual.
+- Recuperação avançada após interrupção, por não justificar complexidade imediata.
 
 ---
 
