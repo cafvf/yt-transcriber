@@ -611,8 +611,9 @@ class DiarizeStep(PipelineStep):
         for seg, label in assigned:
             if not seg.text.strip():
                 continue
-            # TranscriptSegment exige end >= start
             end = max(seg.end_seconds, seg.start_seconds)
+            if end <= seg.start_seconds:
+                continue
             segments.append(
                 TranscriptSegment(
                     start_seconds=seg.start_seconds,

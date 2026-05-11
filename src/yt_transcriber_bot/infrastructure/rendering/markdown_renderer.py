@@ -18,6 +18,7 @@ from datetime import datetime
 from yt_transcriber_bot.domain.entities.transcript import Transcript
 from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
 from yt_transcriber_bot.domain.value_objects.duration import Duration
+from yt_transcriber_bot.infrastructure.text.normalization import normalize_artifact_text
 
 
 @dataclass(frozen=True)
@@ -182,16 +183,21 @@ class MarkdownTranscriptRenderer:
         um único bloco de 10+ minutos quando só há um falante. Aqui usamos os
         segmentos originais para limitar duração/tamanho de cada bloco.
         """
-        if not transcript.segments:
+        valid_segments = tuple(
+            seg
+            for seg in transcript.segments
+            if seg.text.strip() and seg.end_seconds > seg.start_seconds
+        )
+        if not valid_segments:
             return ()
 
         from yt_transcriber_bot.domain.entities.transcript import SpeakerTurn
 
         turns: list[SpeakerTurn] = []
-        current_label = transcript.segments[0].speaker_label
-        current_start = transcript.segments[0].start_seconds
-        current_end = transcript.segments[0].end_seconds
-        current_parts: list[str] = [transcript.segments[0].text]
+        current_label = valid_segments[0].speaker_label
+        current_start = valid_segments[0].start_seconds
+        current_end = valid_segments[0].end_seconds
+        current_parts: list[str] = [valid_segments[0].text]
 
         def flush() -> None:
             nonlocal current_start, current_end, current_label, current_parts
@@ -206,7 +212,7 @@ class MarkdownTranscriptRenderer:
                     )
                 )
 
-        for seg in transcript.segments[1:]:
+        for seg in valid_segments[1:]:
             current_text = self._normalize_text(" ".join(current_parts))
             would_exceed_duration = (seg.end_seconds - current_start) > self.max_block_duration_s
             would_exceed_chars = (len(current_text) + 1 + len(seg.text)) > self.max_block_chars
@@ -237,7 +243,7 @@ class MarkdownTranscriptRenderer:
 
     @staticmethod
     def _normalize_text(text: str) -> str:
-        return re.sub(r"\s+", " ", text).strip()
+        return normalize_artifact_text(text)
 
     def _paragraphize(self, text: str) -> list[str]:
         """Quebra texto em parágrafos curtos por fim de frase."""

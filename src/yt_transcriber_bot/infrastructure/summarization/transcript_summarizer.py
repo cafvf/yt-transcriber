@@ -26,6 +26,7 @@ from yt_transcriber_bot.infrastructure.summarization.openai_compatible_client im
     ChatCompletionRequest,
     ChatCompletionTimeoutError,
 )
+from yt_transcriber_bot.infrastructure.text.normalization import normalize_artifact_text
 
 
 class SummaryError(RuntimeError):
@@ -545,6 +546,8 @@ def _snapshot_to_text(
     turns: list[_SummaryTurn] = []
     previous_text = ""
     for segment in snap.transcript.segments:
+        if segment.end_seconds <= segment.start_seconds:
+            continue
         text = _clean_text(segment.text)
         if not text:
             continue
@@ -602,7 +605,7 @@ def _speaker(segment: TranscriptSegment, aliases: Mapping[str, str]) -> str:
 
 
 def _clean_text(text: str) -> str:
-    return re.sub(r"\s+", " ", text).strip()
+    return normalize_artifact_text(text)
 
 
 _PROMPT_TOKEN_RESERVE = 900

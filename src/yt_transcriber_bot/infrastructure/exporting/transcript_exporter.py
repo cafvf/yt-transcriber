@@ -8,7 +8,6 @@ WhisperX ou diarização.
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +18,7 @@ from yt_transcriber_bot.infrastructure.persistence.filesystem.transcript_snapsho
     TranscriptSnapshot,
     TranscriptSnapshotRepository,
 )
+from yt_transcriber_bot.infrastructure.text.normalization import normalize_artifact_text
 
 ExportFormat = Literal["json", "srt", "vtt"]
 SUPPORTED_EXPORT_FORMATS: tuple[ExportFormat, ...] = ("json", "srt", "vtt")
@@ -81,7 +81,7 @@ def _display_speaker(label: str, aliases: Mapping[str, str]) -> str:
 
 
 def _clean_caption_text(text: str) -> str:
-    return re.sub(r"\s+", " ", text).strip()
+    return normalize_artifact_text(text)
 
 
 def _render_json(snap: TranscriptSnapshot, aliases: Mapping[str, str]) -> str:
@@ -119,7 +119,7 @@ def _render_json(snap: TranscriptSnapshot, aliases: Mapping[str, str]) -> str:
                     "speaker": _display_speaker(seg.speaker_label, aliases),
                     "text": _clean_caption_text(seg.text),
                 }
-                for idx, seg in enumerate(t.segments, start=1)
+                for idx, seg in enumerate(_valid_segments(t.segments), start=1)
             ],
         },
         "render_context": {
@@ -160,7 +160,7 @@ def _render_vtt(snap: TranscriptSnapshot, aliases: Mapping[str, str]) -> str:
 
 def _valid_segments(segments: tuple[TranscriptSegment, ...]) -> tuple[TranscriptSegment, ...]:
     return tuple(
-        seg for seg in segments if seg.text.strip() and seg.end_seconds >= seg.start_seconds
+        seg for seg in segments if seg.text.strip() and seg.end_seconds > seg.start_seconds
     )
 
 

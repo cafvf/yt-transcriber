@@ -404,6 +404,49 @@ Segunda linha
         result = downloader.fetch_subtitle(VideoId(value="dQw4w9WgXcQ"), track)
         assert result.segments[0][2] == "Hello world"
 
+    def test_decodes_html_entities_and_nbsp(self) -> None:
+        vtt = """WEBVTT
+
+00:00:00.000 --> 00:00:02.000
+Ol&aacute;&nbsp;mundo &amp;#39;teste&amp;#39;
+"""
+        downloader = _make(
+            {"title": "x", "uploader": "y", "duration": 10},
+            subtitle_payload=vtt,
+        )
+        track = SubtitleTrack(
+            language=Language.pt(),
+            is_auto_generated=True,
+            is_translated=False,
+            url="https://example.com/x.vtt",
+            ext="vtt",
+        )
+        result = downloader.fetch_subtitle(VideoId(value="dQw4w9WgXcQ"), track)
+        assert result.segments[0][2] == "Olá mundo 'teste'"
+
+    def test_discards_zero_duration_cues(self) -> None:
+        vtt = """WEBVTT
+
+00:00:00.000 --> 00:00:00.000
+Ghost
+
+00:00:00.000 --> 00:00:02.000
+Hello world
+"""
+        downloader = _make(
+            {"title": "x", "uploader": "y", "duration": 10},
+            subtitle_payload=vtt,
+        )
+        track = SubtitleTrack(
+            language=Language.en(),
+            is_auto_generated=True,
+            is_translated=False,
+            url="https://example.com/x.vtt",
+            ext="vtt",
+        )
+        result = downloader.fetch_subtitle(VideoId(value="dQw4w9WgXcQ"), track)
+        assert result.segments == ((0.0, 2.0, "Hello world"),)
+
     def test_empty_payload_returns_no_segments(self) -> None:
         downloader = _make(
             {"title": "x", "uploader": "y", "duration": 10},

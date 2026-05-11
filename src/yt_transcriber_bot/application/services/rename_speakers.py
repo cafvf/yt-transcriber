@@ -74,5 +74,5 @@ class RenameSpeakersService:
             speaker_aliases=effective,
         )
         md_path.parent.mkdir(parents=True, exist_ok=True)
-        md_path.write_text(rendered)
+        md_path.write_text(rendered, encoding="utf-8")
         return RenameResult(md_path=md_path, speakers_renamed=len(effective))

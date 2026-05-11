@@ -32,6 +32,7 @@ from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
 from yt_transcriber_bot.domain.value_objects.duration import Duration
 from yt_transcriber_bot.domain.value_objects.language import Language
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
+from yt_transcriber_bot.infrastructure.text.normalization import normalize_artifact_text
 
 
 class _YDLLike(Protocol):
@@ -665,7 +666,9 @@ def _parse_subtitle(content: str, ext: str) -> tuple[tuple[float, float, str], .
     if current_start is not None and current_end is not None and current_text:
         blocks.append((current_start, current_end, current_text))
 
-    parsed = tuple((s, e, _normalize_subtitle_text(" ".join(t))) for s, e, t in blocks if t)
+    parsed = tuple(
+        (s, e, _normalize_subtitle_text(" ".join(t))) for s, e, t in blocks if t and e > s
+    )
     return _dedupe_subtitle_segments(parsed)
 
 
@@ -674,8 +677,7 @@ def _hms_to_seconds(h: str, m: str, s: str, ms: str) -> float:
 
 
 def _normalize_subtitle_text(text: str) -> str:
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
+    return normalize_artifact_text(text)
 
 
 def _word_key(token: str) -> str:

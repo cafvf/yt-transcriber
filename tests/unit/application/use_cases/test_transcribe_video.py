@@ -498,6 +498,59 @@ class TestYouTubeSubtitles:
         uc.execute(_job())
         assert len(fake_transcription.calls) == 1
 
+    def test_zero_duration_subtitle_segment_does_not_surface_unknown_speaker(
+        self,
+        settings: AppSettings,
+        fake_repo: FakeJobRepository,
+        fake_downloader: FakeYouTubeDownloader,
+        fake_converter: FakeAudioConverter,
+        fake_gpu_cpu: FakeGpuDetector,
+        fake_transcription: FakeTranscriptionEngine,
+        fake_diarization: FakeDiarizationEngine,
+    ) -> None:
+        fake_downloader.subtitles = (
+            SubtitleTrack(
+                language=Language(code="pt"),
+                is_auto_generated=True,
+                is_translated=False,
+                url="http://x/pt-auto.vtt",
+                ext="vtt",
+            ),
+        )
+        fake_downloader.fetched_subtitle = FetchedSubtitle(
+            language=Language(code="pt"),
+            is_auto_generated=True,
+            segments=(
+                (0.0, 0.0, "Fantasma"),
+                (0.0, 3.0, "Olá mundo"),
+            ),
+        )
+        fake_diarization.result = DiarizationResult(
+            speaker_segments=(
+                DiarizedSpeakerSegment(
+                    start_seconds=0.0,
+                    end_seconds=3.0,
+                    speaker_label="SPEAKER_00",
+                ),
+            ),
+            total_speakers=1,
+        )
+        uc = _make_uc(
+            settings,
+            fake_repo=fake_repo,
+            fake_downloader=fake_downloader,
+            fake_converter=fake_converter,
+            fake_gpu_cpu=fake_gpu_cpu,
+            fake_transcription=fake_transcription,
+            fake_diarization=fake_diarization,
+        )
+        result = uc.execute(_job())
+        assert result.job.status == JobStatus.COMPLETED
+        assert result.md_path is not None
+        md = result.md_path.read_text(encoding="utf-8")
+        assert "UNKNOWN" not in md
+        assert "00:00:00 (0.0%)" not in md
+
 
 # ======================================================================
 # Recuperação de OOM (Strategy: cair para modelo menor + CPU)

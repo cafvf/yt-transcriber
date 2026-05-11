@@ -47,14 +47,17 @@ class TranscriptSnapshotRepository:
     def save(self, slug: str, snapshot: TranscriptSnapshot) -> Path:
         self._base_dir.mkdir(parents=True, exist_ok=True)
         path = self.path_for(slug)
-        path.write_text(json.dumps(self._encode(snapshot), ensure_ascii=False, indent=2))
+        path.write_text(
+            json.dumps(self._encode(snapshot), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
         return path
 
     def load(self, slug: str) -> TranscriptSnapshot | None:
         path = self.path_for(slug)
         if not path.is_file():
             return None
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         return self._decode(data)
 
     # ------------------------------------------------------------------

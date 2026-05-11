@@ -159,6 +159,16 @@ class TestTranscript:
         assert totals["S0"].seconds == 15
         assert totals["S1"].seconds == 15
 
+    def test_speaker_speaking_time_ignores_zero_duration_segments(self) -> None:
+        segments = (
+            _seg(0, 0, "UNKNOWN"),
+            _seg(0, 3, "S0"),
+        )
+        t = Transcript(segments=segments, language=Language.en())
+        totals = t.speaker_speaking_time()
+        assert "UNKNOWN" not in totals
+        assert totals["S0"].seconds == 3
+
     def test_turn_duration_property(self) -> None:
         t = Transcript(segments=(_seg(10, 25, "S0"),), language=Language.en())
         turns = t.to_speaker_turns()

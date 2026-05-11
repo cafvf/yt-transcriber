@@ -101,6 +101,54 @@ def test_summary_service_generates_markdown_with_metadata_and_aliases(tmp_path: 
     assert "Apresentador: Olá mundo" in fake.requests[0].user_prompt
 
 
+def test_summary_service_normalizes_entities_and_skips_zero_duration_segments(
+    tmp_path: Path,
+) -> None:
+    repo = TranscriptSnapshotRepository(tmp_path / "segments")
+    repo.save(
+        "video",
+        TranscriptSnapshot(
+            metadata=VideoMetadata(
+                video_id=VideoId("dQw4w9WgXcQ"),
+                title="Vídeo de Teste",
+                channel="Canal",
+                duration=Duration.from_seconds(65),
+                upload_date=date(2026, 5, 1),
+                original_language=Language("pt"),
+            ),
+            transcript=Transcript(
+                segments=(
+                    TranscriptSegment(0, 0, "Ghost", "UNKNOWN"),
+                    TranscriptSegment(0, 3, "Ol&aacute;&nbsp;mundo", "SPEAKER_00"),
+                ),
+                language=Language("pt"),
+                language_confidence=0.95,
+                source="youtube_manual",
+            ),
+            context=RenderContext(
+                rendered_at=datetime(2026, 5, 1, tzinfo=UTC),
+                whisper_model="inesc-id/WhisperLv3-X-PT-All",
+                diarization_model="pyannote/speaker-diarization-community-1",
+                transcription_source="youtube_manual",
+            ),
+        ),
+    )
+    fake = FakeChatClient(["## Resumo executivo\nConteúdo resumido."])
+    service = TranscriptSummaryService(
+        snapshots=repo,
+        chat_client=fake,
+        output_dir=tmp_path / "summaries",
+    )
+
+    service.summarize(slug="video", output_base_path=tmp_path / "video.md")
+
+    prompt = fake.requests[0].user_prompt
+    assert "Olá mundo" in prompt
+    assert "&nbsp;" not in prompt
+    assert "UNKNOWN" not in prompt
+    assert "[00:00:00 — 00:00:00]" not in prompt
+
+
 def test_summary_service_uses_map_reduce_for_long_transcript(tmp_path: Path) -> None:
     repo = _snapshot_repo(tmp_path)
     snap = repo.load("video")

@@ -112,5 +112,7 @@ class Transcript:
         totals: dict[str, float] = {}
         for seg in self.segments:
             duration = seg.end_seconds - seg.start_seconds
+            if duration <= 0:
+                continue
             totals[seg.speaker_label] = totals.get(seg.speaker_label, 0.0) + duration
         return {label: Duration.from_seconds(secs) for label, secs in totals.items()}

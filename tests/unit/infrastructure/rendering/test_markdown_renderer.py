@@ -228,6 +228,32 @@ class TestTurns:
         md = MarkdownTranscriptRenderer().render(_meta(), t, _ctx())
         assert "Nenhum turno de fala disponível" in md
 
+    def test_normalizes_html_entities_and_skips_zero_duration_legacy_segments(self) -> None:
+        t = Transcript(
+            segments=(
+                TranscriptSegment(
+                    start_seconds=0.0,
+                    end_seconds=0.0,
+                    text="Ghost",
+                    speaker_label="UNKNOWN",
+                ),
+                TranscriptSegment(
+                    start_seconds=0.0,
+                    end_seconds=2.0,
+                    text="Ol&aacute;&nbsp;mundo &amp;#39;teste&amp;#39;",
+                    speaker_label="SPEAKER_00",
+                ),
+            ),
+            language=Language(code="pt"),
+            language_confidence=1.0,
+            source="youtube_manual",
+        )
+        md = MarkdownTranscriptRenderer().render(_meta(), t, _ctx())
+        assert "UNKNOWN" not in md
+        assert "00:00:00 (0.0%)" not in md
+        assert "Olá mundo 'teste'" in md
+        assert "&nbsp;" not in md
+
 
 class TestStructuralIntegrity:
     def test_ends_with_newline(self) -> None:
