@@ -155,6 +155,40 @@ async def test_finish_marks_100_percent() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stage_transition_does_not_reset_visible_percent() -> None:
+    editor = FakeEditor()
+    clock = FakeClock()
+    rep = ProgressReporter(editor, clock=clock, min_interval_s=0.0)
+    await rep.set_title("Z")
+    await rep.stage("🎙️ Transcrevendo")
+    await rep.transcription_progress(0.90)
+    await rep.stage("👥 Identificando falantes")
+
+    last = editor.calls[-1]
+    assert "Identificando falantes" in last
+    assert "90%" in last
+    assert " 0%" not in last
+
+
+@pytest.mark.asyncio
+async def test_updates_after_finish_are_ignored() -> None:
+    editor = FakeEditor()
+    clock = FakeClock()
+    rep = ProgressReporter(editor, clock=clock, min_interval_s=0.0)
+    await rep.set_title("Z")
+    await rep.finish("✅ Pronto")
+    finished_text = editor.calls[-1]
+
+    await rep.stage("📥 Atualização atrasada")
+    await rep.transcription_progress(0.10)
+    await rep.diagnostic("diagnóstico atrasado")
+
+    assert editor.calls[-1] == finished_text
+    assert all("Atualização atrasada" not in call for call in editor.calls)
+    assert all("diagnóstico atrasado" not in call for call in editor.calls)
+
+
+@pytest.mark.asyncio
 async def test_diagnostics_are_capped() -> None:
     editor = FakeEditor()
     clock = FakeClock()

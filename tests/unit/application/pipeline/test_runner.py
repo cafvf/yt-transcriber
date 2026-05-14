@@ -96,6 +96,38 @@ class TestPipelineRunner:
         assert any(e[0] == "b" and "pulada" in e[1] for e in events)
         assert any(e[0] == "c" and "concluida" in e[1].lower() for e in events)
 
+    def test_audit_callback_records_step_lifecycle_without_payload_text(self) -> None:
+        events: list[tuple[str, dict[str, object]]] = []
+        runner = PipelineRunner(
+            steps=(_CountingStep("a"), _CountingStep("b", run=False), _CountingStep("c"))
+        )
+        ctx = PipelineContext(job=_make_job())
+
+        runner.run(ctx, audit=lambda event, payload: events.append((event, payload)))
+
+        assert [event for event, _ in events] == [
+            "step_started",
+            "step_completed",
+            "step_skipped",
+            "step_started",
+            "step_completed",
+        ]
+        assert all(payload["job_id"] == "j1" for _, payload in events)
+        assert all("transcript" not in payload for _, payload in events)
+        assert any(payload["step_name"] == "b" for _, payload in events)
+
+    def test_audit_callback_records_step_failure_before_reraising(self) -> None:
+        events: list[tuple[str, dict[str, object]]] = []
+        runner = PipelineRunner(steps=(_CountingStep("a", raise_exc=ValueError("boom")),))
+        ctx = PipelineContext(job=_make_job())
+
+        with pytest.raises(ValueError, match="boom"):
+            runner.run(ctx, audit=lambda event, payload: events.append((event, payload)))
+
+        assert [event for event, _ in events] == ["step_started", "step_failed"]
+        assert events[-1][1]["error_type"] == "ValueError"
+        assert events[-1][1]["error_message"] == "boom"
+
     def test_exception_propagates_and_stops_chain(self) -> None:
         s1 = _CountingStep("a", raise_exc=ValueError("boom"))
         s2 = _CountingStep("b")

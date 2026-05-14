@@ -29,6 +29,7 @@ from yt_transcriber_bot.application.ports.job_repository import JobRepository
 from yt_transcriber_bot.application.services.healthcheck import HealthCheckService
 from yt_transcriber_bot.application.services.last_error import LastErrorService
 from yt_transcriber_bot.application.services.rename_speakers import (
+    RenameResult,
     RenameSpeakersService,
 )
 from yt_transcriber_bot.application.services.retention_policy import (
@@ -52,6 +53,7 @@ from yt_transcriber_bot.infrastructure.exporting.video_subtitles_exporter import
     VideoSubtitleTooLargeError,
     VideoSubtitleTooLongError,
 )
+from yt_transcriber_bot.infrastructure.logging.execution_audit import ExecutionAuditLogger
 from yt_transcriber_bot.infrastructure.summarization.openai_compatible_client import (
     ChatCompletionError,
 )
@@ -187,6 +189,18 @@ class JobPayload:
     cancel_event: threading.Event = field(default_factory=threading.Event)
 
 
+@dataclass
+class RenameSession:
+    """Estado do diálogo de /rename para permitir múltiplos falantes."""
+
+    user_id: int
+    slug: str
+    job_id: str
+    md_path: str | None
+    aliases: dict[str, str] = field(default_factory=dict)
+    selected_label: str | None = None
+
+
 # ----------------------------------------------------------------------
 # Adapter principal
 # ----------------------------------------------------------------------
@@ -210,6 +224,7 @@ class TelegramBotAdapter:
         lasterror_service: LastErrorService | None = None,
         retention_policy: RetentionPolicy | None = None,
         models_dir: Path | None = None,
+        audit_logger: ExecutionAuditLogger | None = None,
     ) -> None:
         self._settings = settings
         self._client = client
@@ -223,11 +238,8 @@ class TelegramBotAdapter:
         self._lasterror_service = lasterror_service
         self._retention_policy = retention_policy
         self._models_dir = models_dir
-        self._pending_rename_user: int | None = None
-        self._pending_rename_slug: str | None = None
-        self._pending_rename_job_id: str | None = None
-        self._pending_rename_md_path: str | None = None
-        self._pending_rename_label: str | None = None
+        self._audit_logger = audit_logger
+        self._rename_session: RenameSession | None = None
         self._queue: SequentialJobQueue[JobPayload] = SequentialJobQueue(self._process_job)
 
     # ------------------------------------------------------------------
@@ -258,7 +270,7 @@ class TelegramBotAdapter:
         if await self._handle_text_command(chat_id=chat_id, user_id=user_id, text=raw_text):
             return
         # Diálogo de rename pendente?
-        if self._pending_rename_user == user_id and self._pending_rename_slug:
+        if self._rename_session is not None and self._rename_session.user_id == user_id:
             await self._handle_rename_input(chat_id, user_id, raw_text)
             return
         url = extract_first_youtube_url(raw_text)
@@ -402,8 +414,24 @@ class TelegramBotAdapter:
             requested_language=requested_language,
         )
         item = await self._queue.enqueue(payload, item_id=str(uuid.uuid4()))
+        self._audit(
+            "job_enqueued",
+            item_id=item.item_id,
+            user_id=user_id,
+            video_id=video_id.value,
+            requested_language=requested_language or "auto",
+            queue_position=item.enqueued_position,
+        )
         if item.enqueued_position > 1:
             await self._send_text(chat_id, f"⏳ Posição na fila: {item.enqueued_position}.")
+
+    def _audit(self, event: str, **fields: object) -> None:
+        if self._audit_logger is None:
+            return
+        try:
+            self._audit_logger.record(event, **fields)
+        except Exception as exc:  # pragma: no cover - caminho defensivo
+            logger.warning("Falha ao registrar auditoria %s: %s", event, exc)
 
     def _is_already_queued(self, video_id: VideoId, requested_language: str | None) -> bool:
         current, pending = self._queue.snapshot()
@@ -566,7 +594,7 @@ class TelegramBotAdapter:
         if not self._is_authorized(user_id):
             return
         # Cancela diálogo de rename, se ativo
-        if self._pending_rename_user == user_id and self._pending_rename_slug:
+        if self._rename_session is not None and self._rename_session.user_id == user_id:
             self._clear_pending_rename()
             await self._send_text(chat_id, "Renomeação cancelada.")
             return
@@ -710,11 +738,13 @@ class TelegramBotAdapter:
         if not speakers:
             await self._send_text(chat_id, "Nenhum falante para renomear.")
             return
-        self._pending_rename_user = user_id
-        self._pending_rename_slug = slug
-        self._pending_rename_job_id = selected.job_id
-        self._pending_rename_md_path = selected.md_path
-        self._pending_rename_label = None
+        self._rename_session = RenameSession(
+            user_id=user_id,
+            slug=slug,
+            job_id=selected.job_id,
+            md_path=selected.md_path,
+            aliases=dict(selected.speaker_renames),
+        )
         keyboard = _rename_keyboard(speakers)
         await self._send_text(
             chat_id,
@@ -734,7 +764,8 @@ class TelegramBotAdapter:
         if not data.startswith("rename:"):
             await self._send_text(chat_id, "Ação não reconhecida.")
             return
-        if self._pending_rename_user != user_id or not self._pending_rename_slug:
+        session = self._rename_session
+        if session is None or session.user_id != user_id:
             await self._send_text(chat_id, "Nenhuma renomeação ativa. Use /rename ou /rename n.")
             return
         action = data.split(":", 2)
@@ -747,7 +778,7 @@ class TelegramBotAdapter:
             await self._send_text(chat_id, "✅ Renomeação concluída.")
             return
         if kind == "merge":
-            self._pending_rename_label = None
+            session.selected_label = None
             await self._send_text(
                 chat_id,
                 "🔗 Para mesclar falantes, envie o mesmo nome para dois ou mais labels.\n"
@@ -756,7 +787,7 @@ class TelegramBotAdapter:
             return
         if kind == "speaker" and len(action) == 3:
             label = action[2]
-            self._pending_rename_label = label
+            session.selected_label = label
             await self._send_text(chat_id, f"Qual nome deseja usar para {label}?")
             return
         await self._send_text(chat_id, "Ação de renomeação inválida.")
@@ -1137,12 +1168,16 @@ class TelegramBotAdapter:
     # ------------------------------------------------------------------
 
     async def _handle_rename_input(self, chat_id: int, user_id: int, text: str) -> None:
-        slug = self._pending_rename_slug
-        assert slug is not None
+        session = self._rename_session
+        assert session is not None
         assert self._rename_service is not None
-        if self._pending_rename_label and "=" not in text:
-            aliases = {self._pending_rename_label: text.strip()} if text.strip() else {}
+        selected_label = session.selected_label
+        aliases: dict[str, str]
+        if selected_label is not None and "=" not in text:
+            is_inline_name = True
+            aliases = {selected_label: text.strip()} if text.strip() else {}
         else:
+            is_inline_name = False
             aliases = _parse_rename_mapping(text)
         if not aliases:
             await self._send_text(
@@ -1151,39 +1186,57 @@ class TelegramBotAdapter:
                 "ou toque em um botão de falante e envie apenas o nome. Use /cancel para abortar.",
             )
             return
-        # Recupera o job e o md_path selecionados no início do diálogo.
-        assert self._repository is not None
-        target = (
-            self._repository.get_by_id(self._pending_rename_job_id)
-            if self._pending_rename_job_id
-            else None
+        merged_aliases = {**session.aliases, **aliases}
+        result = await self._apply_rename_aliases(
+            chat_id=chat_id, session=session, aliases=merged_aliases
         )
-        md_path = self._pending_rename_md_path or (target.md_path if target else None)
-        if target is None or md_path is None:
-            await self._send_text(chat_id, "Job selecionado não encontrado.")
-            self._clear_pending_rename()
+        if result is None:
             return
-        try:
-            result = self._rename_service.rename(slug, aliases, Path(md_path))
-        except FileNotFoundError:
-            await self._send_text(chat_id, "Snapshot expirou. Reprocesse o vídeo.")
-            self._clear_pending_rename()
+        session.aliases = merged_aliases
+        if is_inline_name:
+            changed = ", ".join(f"{label} → {name}" for label, name in aliases.items())
+            session.selected_label = None
+            await self._send_text(
+                chat_id,
+                f"✅ {changed} registrado. Toque em outro falante ou em ✅ Concluir.",
+            )
+            await self._send_document_with_retry(chat_id, result.md_path)
             return
-        # Atualiza speaker_renames no Job para auditoria
-        target.speaker_renames = dict(aliases)
-        self._repository.save(target)
         self._clear_pending_rename()
         await self._send_text(
             chat_id, f"✅ {result.speakers_renamed} falante(s) renomeado(s). Reenviando MD…"
         )
         await self._send_document_with_retry(chat_id, result.md_path)
 
+    async def _apply_rename_aliases(
+        self,
+        *,
+        chat_id: int,
+        session: RenameSession,
+        aliases: dict[str, str],
+    ) -> RenameResult | None:
+        # Recupera o job e o md_path selecionados no início do diálogo.
+        assert self._repository is not None
+        assert self._rename_service is not None
+        target = self._repository.get_by_id(session.job_id)
+        md_path = session.md_path or (target.md_path if target else None)
+        if target is None or md_path is None:
+            await self._send_text(chat_id, "Job selecionado não encontrado.")
+            self._clear_pending_rename()
+            return None
+        try:
+            result = self._rename_service.rename(session.slug, aliases, Path(md_path))
+        except FileNotFoundError:
+            await self._send_text(chat_id, "Snapshot expirou. Reprocesse o vídeo.")
+            self._clear_pending_rename()
+            return None
+        # Atualiza speaker_renames no Job para auditoria
+        target.speaker_renames = dict(aliases)
+        self._repository.save(target)
+        return result
+
     def _clear_pending_rename(self) -> None:
-        self._pending_rename_user = None
-        self._pending_rename_slug = None
-        self._pending_rename_job_id = None
-        self._pending_rename_md_path = None
-        self._pending_rename_label = None
+        self._rename_session = None
 
     @staticmethod
     def _slug_from_md_path(md_path: str | None) -> str | None:
@@ -1240,6 +1293,22 @@ class TelegramBotAdapter:
             user_id=payload.user_id,
             config_signature=self._settings.transcription_signature(),
         )
+        self._audit(
+            "job_started",
+            job_id=job.job_id,
+            video_id=payload.video_id.value,
+            user_id=payload.user_id,
+            requested_language=payload.requested_language or "auto",
+            config_signature=job.config_signature,
+        )
+
+        def audit_cb(event: str, fields: dict[str, object]) -> None:
+            self._audit(
+                event,
+                **fields,
+                user_id=payload.user_id,
+                requested_language=payload.requested_language or "auto",
+            )
 
         try:
             result = await loop.run_in_executor(
@@ -1249,6 +1318,7 @@ class TelegramBotAdapter:
                     progress_step=progress_step_cb,
                     progress_transcribe=progress_transcribe_cb,
                     progress_diarize=progress_diarize_cb,
+                    audit=audit_cb,
                     cancel_event=payload.cancel_event,
                     requested_language=payload.requested_language,
                 ),
@@ -1267,18 +1337,49 @@ class TelegramBotAdapter:
                 error=exc,
                 stage="pipeline",
             )
+            self._audit(
+                "job_failed",
+                job_id=job.job_id,
+                video_id=payload.video_id.value,
+                user_id=payload.user_id,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            )
             await progress.finish(f"❌ Erro inesperado: {exc}")
             return
 
         if result.canceled:
+            self._audit(
+                "job_canceled",
+                job_id=result.job.job_id,
+                video_id=payload.video_id.value,
+                user_id=payload.user_id,
+            )
             await progress.finish("🛑 Cancelado pelo usuário.")
             await self._send_text(payload.chat_id, "✅ Job cancelado com sucesso.")
             return
         if result.failure_reason is not None:
+            self._audit(
+                "job_failed",
+                job_id=result.job.job_id,
+                video_id=payload.video_id.value,
+                user_id=payload.user_id,
+                error_message=result.failure_reason,
+            )
             await progress.finish(f"⚠️ Falhou: {result.failure_reason}")
             return
 
         # Sucesso: envia áudio + markdown com retry.
+        self._audit(
+            "job_completed",
+            job_id=result.job.job_id,
+            video_id=payload.video_id.value,
+            user_id=payload.user_id,
+            language_code=result.language_code,
+            language_source=result.language_source,
+            has_audio=result.audio_path is not None,
+            has_markdown=result.md_path is not None,
+        )
         await progress.finish(f"✅ Pronto. Enviando arquivos…\n{_format_language_status(result)}")
         if result.audio_path is not None:
             await self._send_audio_with_retry(payload.chat_id, result.audio_path)

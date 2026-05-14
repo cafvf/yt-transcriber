@@ -15,6 +15,10 @@ Este projeto manipula credenciais e dados locais sensíveis, incluindo token do 
 
 O `.gitignore` do projeto já bloqueia esses caminhos.
 
+## Logs de auditoria locais
+
+Jobs de transcrição gravam eventos estruturados em `data/logs/execution_audit.jsonl` para permitir auditoria de fila, etapas e resultado sem misturar ruído de polling do Telegram. O arquivo é local e ignorado pelo Git. Os eventos devem manter apenas metadados operacionais sanitizados: tokens, cookies, cabeçalhos `Authorization`, corpo de transcrição e payload completo de chat são mascarados ou omitidos.
+
 ## Arquivo de exemplo
 
 Use `.env.example` como modelo seguro:

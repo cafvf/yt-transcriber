@@ -42,6 +42,7 @@ from yt_transcriber_bot.infrastructure.exporting.video_subtitles_exporter import
     VideoSoftSubtitleExportService,
     VideoSubtitleExportLimits,
 )
+from yt_transcriber_bot.infrastructure.logging.execution_audit import ExecutionAuditLogger
 from yt_transcriber_bot.infrastructure.persistence.filesystem.local_file_storage import (
     LocalFileStorage,
 )
@@ -85,6 +86,7 @@ class Composition:
     healthcheck_service: HealthCheckService
     lasterror_service: LastErrorService
     retention_policy: RetentionPolicy
+    audit_logger: ExecutionAuditLogger
 
 
 def _make_gpu_detector() -> GpuDetector:
@@ -251,6 +253,7 @@ def build(settings: AppSettings) -> Composition:
     )
     healthcheck_service = HealthCheckService(settings=settings)
     lasterror_service = LastErrorService(repository=repository, settings=settings)
+    audit_logger = ExecutionAuditLogger(settings.logs_dir() / "execution_audit.jsonl")
     retention_policy = RetentionPolicy(
         repository=repository,
         max_volatile_jobs=settings.retention_count,
@@ -269,4 +272,5 @@ def build(settings: AppSettings) -> Composition:
         healthcheck_service=healthcheck_service,
         lasterror_service=lasterror_service,
         retention_policy=retention_policy,
+        audit_logger=audit_logger,
     )

@@ -15,6 +15,7 @@ from pathlib import Path
 from yt_transcriber_bot.application.config import AppSettings
 from yt_transcriber_bot.application.pipeline.context import PipelineContext
 from yt_transcriber_bot.application.pipeline.runner import (
+    AuditFn,
     PipelineCanceledError,
     PipelineRunner,
 )
@@ -90,6 +91,7 @@ class TranscribeVideoUseCase:
         progress_step: Callable[[str, str], None] | None = None,
         progress_transcribe: Callable[[float, str], None] | None = None,
         progress_diarize: Callable[[float, str], None] | None = None,
+        audit: AuditFn | None = None,
         cancel_event: threading.Event | None = None,
         requested_language: str | None = None,
     ) -> TranscribeVideoResult:
@@ -125,7 +127,7 @@ class TranscribeVideoUseCase:
         deps.repository.save(job)
 
         try:
-            runner.run(ctx, progress=progress_step)
+            runner.run(ctx, progress=progress_step, audit=audit)
         except PipelineCanceledError:
             job.transition_to(JobStatus.CANCELLED, error="cancelado pelo usuario")
             deps.repository.save(job)

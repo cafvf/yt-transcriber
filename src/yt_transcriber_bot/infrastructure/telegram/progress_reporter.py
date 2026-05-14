@@ -36,6 +36,7 @@ class ProgressState:
     last_emitted_text: str = ""
     last_emitted_at: float = 0.0
     next_milestone_idx: int = 0
+    terminal: bool = False
     diagnostics: list[str] = field(default_factory=list)
 
 
@@ -59,22 +60,28 @@ class ProgressReporter:
     # ------------------------------------------------------------------
 
     async def set_title(self, title: str) -> None:
+        if self._state.terminal:
+            return
         self._state.title = title
         await self._render(force=True)
 
     async def stage(self, stage_text: str) -> None:
+        if self._state.terminal:
+            return
         self._state.stage = stage_text
-        self._state.transcription_percent = 0
-        self._state.next_milestone_idx = 0
         await self._render(force=True)
 
     async def fixed_progress(self, fraction: float) -> None:
+        if self._state.terminal:
+            return
         # Emite uma mensagem para CADA marco cruzado nesta chamada.
         while self._state.next_milestone_idx < len(FIXED_MILESTONES):
             next_target = FIXED_MILESTONES[self._state.next_milestone_idx]
             if fraction + 1e-9 < next_target:
                 break
-            self._state.transcription_percent = round(next_target * 100)
+            self._state.transcription_percent = max(
+                self._state.transcription_percent, round(next_target * 100)
+            )
             self._state.next_milestone_idx += 1
             await self._render(force=True)
 
@@ -83,6 +90,8 @@ class ProgressReporter:
         await self.fixed_progress(fraction)
 
     async def diagnostic(self, message: str) -> None:
+        if self._state.terminal:
+            return
         self._state.diagnostics.append(message)
         # Mantém só os 3 últimos diagnósticos no painel.
         self._state.diagnostics = self._state.diagnostics[-3:]
@@ -91,6 +100,8 @@ class ProgressReporter:
     async def finish(self, summary: str) -> None:
         self._state.stage = summary
         self._state.transcription_percent = 100
+        self._state.next_milestone_idx = len(FIXED_MILESTONES)
+        self._state.terminal = True
         await self._render(force=True)
 
     # ------------------------------------------------------------------

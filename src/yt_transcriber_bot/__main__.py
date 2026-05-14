@@ -36,6 +36,16 @@ def _configure_logging(logs_dir: Path) -> None:
     root = logging.getLogger()
     root.setLevel(logging.INFO)
     root.handlers = [handler_file, handler_console]
+    for noisy_logger in (
+        "httpx",
+        "httpcore",
+        "telegram",
+        "telegram.ext",
+        "telegram.request",
+        "apscheduler",
+        "urllib3",
+    ):
+        logging.getLogger(noisy_logger).setLevel(logging.WARNING)
 
 
 def _missing_runtime_ml_dependencies() -> list[str]:
@@ -108,6 +118,7 @@ async def _run() -> None:
         lasterror_service=composition.lasterror_service,
         retention_policy=composition.retention_policy,
         models_dir=settings.models_dir,
+        audit_logger=composition.audit_logger,
     )
 
     def _uid(update: Update) -> int:

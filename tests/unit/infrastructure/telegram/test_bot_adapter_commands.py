@@ -884,6 +884,61 @@ async def test_inline_button_rename_single_speaker(
 
 
 @pytest.mark.asyncio
+async def test_inline_button_rename_multiple_speakers_keeps_dialog_open(
+    adapter: TelegramBotAdapter,
+    client: FakeBotClient,
+    repo: FakeRepo,
+    snapshots: TranscriptSnapshotRepository,
+    tmp_path: Path,
+) -> None:
+    md = tmp_path / "inline-multi.md"
+    md.write_text("# placeholder")
+    repo.save(_make_completed_job(42, md, datetime(2026, 5, 1, tzinfo=UTC)))
+    _populate_snapshot(snapshots, "inline-multi")
+
+    await adapter.handle_command_rename(chat_id=1, user_id=42)
+    await adapter.handle_callback_query(chat_id=1, user_id=42, data="rename:speaker:SPEAKER_00")
+    await adapter.handle_message(chat_id=1, user_id=42, text="João")
+    await adapter.handle_callback_query(chat_id=1, user_id=42, data="rename:speaker:SPEAKER_01")
+    await adapter.handle_message(chat_id=1, user_id=42, text="Maria")
+
+    assert md in client.docs
+    content = md.read_text()
+    assert "João" in content
+    assert "Maria" in content
+    saved = repo.jobs[-1]
+    assert saved.speaker_renames == {"SPEAKER_00": "João", "SPEAKER_01": "Maria"}
+
+
+@pytest.mark.asyncio
+async def test_inline_button_rename_can_merge_multiple_speakers_by_same_name(
+    adapter: TelegramBotAdapter,
+    client: FakeBotClient,
+    repo: FakeRepo,
+    snapshots: TranscriptSnapshotRepository,
+    tmp_path: Path,
+) -> None:
+    md = tmp_path / "inline-merge-two.md"
+    md.write_text("# placeholder")
+    repo.save(_make_completed_job(42, md, datetime(2026, 5, 1, tzinfo=UTC)))
+    _populate_snapshot(snapshots, "inline-merge-two")
+
+    await adapter.handle_command_rename(chat_id=1, user_id=42)
+    await adapter.handle_callback_query(chat_id=1, user_id=42, data="rename:speaker:SPEAKER_00")
+    await adapter.handle_message(chat_id=1, user_id=42, text="Maria")
+    await adapter.handle_callback_query(chat_id=1, user_id=42, data="rename:speaker:SPEAKER_01")
+    await adapter.handle_message(chat_id=1, user_id=42, text="Maria")
+
+    content = md.read_text()
+    assert content.count("**Maria**") == 1
+    assert "### [00:00:00 — 00:00:06] Maria" in content
+    assert "Olá" in content
+    assert "Tudo bem?" in content
+    saved = repo.jobs[-1]
+    assert saved.speaker_renames == {"SPEAKER_00": "Maria", "SPEAKER_01": "Maria"}
+
+
+@pytest.mark.asyncio
 async def test_inline_merge_button_guides_user(
     adapter: TelegramBotAdapter,
     client: FakeBotClient,

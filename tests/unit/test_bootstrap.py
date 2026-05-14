@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import yt_transcriber_bot
@@ -19,6 +20,12 @@ def test_package_imports_and_exposes_version() -> None:
     assert len(parts) == 3
     for part in parts:
         assert part.isdigit()
+
+
+def test_package_version_matches_project_metadata() -> None:
+    """Package metadata and importable version stay in sync."""
+    metadata = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    assert yt_transcriber_bot.__version__ == metadata["project"]["version"]
 
 
 def test_main_function_returns_zero() -> None:

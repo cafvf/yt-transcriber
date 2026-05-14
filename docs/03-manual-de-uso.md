@@ -38,7 +38,7 @@ Mostra o job em processamento e os links pendentes na fila. Se não houver nada 
 
 ### `/cancel`
 - Durante processamento: sinaliza cancelamento do job em curso.
-- Durante diálogo de `/rename`: aborta o diálogo sem aplicar mudanças.
+- Durante diálogo de `/rename`: encerra a sessão; renomes válidos já aplicados permanecem no Markdown e no histórico.
 - Sem nada em andamento: responde `Nada para cancelar.`
 
 ### `/list`
@@ -126,7 +126,7 @@ Comportamento atual:
 A confirmação inline com diff de configuração permanece como melhoria futura.
 
 ### `/rename [n]`
-Inicia o diálogo para renomear falantes da n-ésima transcrição concluída, usando a numeração mostrada por `/list`. Sem índice, usa a transcrição mais recente. O bot mostra botões inline para cada falante e também aceita um mapeamento textual em lote:
+Inicia o diálogo para renomear falantes da n-ésima transcrição concluída, usando a numeração mostrada por `/list`. Sem índice, usa a transcrição mais recente. O bot mostra botões inline para cada falante; toque em um falante, envie o nome, repita para outros falantes se necessário e finalize em **Concluir**. Também aceita um mapeamento textual em lote:
 
 ```text
 SPEAKER_00=João, SPEAKER_01=Maria
@@ -139,7 +139,7 @@ SPEAKER_00=João
 SPEAKER_01=Maria
 ```
 
-Ao receber um mapeamento válido, o bot carrega o snapshot JSON da última transcrição, re-renderiza o Markdown com os nomes informados, atualiza o job para auditoria e reenvia o arquivo `.md`.
+Ao receber um mapeamento válido ou uma sequência de nomes pelos botões, o bot carrega o snapshot JSON da transcrição escolhida, re-renderiza o Markdown com os nomes informados, atualiza o job para auditoria e reenvia o arquivo `.md`. Use `/cancel` durante o diálogo para abortar a renomeação em andamento.
 
 Se a diarização separou a mesma pessoa em mais de um label, use o **mesmo nome** para mesclar os falantes na versão final do Markdown:
 
@@ -186,6 +186,8 @@ O comando consulta:
 
 - jobs de transcrição marcados como `failed`;
 - erros derivados registrados em `data/logs/operational_errors.jsonl`, como falhas de `/summary`, exportações, geração de vídeo legendado, limpeza de cache e exceções defensivas do pipeline.
+
+Além do log de erros, cada execução grava eventos estruturados em `data/logs/execution_audit.jsonl` para auditoria local de fila, início/fim de job e etapas do pipeline. Esse arquivo não registra polling `getUpdates`, corpo da transcrição, payload completo de chat, tokens, cookies ou cabeçalhos `Authorization`.
 
 A resposta pode incluir operação, etapa, severidade, classe da exceção, mensagem sanitizada, contexto, traceback final sanitizado e sugestões de verificação. Segredos, tokens, cookies e cabeçalhos `Authorization` são mascarados.
 

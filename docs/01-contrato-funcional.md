@@ -225,7 +225,7 @@ Jobs que falharam (status `failed` ou `cancelled`) **não contam** para o limite
 
 ### H.5 Operação em vídeos legados
 Após a expiração FIFO, o `.md` permanece, mas os áudios não. Operações possíveis:
-- `/rename` em vídeo legado: permitido, com aviso "Áudio deste vídeo expirou — você só verá os labels e seus tempos de fala". O reenvio final inclui apenas o `.md`.
+- `/rename` em vídeo legado: permitido enquanto o snapshot JSON da transcrição existir; se o snapshot expirou, o bot solicita reprocessamento. Durante rename, o bot reenvia apenas o `.md` atualizado, nunca o áudio.
 - `/redo` em vídeo legado: rebaixa o áudio do zero, regerando todos os artefatos.
 
 ---
@@ -276,7 +276,7 @@ A entrega é **estritamente** o `.md` + o `.ogg` (e/ou múltiplos `.ogg` partici
 | `/list` | Lista os últimos N jobs com `video_id`, título e status (artefatos disponíveis ou expirados). |
 | `/redo <link>` | Solicita reprocessamento imediato de um link como novo job. Confirmação com diff de configuração permanece como evolução futura. |
 | `/cancel` | Cancela o job em andamento ou interrompe um diálogo de `/rename`. |
-| `/rename` | Inicia diálogo interativo para renomear os falantes do último vídeo processado. |
+| `/rename [n]` | Abre botões e entrada em lote para renomear ou mesclar falantes da transcrição concluída mais recente (`n=1`) ou de uma entrada anterior do histórico. |
 | `/clearcache` | Apaga os modelos do Whisper/pyannote baixados, liberando disco. |
 | `/clearqueue` | Esvazia a fila pendente, sem cancelar o job em andamento. |
 | `/lasterror` | Mostra o stack trace técnico do último erro ocorrido. |
@@ -286,20 +286,21 @@ Na versão atual, `/redo <link>` executa imediatamente como novo job. A confirma
 
 ### J.3 `/cancel` — escopo
 - Durante **processamento** (download, conversão, transcrição, diarização): aborta o subprocess apropriado, limpa arquivos parciais, marca job como `cancelled`.
-- Durante **diálogo de `/rename`**: aborta o diálogo, sem alterar o `.md` original.
+- Durante **diálogo de `/rename`**: encerra o diálogo e descarta apenas alterações ainda não enviadas; renomes válidos já aplicados permanecem no `.md`.
 - **Sem nada em andamento**: responde "Nada a cancelar".
 - Cancela apenas o job atual; para limpar a fila inteira existe `/clearqueue`.
 
 ### J.4 `/rename` — fluxo interativo
-1. Usuário envia `/rename` (sem argumentos) → o bot opera sobre o último vídeo processado.
-2. Se o áudio do vídeo expirou (vídeo legado), o bot avisa e pede confirmação para prosseguir sem áudio.
-3. O bot inicia um diálogo: "Vídeo *<título>*. Renomear `SPEAKER_00` (apareceu primeiro, X% do tempo) para? (envie o nome ou /skip)" — repete para cada `SPEAKER_XX`.
-4. Ao final, regenera o `.md` substituindo todos os labels pelas novas atribuições.
-5. Se dois ou mais labels receberem o mesmo nome, o renderer trata isso como **mesclagem manual de falantes**: agrega o tempo no resumo da diarização e une blocos consecutivos no Markdown quando o nome exibido for o mesmo.
-6. Atualiza o registro em `speakers` no SQLite.
-7. Reenvia o `.md` (e o `.ogg`, se ainda existir).
+1. Usuário envia `/rename` ou `/rename n` → o bot opera sobre a transcrição concluída mais recente (`n=1`) ou sobre a enésima entrada do histórico, seguindo a mesma ordem de `/last n`.
+2. Se o snapshot da transcrição expirou, o bot avisa que é necessário reprocessar o vídeo.
+3. O bot abre um diálogo com botões inline para cada `SPEAKER_XX`, um botão de mesclagem e um botão `Concluir`, além de mostrar os falantes detectados.
+4. O usuário pode tocar em um falante e enviar apenas o novo nome, ou enviar uma atribuição em lote no formato `SPEAKER_00=João, SPEAKER_01=Maria`.
+5. A cada alteração válida, o bot regenera o `.md` substituindo todos os labels pelas atribuições acumuladas e reenvia o Markdown atualizado.
+6. Se dois ou mais labels receberem o mesmo nome, o renderer trata isso como **mesclagem manual de falantes**: agrega o tempo no resumo da diarização e une blocos consecutivos no Markdown quando o nome exibido for o mesmo.
+7. Atualiza o registro em `speakers` no SQLite a cada alteração válida e mantém as atribuições acumuladas até `✅ Concluir` ou `/cancel`.
+8. O áudio `.ogg` não é reenviado durante o diálogo de rename; use `/last n` para reenviar os artefatos disponíveis.
 
-`/cancel` durante o diálogo cancela sem aplicar.
+`/cancel` durante o diálogo encerra a sessão de rename; não desfaz renomes já aplicados e reenviados.
 
 ### J.5 Reprocessamento por link repetido
 Quando o usuário envia um link cujo `video_id` já existe no banco:
@@ -444,11 +445,11 @@ Para auditoria, abaixo o mapeamento entre cada dúvida original e a seção que 
 | 7 | Stack, padrões, TDD, Python, uv, gates | M, [02-arquitetura.md] |
 | 8 | Forma de validação E2E | N |
 | 9 | Limitações do sandbox | N.2 |
-| 10 | `/rename` interativo via comando, não automático | J.4 |
+| 10 | `/rename` interativo via comando, botões e entrada em lote, não automático | J.4 |
 | 11 | Erros: YT bloqueio, transcrição, Telegram | K |
 | 12 | Auto-dub: faixa original + legendas existentes | B.2, B.3 |
 | 13 | Bot-detection no sandbox: usar mocks/clipe | N.2 |
-| 14 | `/rename` simples sem args, último MD | J.4 |
+| 14 | `/rename` sem args usa a transcrição mais recente; `/rename n` usa histórico | J.4 |
 | 15 | Hierarquia de legendas: manual > auto > traduzida | B.3 |
 | 16 | Legendas só no idioma original | B.3 |
 | 17 | Rejeição de música/idioma fora | B.5 |
@@ -463,7 +464,7 @@ Para auditoria, abaixo o mapeamento entre cada dúvida original e a seção que 
 | 26 | Validação ffmpeg | L.4 |
 | 27 | Cookies (browser ou file) | B.6 |
 | 28 | MDs sem limite, FIFO só nos demais | H.2 |
-| 29 | Rename em legado: permitido com aviso | H.5 |
+| 29 | Rename em legado: permitido enquanto houver snapshot; sem reenvio de áudio | H.5 |
 | 30 | Sem hint de speakers; mitigar por nomes iguais | E.2 |
 | 31 | Legenda traduzida = inválida | B.3 |
 | 32 | Sem PDF, sem resumo no chat | I.5 |
@@ -483,5 +484,5 @@ Para auditoria, abaixo o mapeamento entre cada dúvida original e a seção que 
 | 46 | Algoritmo de auto-detect de GPU | D.2 |
 | 47 | E2E parcial no sandbox; final com o usuário | N.2 |
 | 48 | Limite hard 3h | B.4 |
-| 49 | `/rename` em legado: confirmação e reenvio só do MD | H.5, J.4 |
+| 49 | `/rename` em legado com snapshot reenvia só o MD; snapshot ausente exige reprocessamento | H.5, J.4 |
 | 50 | `/redo` pede confirmação com diff | J.2 |

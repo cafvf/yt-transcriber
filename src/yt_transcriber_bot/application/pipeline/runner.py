@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Sequence
 
@@ -39,6 +40,9 @@ class PipelineStep(ABC):
 ProgressFn = Callable[[str, str], None]
 """``(step_name, message)`` para feedback ao usuário."""
 
+AuditFn = Callable[[str, dict[str, object]], None]
+"""``(event_name, payload)`` para trilha local de auditoria estruturada."""
+
 
 class PipelineRunner:
     """Executa os steps em ordem, gerencia cancelamento e progresso."""
@@ -60,6 +64,7 @@ class PipelineRunner:
         self,
         ctx: PipelineContext,
         progress: ProgressFn | None = None,
+        audit: AuditFn | None = None,
     ) -> PipelineContext:
         for step in self._steps:
             self._check_canceled()
@@ -67,12 +72,34 @@ class PipelineRunner:
                 ctx.add_diagnostic(f"step {step.name} skipped")
                 if progress:
                     progress(step.name, "Etapa pulada (não aplicável).")
+                _audit_step(audit, "step_skipped", ctx, step.name)
                 continue
             if progress:
                 progress(step.name, f"Iniciando {step.name}...")
             logger.info("step %s starting", step.name)
-            step.execute(ctx)
+            started = time.perf_counter()
+            _audit_step(audit, "step_started", ctx, step.name)
+            try:
+                step.execute(ctx)
+            except Exception as exc:
+                _audit_step(
+                    audit,
+                    "step_failed",
+                    ctx,
+                    step.name,
+                    duration_ms=_elapsed_ms(started),
+                    error_type=type(exc).__name__,
+                    error_message=str(exc),
+                )
+                raise
             logger.info("step %s done", step.name)
+            _audit_step(
+                audit,
+                "step_completed",
+                ctx,
+                step.name,
+                duration_ms=_elapsed_ms(started),
+            )
             if progress:
                 progress(step.name, f"{step.name} concluida.")
         return ctx
@@ -80,3 +107,26 @@ class PipelineRunner:
     def _check_canceled(self) -> None:
         if self._cancel_event.is_set():
             raise PipelineCanceledError("Pipeline cancelado pelo usuario")
+
+
+def _elapsed_ms(started: float) -> int:
+    return round((time.perf_counter() - started) * 1000)
+
+
+def _audit_step(
+    audit: AuditFn | None,
+    event: str,
+    ctx: PipelineContext,
+    step_name: str,
+    **extra: object,
+) -> None:
+    if audit is None:
+        return
+    payload: dict[str, object] = {
+        "job_id": ctx.job.job_id,
+        "video_id": ctx.job.video_id.value,
+        "step_name": step_name,
+        "job_status": ctx.job.status.value,
+    }
+    payload.update(extra)
+    audit(event, payload)

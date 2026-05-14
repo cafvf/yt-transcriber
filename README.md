@@ -59,8 +59,9 @@ Toda a documentação detalhada está na pasta [`docs/`](./docs/):
 
 ### Revisão de falantes
 
-- `/rename [n]` abre botões inline para renomear falantes.
+- `/rename [n]` abre botões inline para renomear um ou vários falantes em sequência.
 - O mesmo nome pode ser atribuído a múltiplos `SPEAKER_XX` para mesclar falantes.
+- Também aceita mapeamento em lote (`SPEAKER_00=João, SPEAKER_01=Maria`).
 - O Markdown é re-renderizado e blocos consecutivos do mesmo nome exibido são unidos.
 
 ### Exportações
@@ -89,6 +90,7 @@ Toda a documentação detalhada está na pasta [`docs/`](./docs/):
 - `/healthcheck` executa um diagnóstico consolidado do ambiente, incluindo configuração obrigatória, `.env` efetivo, `ffmpeg`/`ffprobe`, `yt-dlp`, módulos Python essenciais, diretórios graváveis, SQLite, espaço em disco, cookies do YouTube, LM Studio e presença de `SUMMARY_MODEL` em `/v1/models`.
 - `/lasterror` exibe o último erro operacional sanitizado, cobrindo jobs de transcrição falhos e falhas derivadas de `/summary`, exportações, vídeo com legenda, limpeza de cache, `/clearcache` e exceções defensivas no pipeline.
 - Erros operacionais derivados são registrados em `data/logs/operational_errors.jsonl` com operação, etapa, severidade, classe da exceção, contexto, traceback final sanitizado e sugestões de verificação quando disponíveis.
+- A execução de jobs também gera auditoria estruturada em `data/logs/execution_audit.jsonl`, com eventos de fila/job/etapa e sem corpo de transcrição, payload de chat, tokens, cookies ou ruído de polling do Telegram.
 
 ---
 
