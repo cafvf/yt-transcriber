@@ -691,8 +691,9 @@ class TelegramBotAdapter:
             "Últimas transcrições concluídas:",
             "Use /last n para reenviar ou /rename n para renomear falantes.",
         ]
+        prefetched_titles = self._history_titles_for(jobs)
         for idx, job in enumerate(jobs, start=1):
-            lines.append(f"{idx}. {self._format_history_job(job)}")
+            lines.append(f"{idx}. {self._format_history_job(job, prefetched_titles)}")
         await self._send_text(chat_id, "\n".join(lines))
 
     async def handle_command_last(self, *, chat_id: int, user_id: int, text: str = "") -> None:
@@ -1244,10 +1245,32 @@ class TelegramBotAdapter:
             return None
         return Path(md_path).stem
 
-    def _format_history_job(self, job: Job) -> str:
+    def _history_titles_for(self, jobs: list[Job]) -> dict[str, str]:
+        if self._rename_service is None:
+            return {}
+        slugs = tuple(
+            slug
+            for slug in (self._slug_from_md_path(job.md_path) for job in jobs)
+            if slug is not None
+        )
+        if not slugs:
+            return {}
+        metadata_for_many = getattr(self._rename_service, "metadata_for_many", None)
+        if callable(metadata_for_many):
+            return {slug: metadata.title for slug, metadata in metadata_for_many(slugs).items()}
+        titles: dict[str, str] = {}
+        for slug in slugs:
+            metadata = self._rename_service.metadata_for(slug)
+            if metadata is not None:
+                titles[slug] = metadata.title
+        return titles
+
+    def _format_history_job(self, job: Job, prefetched_titles: dict[str, str] | None = None) -> str:
         slug = self._slug_from_md_path(job.md_path)
         title: str | None = None
-        if slug is not None and self._rename_service is not None:
+        if slug is not None and prefetched_titles is not None:
+            title = prefetched_titles.get(slug)
+        elif slug is not None and self._rename_service is not None:
             metadata = self._rename_service.metadata_for(slug)
             if metadata is not None:
                 title = metadata.title

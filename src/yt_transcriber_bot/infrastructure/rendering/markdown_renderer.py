@@ -15,7 +15,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 
-from yt_transcriber_bot.domain.entities.transcript import Transcript
+from yt_transcriber_bot.domain.entities.transcript import SpeakerTurn, Transcript
 from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
 from yt_transcriber_bot.domain.value_objects.duration import Duration
 from yt_transcriber_bot.infrastructure.text.normalization import normalize_artifact_text
@@ -171,12 +171,12 @@ class MarkdownTranscriptRenderer:
             out.append(f"### [{start} — {end}] {run_display}")
             out.append("")
             for turn in turns[i:j]:
-                out.extend(self._paragraphize(turn.text))
+                out.extend(self._paragraphize_normalized(turn.text))
                 out.append("")
             i = j
         return out
 
-    def _readable_turns(self, transcript: Transcript) -> tuple[object, ...]:
+    def _readable_turns(self, transcript: Transcript) -> tuple[SpeakerTurn, ...]:
         """Agrupa por falante, mas quebra blocos longos para leitura.
 
         ``Transcript.to_speaker_turns`` é correto semanticamente, mas pode gerar
@@ -191,42 +191,39 @@ class MarkdownTranscriptRenderer:
         if not valid_segments:
             return ()
 
-        from yt_transcriber_bot.domain.entities.transcript import SpeakerTurn
-
         turns: list[SpeakerTurn] = []
         current_label = valid_segments[0].speaker_label
         current_start = valid_segments[0].start_seconds
         current_end = valid_segments[0].end_seconds
-        current_parts: list[str] = [valid_segments[0].text]
+        current_text = self._normalize_text(valid_segments[0].text)
 
         def flush() -> None:
-            nonlocal current_start, current_end, current_label, current_parts
-            text = self._normalize_text(" ".join(current_parts))
-            if text:
+            nonlocal current_start, current_end, current_label, current_text
+            if current_text:
                 turns.append(
                     SpeakerTurn(
                         start_seconds=current_start,
                         end_seconds=current_end,
                         speaker_label=current_label,
-                        text=text,
+                        text=current_text,
                     )
                 )
 
         for seg in valid_segments[1:]:
-            current_text = self._normalize_text(" ".join(current_parts))
             would_exceed_duration = (seg.end_seconds - current_start) > self.max_block_duration_s
-            would_exceed_chars = (len(current_text) + 1 + len(seg.text)) > self.max_block_chars
             speaker_changed = seg.speaker_label != current_label
+            candidate_text = self._normalize_text(f"{current_text} {seg.text}")
+            would_exceed_chars = len(candidate_text) > self.max_block_chars
 
             if speaker_changed or would_exceed_duration or would_exceed_chars:
                 flush()
                 current_label = seg.speaker_label
                 current_start = seg.start_seconds
                 current_end = seg.end_seconds
-                current_parts = [seg.text]
+                current_text = self._normalize_text(seg.text)
             else:
                 current_end = seg.end_seconds
-                current_parts.append(seg.text)
+                current_text = candidate_text
 
         flush()
         return tuple(turns)
@@ -248,6 +245,10 @@ class MarkdownTranscriptRenderer:
     def _paragraphize(self, text: str) -> list[str]:
         """Quebra texto em parágrafos curtos por fim de frase."""
         text = self._normalize_text(text)
+        return self._paragraphize_normalized(text)
+
+    def _paragraphize_normalized(self, text: str) -> list[str]:
+        """Quebra texto já normalizado em parágrafos curtos por fim de frase."""
         if not text:
             return []
         sentences = self._split_sentences(text)

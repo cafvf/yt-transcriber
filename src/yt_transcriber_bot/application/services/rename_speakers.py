@@ -48,8 +48,11 @@ class RenameSpeakersService:
         Usado pela interface do Telegram para exibir títulos reais no histórico
         sem acoplar o adapter à persistência de snapshots.
         """
-        snap = self._snapshots.load(slug)
-        return snap.metadata if snap is not None else None
+        return self._snapshots.load_metadata(slug)
+
+    def metadata_for_many(self, slugs: tuple[str, ...]) -> dict[str, VideoMetadata]:
+        """Carrega títulos em lote para comandos que listam histórico."""
+        return self._snapshots.load_metadata_many(slugs)
 
     def rename(
         self,

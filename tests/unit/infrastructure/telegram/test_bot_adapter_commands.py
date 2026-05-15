@@ -392,6 +392,75 @@ async def test_list_shows_recent_jobs(
     assert any("dQw4w9WgXcQ" in t for _, t, *_ in client.sent)
 
 
+@pytest.mark.asyncio
+async def test_list_prefers_batch_metadata_lookup_when_available(
+    settings: AppSettings,
+    client: FakeBotClient,
+    repo: FakeRepo,
+    export_service: TranscriptExportService,
+    summary_service: FakeSummaryService,
+    video_subtitle_service: FakeVideoSubtitleExportService,
+    healthcheck_service: FakeHealthCheckService,
+    lasterror_service: FakeLastErrorService,
+    tmp_path: Path,
+) -> None:
+    class BatchAwareRenameService:
+        def __init__(self) -> None:
+            self.batch_calls: list[tuple[str, ...]] = []
+            self.single_calls: list[str] = []
+
+        def metadata_for_many(self, slugs: tuple[str, ...]) -> dict[str, VideoMetadata]:
+            self.batch_calls.append(slugs)
+            return {
+                slug: VideoMetadata(
+                    video_id=VideoId("dQw4w9WgXcQ"),
+                    title=f"Título {slug}",
+                    channel="Canal Exemplo",
+                    duration=Duration.from_seconds(60),
+                    upload_date=date(2024, 1, 1),
+                    original_language=Language("pt"),
+                )
+                for slug in slugs
+            }
+
+        def metadata_for(self, slug: str) -> VideoMetadata | None:
+            self.single_calls.append(slug)
+            return None
+
+    rename_service = BatchAwareRenameService()
+    adapter = TelegramBotAdapter(
+        settings=settings,
+        client=client,  # type: ignore[arg-type]
+        use_case=MagicMock(),
+        repository=repo,  # type: ignore[arg-type]
+        rename_service=rename_service,  # type: ignore[arg-type]
+        export_service=export_service,
+        summary_service=summary_service,  # type: ignore[arg-type]
+        video_subtitle_export_service=video_subtitle_service,  # type: ignore[arg-type]
+        healthcheck_service=healthcheck_service,  # type: ignore[arg-type]
+        lasterror_service=lasterror_service,  # type: ignore[arg-type]
+        models_dir=tmp_path / "models",
+    )
+    await adapter.start()
+    try:
+        first_md = tmp_path / "first-video.md"
+        second_md = tmp_path / "second-video.md"
+        first_md.write_text("# first")
+        second_md.write_text("# second")
+        repo.save(_make_completed_job(42, first_md, datetime(2026, 5, 1, 10, 0, tzinfo=UTC)))
+        repo.save(_make_completed_job(42, second_md, datetime(2026, 5, 1, 11, 0, tzinfo=UTC)))
+
+        await adapter.handle_command_list(chat_id=1, user_id=42)
+    finally:
+        await adapter.stop()
+
+    assert rename_service.batch_calls == [("second-video", "first-video")]
+    assert rename_service.single_calls == []
+    text = client.sent[-1][1]
+    assert "1. Título second-video" in text
+    assert "2. Título first-video" in text
+
+
 # --------------------------------------------------------------------
 # /healthcheck e /lasterror
 # --------------------------------------------------------------------

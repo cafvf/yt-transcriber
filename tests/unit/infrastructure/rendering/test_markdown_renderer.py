@@ -335,3 +335,40 @@ def test_renderer_splits_long_single_speaker_transcript_into_readable_blocks() -
     assert md.count("### [") == 1
     assert "### [00:00:00 — 00:03:45] SPEAKER_00" in md
     assert md.count("Esta é uma frase de teste") == 5
+
+
+def test_renderer_does_not_re_normalize_accumulated_turn_text_unnecessarily(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    original = MarkdownTranscriptRenderer._normalize_text
+
+    def counting_normalize(text: str) -> str:
+        nonlocal calls
+        calls += 1
+        return original(text)
+
+    monkeypatch.setattr(
+        MarkdownTranscriptRenderer,
+        "_normalize_text",
+        staticmethod(counting_normalize),
+    )
+
+    transcript = Transcript(
+        segments=tuple(
+            TranscriptSegment(
+                start_seconds=float(i),
+                end_seconds=float(i + 1),
+                text=f"Trecho {i}.",
+                speaker_label="SPEAKER_00",
+            )
+            for i in range(4)
+        ),
+        language=Language(code="pt"),
+        language_confidence=1.0,
+        source="whisperx",
+    )
+
+    MarkdownTranscriptRenderer().render(_meta(), transcript, _ctx())
+
+    assert calls <= len(transcript.segments)

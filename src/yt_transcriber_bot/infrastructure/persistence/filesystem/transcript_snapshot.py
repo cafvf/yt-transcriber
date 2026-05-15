@@ -57,12 +57,37 @@ class TranscriptSnapshotRepository:
         path = self.path_for(slug)
         if not path.is_file():
             return None
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = self._read_json(path)
         return self._decode(data)
+
+    def load_metadata(self, slug: str) -> VideoMetadata | None:
+        path = self.path_for(slug)
+        if not path.is_file():
+            return None
+        data = self._read_json(path)
+        raw_metadata = data.get("metadata")
+        if not isinstance(raw_metadata, dict):
+            raise ValueError("snapshot inválido: metadata deve ser um objeto")
+        return self._decode_metadata(raw_metadata)
+
+    def load_metadata_many(self, slugs: tuple[str, ...]) -> dict[str, VideoMetadata]:
+        metadata: dict[str, VideoMetadata] = {}
+        for slug in slugs:
+            loaded = self.load_metadata(slug)
+            if loaded is not None:
+                metadata[slug] = loaded
+        return metadata
 
     # ------------------------------------------------------------------
     # Serialização
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _read_json(path: Path) -> dict[str, object]:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("snapshot inválido: JSON raiz deve ser um objeto")
+        return data
 
     @staticmethod
     def _encode(snap: TranscriptSnapshot) -> dict[str, object]:
@@ -117,21 +142,7 @@ class TranscriptSnapshotRepository:
         t: dict[str, object] = t_raw
         c: dict[str, object] = c_raw
 
-        upload = m["upload_date"]
-        original_lang = m["original_language"]
-        alt_langs = m.get("alternate_languages", [])
-        if not isinstance(alt_langs, list):
-            alt_langs = []
-        metadata = VideoMetadata(
-            video_id=VideoId(str(m["video_id"])),
-            title=str(m["title"]),
-            channel=str(m["channel"]),
-            duration=Duration.from_seconds(float(m["duration_seconds"])),  # type: ignore[arg-type]
-            upload_date=date.fromisoformat(str(upload)) if upload else None,
-            original_language=Language(str(original_lang)) if original_lang else None,
-            has_alternate_audio_tracks=bool(m["has_alternate_audio_tracks"]),
-            alternate_languages=tuple(Language(str(code)) for code in alt_langs),
-        )
+        metadata = TranscriptSnapshotRepository._decode_metadata(m)
         raw_segments = t["segments"]
         if not isinstance(raw_segments, list):
             raise ValueError("transcript.segments deve ser uma lista")
@@ -157,3 +168,21 @@ class TranscriptSnapshotRepository:
             transcription_source=str(c["transcription_source"]),
         )
         return TranscriptSnapshot(metadata=metadata, transcript=transcript, context=context)
+
+    @staticmethod
+    def _decode_metadata(raw: dict[str, object]) -> VideoMetadata:
+        upload = raw["upload_date"]
+        original_lang = raw["original_language"]
+        alt_langs = raw.get("alternate_languages", [])
+        if not isinstance(alt_langs, list):
+            alt_langs = []
+        return VideoMetadata(
+            video_id=VideoId(str(raw["video_id"])),
+            title=str(raw["title"]),
+            channel=str(raw["channel"]),
+            duration=Duration.from_seconds(float(raw["duration_seconds"])),  # type: ignore[arg-type]
+            upload_date=date.fromisoformat(str(upload)) if upload else None,
+            original_language=Language(str(original_lang)) if original_lang else None,
+            has_alternate_audio_tracks=bool(raw["has_alternate_audio_tracks"]),
+            alternate_languages=tuple(Language(str(code)) for code in alt_langs),
+        )
