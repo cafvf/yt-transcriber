@@ -374,14 +374,29 @@ class TestYouTubeSubtitles:
             fake_transcription=fake_transcription,
             fake_diarization=fake_diarization,
         )
-        result = uc.execute(_job())
+        events: list[tuple[str, str]] = []
+        result = uc.execute(
+            _job(), progress_step=lambda step, message: events.append((step, message))
+        )
         assert result.job.status == JobStatus.COMPLETED
-        # Engine de transcrição NÃO deve ter sido chamado
+        # Caminho por legendas deve pular download/conversão/transcrição/diarização.
+        assert result.audio_path is None
+        assert fake_converter.convert_calls == []
         assert fake_transcription.calls == []
+        assert fake_diarization.calls == []
+        skipped_steps = {step for step, message in events if "Etapa pulada" in message}
+        assert skipped_steps >= {
+            "download_audio",
+            "convert_audio",
+            "select_runtime",
+            "transcribe",
+            "diarize",
+        }
         # MD deve indicar a fonte como legenda manual do YT
         assert result.md_path is not None
         md = result.md_path.read_text(encoding="utf-8")
         assert "Legendas manuais do YouTube" in md
+        assert "SPEAKER_00" in md
 
     def test_translated_subtitles_are_ignored(
         self,

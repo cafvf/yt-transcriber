@@ -219,8 +219,25 @@ class TryYouTubeSubtitlesStep(PipelineStep):
         ctx.transcription_language = target_language
         ctx.transcription_confidence = 1.0
         ctx.youtube_subtitle_used = True
-        ctx.youtube_subtitle_kind = "auto" if chosen.is_auto_generated else "manual"
-        ctx.language_source = "youtube_auto" if chosen.is_auto_generated else "youtube_manual"
+        subtitle_kind = "auto" if chosen.is_auto_generated else "manual"
+        source = "youtube_auto" if chosen.is_auto_generated else "youtube_manual"
+        ctx.youtube_subtitle_kind = subtitle_kind
+        ctx.language_source = source
+        ctx.transcript = Transcript(
+            segments=tuple(
+                TranscriptSegment(
+                    start_seconds=segment.start_seconds,
+                    end_seconds=max(segment.end_seconds, segment.start_seconds),
+                    text=segment.text,
+                    speaker_label="SPEAKER_00",
+                )
+                for segment in ctx.transcribed_segments
+                if segment.text.strip() and segment.end_seconds > segment.start_seconds
+            ),
+            language=Language(code=target_language),
+            language_confidence=1.0,
+            source=source,
+        )
         ctx.add_diagnostic(
             f"Usando legendas do YouTube ({ctx.youtube_subtitle_kind}, idioma={target_language})."
         )
@@ -388,6 +405,9 @@ class DownloadAudioStep(PipelineStep):
         self._dl = downloader
         self._downloads_dir = downloads_dir
 
+    def should_run(self, ctx: PipelineContext) -> bool:
+        return not ctx.youtube_subtitle_used
+
     def execute(self, ctx: PipelineContext) -> None:
         self._downloads_dir.mkdir(parents=True, exist_ok=True)
         try:
@@ -421,6 +441,9 @@ class ConvertAudioStep(PipelineStep):
         self._conv = converter
         self._processed_dir = processed_dir
         self._settings = settings
+
+    def should_run(self, ctx: PipelineContext) -> bool:
+        return not ctx.youtube_subtitle_used
 
     def execute(self, ctx: PipelineContext) -> None:
         ctx.job.transition_to(JobStatus.CONVERTING)
@@ -585,6 +608,9 @@ class DiarizeStep(PipelineStep):
         self._engine = engine
         self._settings = settings
         self._progress = progress or TranscriptionStepProgress()
+
+    def should_run(self, ctx: PipelineContext) -> bool:
+        return not ctx.youtube_subtitle_used
 
     def execute(self, ctx: PipelineContext) -> None:
         ctx.job.transition_to(JobStatus.DIARIZING)

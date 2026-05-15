@@ -115,6 +115,7 @@ class FakeYouTubeDownloader(YouTubeDownloader):
 @dataclass
 class FakeAudioConverter(AudioConverter):
     raise_on_convert: Exception | None = None
+    convert_calls: list[dict[str, object]] = field(default_factory=list)
 
     def convert_to_opus_mono(
         self,
@@ -124,6 +125,14 @@ class FakeAudioConverter(AudioConverter):
         bitrate_kbps: int = 32,
         sample_rate_hz: int = 16000,
     ) -> ConvertedAudio:
+        self.convert_calls.append(
+            {
+                "source": source,
+                "dest": dest,
+                "bitrate_kbps": bitrate_kbps,
+                "sample_rate_hz": sample_rate_hz,
+            }
+        )
         if self.raise_on_convert is not None:
             raise self.raise_on_convert
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -222,6 +231,7 @@ class FakeTranscriptionEngine(TranscriptionEngine):
 class FakeDiarizationEngine(DiarizationEngine):
     result: DiarizationResult | None = None
     raise_on_call: Exception | None = None
+    calls: list[dict[str, object]] = field(default_factory=list)
 
     def diarize(
         self,
@@ -233,6 +243,14 @@ class FakeDiarizationEngine(DiarizationEngine):
         max_speakers: int | None = None,
         progress: Callable[[float, str], None] | None = None,
     ) -> DiarizationResult:
+        self.calls.append(
+            {
+                "audio_path": audio_path,
+                "device": device,
+                "min_speakers": min_speakers,
+                "max_speakers": max_speakers,
+            }
+        )
         if self.raise_on_call is not None:
             raise self.raise_on_call
         if self.result is None:
