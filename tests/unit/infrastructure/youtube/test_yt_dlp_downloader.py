@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
 
 import pytest
 
@@ -461,6 +462,97 @@ Hello world
         )
         result = downloader.fetch_subtitle(VideoId(value="dQw4w9WgXcQ"), track)
         assert result.segments == ()
+
+    def test_retries_transient_http_429_before_succeeding(self) -> None:
+        calls = 0
+        sleeps: list[float] = []
+        vtt = """WEBVTT
+
+00:00:00.000 --> 00:00:02.000
+Hello world
+"""
+
+        def fetcher(url: str, ext: str) -> str:
+            nonlocal calls
+            calls += 1
+            if calls < 3:
+                raise HTTPError(url, 429, "Too Many Requests", hdrs=None, fp=None)
+            return vtt
+
+        downloader = YtDlpDownloader(
+            ydl_factory=_factory_returning({"title": "x", "uploader": "y", "duration": 10}),
+            subtitle_fetcher=fetcher,
+            sleep_fn=sleeps.append,
+        )
+        track = SubtitleTrack(
+            language=Language.en(),
+            is_auto_generated=False,
+            is_translated=False,
+            url="https://example.com/x.vtt",
+            ext="vtt",
+        )
+
+        result = downloader.fetch_subtitle(VideoId(value="dQw4w9WgXcQ"), track)
+
+        assert calls == 3
+        assert sleeps == [0.5, 1.0]
+        assert result.segments == ((0.0, 2.0, "Hello world"),)
+
+    def test_exhausts_transient_retries_and_reraises(self) -> None:
+        calls = 0
+        sleeps: list[float] = []
+
+        def fetcher(url: str, ext: str) -> str:
+            nonlocal calls
+            calls += 1
+            raise URLError("temporary DNS failure")
+
+        downloader = YtDlpDownloader(
+            ydl_factory=_factory_returning({"title": "x", "uploader": "y", "duration": 10}),
+            subtitle_fetcher=fetcher,
+            sleep_fn=sleeps.append,
+        )
+        track = SubtitleTrack(
+            language=Language.en(),
+            is_auto_generated=False,
+            is_translated=False,
+            url="https://example.com/x.vtt",
+            ext="vtt",
+        )
+
+        with pytest.raises(URLError, match="temporary DNS failure"):
+            downloader.fetch_subtitle(VideoId(value="dQw4w9WgXcQ"), track)
+
+        assert calls == 3
+        assert sleeps == [0.5, 1.0]
+
+    def test_non_transient_http_error_does_not_retry(self) -> None:
+        calls = 0
+        sleeps: list[float] = []
+
+        def fetcher(url: str, ext: str) -> str:
+            nonlocal calls
+            calls += 1
+            raise HTTPError(url, 404, "Not Found", hdrs=None, fp=None)
+
+        downloader = YtDlpDownloader(
+            ydl_factory=_factory_returning({"title": "x", "uploader": "y", "duration": 10}),
+            subtitle_fetcher=fetcher,
+            sleep_fn=sleeps.append,
+        )
+        track = SubtitleTrack(
+            language=Language.en(),
+            is_auto_generated=False,
+            is_translated=False,
+            url="https://example.com/x.vtt",
+            ext="vtt",
+        )
+
+        with pytest.raises(HTTPError, match="Not Found"):
+            downloader.fetch_subtitle(VideoId(value="dQw4w9WgXcQ"), track)
+
+        assert calls == 1
+        assert sleeps == []
 
     def test_track_without_url_raises(self) -> None:
         downloader = _make({"title": "x", "uploader": "y", "duration": 10})

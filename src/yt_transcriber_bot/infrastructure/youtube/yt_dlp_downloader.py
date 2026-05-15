@@ -13,6 +13,9 @@ from __future__ import annotations
 import contextlib
 import logging
 import re
+import time
+import urllib.error
+from collections.abc import Callable
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Protocol
@@ -83,6 +86,10 @@ _FORMAT_UNAVAILABLE_MARKERS = (
 
 logger = logging.getLogger(__name__)
 
+_SUBTITLE_FETCH_MAX_ATTEMPTS = 3
+_SUBTITLE_FETCH_BACKOFF_S = (0.5, 1.0)
+_TRANSIENT_SUBTITLE_HTTP_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
+
 
 class YtDlpDownloader(YouTubeDownloader):
     """Adapter que envolve ``yt_dlp.YoutubeDL`` por trás da porta ``YouTubeDownloader``.
@@ -97,11 +104,19 @@ class YtDlpDownloader(YouTubeDownloader):
         subtitle_fetcher: _SubtitleFetcher,
         cookies_file: str | None = None,
         cookies_browser: str | None = None,
+        subtitle_fetch_max_attempts: int = _SUBTITLE_FETCH_MAX_ATTEMPTS,
+        subtitle_fetch_backoff_s: tuple[float, ...] = _SUBTITLE_FETCH_BACKOFF_S,
+        sleep_fn: Callable[[float], None] = time.sleep,
     ) -> None:
         self._ydl_factory = ydl_factory
         self._subtitle_fetcher = subtitle_fetcher
         self._cookies_file = cookies_file or None
         self._cookies_browser = cookies_browser or None
+        self._subtitle_fetch_max_attempts = max(1, subtitle_fetch_max_attempts)
+        self._subtitle_fetch_backoff_s = tuple(
+            delay for delay in subtitle_fetch_backoff_s if delay > 0
+        )
+        self._sleep_fn = sleep_fn
 
     # ------------------------------------------------------------------
     # Common params
@@ -332,13 +347,53 @@ class YtDlpDownloader(YouTubeDownloader):
     def fetch_subtitle(self, video_id: VideoId, track: SubtitleTrack) -> FetchedSubtitle:
         if track.url is None:
             raise YouTubeError("Pista de legenda sem URL")
-        raw = self._subtitle_fetcher(track.url, track.ext)
+        raw = self._fetch_subtitle_with_retry(video_id, track.url, track.ext)
         segments = _parse_subtitle(raw, track.ext)
         return FetchedSubtitle(
             language=track.language,
             is_auto_generated=track.is_auto_generated,
             segments=segments,
         )
+
+    def _fetch_subtitle_with_retry(self, video_id: VideoId, url: str, ext: str) -> str:
+        last_exc: Exception | None = None
+        for attempt in range(1, self._subtitle_fetch_max_attempts + 1):
+            try:
+                return self._subtitle_fetcher(url, ext)
+            except Exception as exc:
+                last_exc = exc
+                if not self._is_transient_subtitle_fetch_error(exc):
+                    raise
+                if attempt >= self._subtitle_fetch_max_attempts:
+                    break
+                delay = self._subtitle_fetch_backoff_delay(attempt)
+                logger.warning(
+                    "falha transitória ao baixar legenda de %s (tentativa %d/%d, aguardando %.2fs): %s",
+                    video_id.value,
+                    attempt,
+                    self._subtitle_fetch_max_attempts,
+                    delay,
+                    exc,
+                )
+                self._sleep_fn(delay)
+        assert last_exc is not None
+        raise last_exc
+
+    def _subtitle_fetch_backoff_delay(self, attempt: int) -> float:
+        if not self._subtitle_fetch_backoff_s:
+            return 0.0
+        index = min(attempt - 1, len(self._subtitle_fetch_backoff_s) - 1)
+        return self._subtitle_fetch_backoff_s[index]
+
+    @staticmethod
+    def _is_transient_subtitle_fetch_error(exc: Exception) -> bool:
+        if isinstance(exc, TimeoutError):
+            return True
+        if isinstance(exc, urllib.error.HTTPError):
+            return exc.code in _TRANSIENT_SUBTITLE_HTTP_STATUS
+        if isinstance(exc, urllib.error.URLError):
+            return True
+        return isinstance(exc, ConnectionError | OSError)
 
     # ------------------------------------------------------------------
     # Audio download
