@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from yt_transcriber_bot.infrastructure.text.normalization import normalize_artifact_text
@@ -38,3 +40,16 @@ def test_preserves_valid_utf8_portuguese_text() -> None:
 def test_normalization_is_idempotent(text: str) -> None:
     once = normalize_artifact_text(text)
     assert normalize_artifact_text(once) == once
+
+
+def test_warns_without_leaking_text_when_replacement_character_remains(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    raw = "Cliente disse: segredo privado �"
+
+    with caplog.at_level(logging.WARNING):
+        normalized = normalize_artifact_text(raw)
+
+    assert normalized == raw
+    assert "caractere(s) de substituição Unicode" in caplog.text
+    assert "segredo privado" not in caplog.text

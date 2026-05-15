@@ -107,7 +107,7 @@ VIDEO_EXPORTS_DIR_NAME=video_exports
 O bot usa o snapshot da transcrição para gerar um `.srt`, baixa um MP4 compatível e faz o mux da legenda com `ffmpeg` como `mov_text`.
 
 ### `/redo <link>`
-Reprocessa explicitamente um link do YouTube como um **novo job** na fila.
+Reprocessa explicitamente um link do YouTube já concluído como um **novo job** na fila. A deduplicação vale apenas para o mesmo vídeo+idioma que ainda esteja em processamento ou na fila.
 
 Exemplo:
 
@@ -207,7 +207,6 @@ Se não houver erro recente persistido, o bot responde que nenhum erro foi encon
 
 ### Comandos planejados, mas não implementados nesta versão
 
-- `/lasterror`
 - `/redo` com confirmação inline e diff de configuração
 - botões inline como `[Refazer com WhisperX]`
 
@@ -244,7 +243,7 @@ O bot pode rejeitar vídeos por vários motivos. Mensagens típicas:
 - `"Vídeo privado, removido ou indisponível. Job descartado."`
 
 ### 3.4 Link já transcrito
-Nesta versão, reenviar o mesmo link cria uma nova entrada na fila; não há deduplicação automática nem botões inline de confirmação. Para deixar a intenção explícita, prefira usar `/redo <link>` quando quiser reprocessar um vídeo já tratado.
+Nesta versão, reenviar um link já concluído cria uma nova entrada na fila; não há deduplicação automática de histórico concluído nem botões inline de confirmação. A deduplicação bloqueia apenas duplicatas do mesmo vídeo+idioma ainda em processamento ou na fila. Para deixar a intenção explícita, prefira usar `/redo <link>` quando quiser reprocessar um vídeo já tratado.
 
 ### 3.5 Falha durante a transcrição
 Se ocorrer um erro (OOM, crash, etc.), o bot tenta uma vez com modelo menor em CPU:

@@ -25,14 +25,13 @@ O **núcleo de domínio** (entidades, regras de negócio, serviços de aplicaç�
 | Padrão | Aplicação |
 |---|---|
 | **Hexagonal** | Domínio puro + ports + adapters. |
-| **Strategy** | `TranscriptionEngine`, `DiarizationEngine`, `SubtitleSource`, `StorageBackend`. |
-| **Repository** | `JobRepository`, `SpeakerMapRepository`, `QueueRepository` sobre SQLAlchemy. |
-| **Chain of Responsibility** | `Pipeline` é uma sequência de `Stage`s (Download → Convert → Transcribe → Diarize → Render → Deliver). |
-| **Command** | Cada comando do Telegram (`StartCommand`, `RenameCommand`, etc.) é uma classe com `execute()`. |
-| **Observer / Event Bus** | `Stage`s emitem `ProgressEvent`s; `TelegramProgressReporter` (e `LogReporter`) os consomem. |
-| **Factory** | `EngineFactory.create_transcription_engine()` decide modelo/device com base em hardware detectado. |
-| **Adapter** | `TelegramAdapter`, `YtDlpAdapter`, `FfmpegAdapter`, `WhisperxAdapter`, `PyannoteAdapter`, `SqliteRepository`. |
-| **Null Object** | `NoOpProgressReporter` para testes ou execuções silenciosas. |
+| **Strategy** | `TranscriptionEngine`, `DiarizationEngine`, `YouTubeDownloader`, `AudioConverter`, `GPUDetector`. |
+| **Repository** | `JobRepository` sobre SQLAlchemy e snapshots de transcrição em filesystem. |
+| **Chain of Responsibility** | `PipelineRunner` executa uma sequência de `PipelineStep`s (metadados → legendas → áudio → runtime → transcrição → diarização → Markdown). |
+| **Command** | `BotAdapter` roteia comandos Telegram para handlers explícitos (`handle_command_*`) e serviços de aplicação. |
+| **Observer / Event Bus** | `ProgressReporter` edita uma mensagem de progresso no Telegram; `ExecutionAuditLogger` registra eventos JSONL estruturados. |
+| **Factory/selection** | `select_runtime()` decide modelo/device/compute type com base em configuração e GPU detectada. |
+| **Adapter** | `TelegramBotAdapter`, `YtDlpDownloader`, `FfmpegAudioConverter`, engines WhisperX/pyannote e `SqlAlchemyJobRepository`. |
 | **Specification** | Validação de URLs, idiomas, durações como `Specification`s compostáveis. |
 
 ---
@@ -42,69 +41,50 @@ O **núcleo de domínio** (entidades, regras de negócio, serviços de aplicaç�
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  CAMADA DE INFRAESTRUTURA (adapters concretos)              │
-│  - TelegramAdapter (python-telegram-bot)                    │
-│  - YtDlpAdapter (yt-dlp)                                    │
-│  - FfmpegAdapter (subprocess + ffmpeg)                      │
-│  - WhisperxAdapter (whisperx)                               │
-│  - PyannoteAdapter (pyannote.audio)                         │
-│  - SqliteJobRepository (SQLAlchemy)                         │
-│  - FilesystemArtifactStore (operações em disco)             │
-│  - SystemHardwareDetector (torch.cuda APIs)                 │
+│  - BotAdapter / PTBBotClient (Telegram)                     │
+│  - YtDlpDownloader (yt-dlp)                                 │
+│  - FFmpegAudioConverter (subprocess + ffmpeg)               │
+│  - WhisperXTranscriptionEngine                              │
+│  - WhisperX/Pyannote diarization engines                    │
+│  - SQLAlchemyJobRepository                                  │
+│  - TranscriptSnapshotRepository                             │
+│  - MarkdownTranscriptRenderer / exportadores                │
+│  - ExecutionAuditLogger (JSONL local)                       │
 └──────────────────────────┬──────────────────────────────────┘
                            │ implementa
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  CAMADA DE PORTS (interfaces abstratas)                     │
-│  - VideoSource         (abstrai download YouTube)           │
-│  - AudioConverter      (abstrai ffmpeg)                     │
-│  - SubtitleSource      (abstrai legendas YouTube)           │
-│  - TranscriptionEngine (abstrai WhisperX)                   │
-│  - DiarizationEngine   (abstrai pyannote)                   │
-│  - JobRepository       (abstrai persistência de jobs)       │
-│  - SpeakerMapRepository                                     │
-│  - QueueRepository                                          │
-│  - ArtifactStore       (abstrai filesystem)                 │
-│  - MessageGateway      (abstrai Telegram)                   │
-│  - HardwareDetector                                         │
-│  - ProgressReporter                                         │
+│  CAMADA DE PORTS (interfaces abstratas em application/ports) │
+│  - YouTubeDownloader                                        │
+│  - AudioConverter                                           │
+│  - TranscriptionEngine                                      │
+│  - DiarizationEngine                                        │
+│  - JobRepository                                            │
+│  - FileStorage                                              │
+│  - GPUDetector                                              │
 └──────────────────────────┬──────────────────────────────────┘
                            │ usado por
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  CAMADA DE APLICAÇÃO (services / use cases)                 │
-│  - ProcessVideoUseCase                                      │
-│  - RenameSpeakersUseCase                                    │
-│  - ReprocessVideoUseCase                                    │
-│  - CancelJobUseCase                                         │
-│  - ListJobsUseCase                                          │
-│  - ResendLastUseCase                                        │
-│  - ClearCacheUseCase                                        │
-│  - ClearQueueUseCase                                        │
-│  - RecoverInterruptedJobsUseCase                            │
+│  CAMADA DE APLICAÇÃO                                        │
+│  - TranscribeVideoUseCase                                   │
+│  - PipelineRunner + PipelineStep                            │
+│  - RenameSpeakersService                                    │
+│  - RetentionPolicy / Healthcheck / LastError                │
+│  - Runtime selection e configuração efetiva                 │
 └──────────────────────────┬──────────────────────────────────┘
                            │ orquestra
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  CAMADA DE DOMÍNIO (entidades + regras puras)               │
-│  - Job (id, video_id, url, status, paths, ...)              │
-│  - VideoMetadata                                            │
-│  - Transcript (segmentos, falantes, idioma)                 │
-│  - SpeakerMap                                               │
-│  - Pipeline (Chain of Responsibility de Stages)             │
-│  - Stages: DownloadStage, ConvertStage, TranscribeStage,    │
-│            DiarizeStage, RenderStage, DeliverStage          │
-│  - Specifications: UrlIsYoutube, LanguageAllowed,           │
-│                    DurationWithinLimit, HasEnoughSpeech     │
-│  - Events: ProgressEvent, JobStarted, JobCompleted,         │
-│            JobFailed, ModelDownloading                      │
-│  - ValueObjects: VideoId, Slug, AudioCodec, ModelName,      │
-│                  Device, ComputeType, Duration              │
+│  CAMADA DE DOMÍNIO                                          │
+│  - Job, VideoMetadata, Transcript                           │
+│  - Specifications                                           │
+│  - ValueObjects: VideoId, Slug, Language, Duration,         │
+│                  ModelName, Device, ComputeType             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-A regra de dependência é **estrita**: setas de implementação/uso só apontam **para baixo**. Domínio não importa nada de aplicação, aplicação não importa nada de infraestrutura.
-
----
+A regra de dependência é **estrita**: domínio não importa infraestrutura; aplicação depende de ports e entidades; adapters concretos ficam na borda e são montados no composition root.
 
 ## 3. Estrutura de diretórios do código
 
@@ -120,193 +100,84 @@ yt-transcriber-bot/
 │   ├── 04-manual-de-instalacao.md
 │   ├── 05-plano-de-execucao.md
 │   ├── 06-funcionalidades-futuras.md
-│   └── 07-glossario-e-decisoes.md
+│   ├── 07-glossario-e-decisoes.md
+│   ├── 08-seguranca-e-segredos.md
+│   └── patches/
 ├── deploy/
-│   └── yt-transcriber-bot.service       # template systemd
+│   └── yt-transcriber-bot.service
+├── scripts/
+│   ├── config/
+│   └── security/
 ├── src/yt_transcriber_bot/
-│   ├── __init__.py
-│   ├── __main__.py                       # entry point: `python -m yt_transcriber_bot`
-│   ├── bootstrap.py                      # composition root (DI manual)
-│   ├── config.py                         # pydantic-settings + validação
-│   │
-│   ├── domain/
-│   │   ├── __init__.py
-│   │   ├── entities/
-│   │   │   ├── job.py
-│   │   │   ├── transcript.py
-│   │   │   ├── speaker_map.py
-│   │   │   └── video_metadata.py
-│   │   ├── value_objects/
-│   │   │   ├── video_id.py
-│   │   │   ├── slug.py
-│   │   │   ├── duration.py
-│   │   │   ├── language.py
-│   │   │   ├── model_name.py
-│   │   │   └── device.py
-│   │   ├── events/
-│   │   │   ├── progress_event.py
-│   │   │   └── lifecycle_events.py
-│   │   ├── specifications/
-│   │   │   ├── url_is_youtube.py
-│   │   │   ├── language_allowed.py
-│   │   │   ├── duration_within_limit.py
-│   │   │   └── has_enough_speech.py
-│   │   └── pipeline/
-│   │       ├── pipeline.py               # Chain of Responsibility
-│   │       ├── stage.py                  # interface base
-│   │       ├── download_stage.py
-│   │       ├── convert_stage.py
-│   │       ├── transcribe_stage.py
-│   │       ├── diarize_stage.py
-│   │       ├── render_stage.py
-│   │       └── deliver_stage.py
-│   │
+│   ├── __main__.py
+│   ├── composition_root.py
 │   ├── application/
-│   │   ├── __init__.py
-│   │   ├── use_cases/
-│   │   │   ├── process_video.py
-│   │   │   ├── rename_speakers.py
-│   │   │   ├── reprocess_video.py
-│   │   │   ├── cancel_job.py
-│   │   │   ├── list_jobs.py
-│   │   │   ├── resend_last.py
-│   │   │   ├── clear_cache.py
-│   │   │   ├── clear_queue.py
-│   │   │   └── recover_interrupted.py
-│   │   ├── ports/
-│   │   │   ├── video_source.py
-│   │   │   ├── audio_converter.py
-│   │   │   ├── subtitle_source.py
-│   │   │   ├── transcription_engine.py
-│   │   │   ├── diarization_engine.py
-│   │   │   ├── job_repository.py
-│   │   │   ├── speaker_map_repository.py
-│   │   │   ├── queue_repository.py
-│   │   │   ├── artifact_store.py
-│   │   │   ├── message_gateway.py
-│   │   │   ├── hardware_detector.py
-│   │   │   └── progress_reporter.py
-│   │   ├── factories/
-│   │   │   └── engine_factory.py
-│   │   └── queue/
-│   │       └── sequential_queue.py       # consumer single-threaded
-│   │
+│   │   ├── config.py
+│   │   ├── pipeline/
+│   │   ├── ports/                     # inclui application/ports/youtube_downloader.py
+│   │   ├── runtime_selection.py
+│   │   ├── services/
+│   │   └── use_cases/transcribe_video.py  # application/use_cases/transcribe_video.py
+│   ├── domain/
+│   │   ├── entities/
+│   │   ├── specifications/
+│   │   └── value_objects/
 │   └── infrastructure/
-│       ├── __init__.py
-│       ├── telegram/
-│       │   ├── adapter.py                # TelegramAdapter
-│       │   ├── progress_reporter.py
-│       │   ├── authorization.py          # filtra user_id permitido
-│       │   └── commands/                 # Command pattern
-│       │       ├── start_command.py
-│       │       ├── help_command.py
-│       │       ├── status_command.py
-│       │       ├── last_command.py
-│       │       ├── list_command.py
-│       │       ├── redo_command.py
-│       │       ├── cancel_command.py
-│       │       ├── rename_command.py
-│       │       ├── clearcache_command.py
-│       │       ├── clearqueue_command.py
-│       │       ├── healthcheck_command.py
-│       │       ├── lasterror_command.py
-│       │       └── url_message_handler.py
-│       ├── youtube/
-│       │   ├── ytdlp_adapter.py
-│       │   └── subtitle_adapter.py
-│       ├── audio/
-│       │   └── ffmpeg_adapter.py
-│       ├── transcription/
-│       │   ├── whisperx_adapter.py
-│       │   └── language_detector.py
+│       ├── audio/ffmpeg_converter.py
 │       ├── diarization/
-│       │   ├── whisperx_diarization_adapter.py    # primário
-│       │   └── pyannote_direct_adapter.py         # fallback
+│       ├── exporting/
+│       ├── gpu/torch_gpu_detector.py
+│       ├── logging/execution_audit.py     # infrastructure/logging/execution_audit.py
 │       ├── persistence/
-│       │   ├── sqlalchemy/
-│       │   │   ├── models.py
-│       │   │   ├── job_repository.py
-│       │   │   ├── speaker_map_repository.py
-│       │   │   └── queue_repository.py
-│       │   └── filesystem/
-│       │       ├── artifact_store.py
-│       │       └── retention_policy.py
-│       ├── hardware/
-│       │   └── torch_detector.py
-│       ├── rendering/
-│       │   └── markdown_renderer.py
-│       └── logging/
-│           └── job_logger.py
-│
-├── tests/
-│   ├── conftest.py
-│   ├── unit/
-│   │   ├── domain/
-│   │   ├── application/
-│   │   └── infrastructure/
-│   ├── integration/
-│   │   ├── test_youtube_download.py       # @pytest.mark.integration
-│   │   ├── test_ffmpeg_conversion.py
-│   │   ├── test_whisperx_real.py          # @pytest.mark.slow
-│   │   ├── test_pyannote_real.py
-│   │   └── test_sqlite_real.py
-│   ├── e2e/
-│   │   └── test_full_pipeline.py          # vídeo j2p8p7cg0q8
-│   └── fixtures/
-│       ├── audio/                          # WAVs/OGGs pequenos
-│       ├── whisperx_outputs/               # JSONs gravados
-│       ├── pyannote_outputs/
-│       └── youtube_metadata/
-│
-├── data/                                   # criado em runtime
-│   ├── downloads/
-│   ├── processed/
-│   ├── transcripts/
-│   └── jobs.db
-├── models/                                 # cache HF/Whisper (runtime)
-└── logs/                                   # logs por job (runtime)
+│       ├── rendering/markdown_renderer.py
+│       ├── summarization/
+│       ├── telegram/bot_adapter.py        # infrastructure/telegram/bot_adapter.py
+│       ├── text/normalization.py
+│       ├── transcription/
+│       └── youtube/yt_dlp_downloader.py
+└── tests/
+    └── unit/
 ```
 
----
+A árvore acima descreve o estado atual do repositório. Novas abstrações devem entrar primeiro em `application/ports/` ou `application/services/` quando forem contratos de aplicação; integrações concretas permanecem em `infrastructure/`.
 
 ## 4. Pipeline de processamento (Chain of Responsibility)
 
-O coração do sistema é um **pipeline** representado pela classe `Pipeline`, que executa uma sequência ordenada de `Stage`s. Cada `Stage` é uma classe com a interface:
+O coração do processamento é o `PipelineRunner`, que executa uma sequência ordenada de `PipelineStep`s. Cada step expõe a interface:
 
 ```python
-class Stage(ABC):
-    @abstractmethod
-    async def execute(self, context: PipelineContext) -> PipelineContext: ...
-
+class PipelineStep(ABC):
     @property
+    @abstractmethod
     def name(self) -> str: ...
 
-    @property
-    def progress_weight(self) -> float:
-        """Peso relativo para cálculo do progresso global."""
+    def should_run(self, ctx: PipelineContext) -> bool: ...
+
+    @abstractmethod
+    def execute(self, ctx: PipelineContext) -> None: ...
 ```
 
-O `PipelineContext` é um objeto mutável que carrega: o `Job` corrente, paths intermediários produzidos, metadados acumulados, transcrição parcial, anotação de diarização, lista de eventos emitidos. Cada `Stage` lê e escreve em campos específicos.
+O `PipelineContext` é um objeto mutável que carrega o `Job` corrente, paths intermediários, metadados, transcrição parcial, anotação de diarização, diagnósticos e artefatos gerados. Cada `PipelineStep` lê e escreve apenas os campos necessários para sua etapa.
 
-### 4.1 Stages
+### 4.1 Steps
 
-| # | Stage | Responsabilidade | Pode pular? |
+| # | Step | Responsabilidade | Pode pular? |
 |---|---|---|---|
-| 1 | `DownloadStage` | Baixar metadados, validar (duração, idioma, falas), baixar faixa de áudio original. | Não |
-| 2 | `SubtitleProbeStage` | Verificar legendas disponíveis no YouTube e classificar (manual/auto/traduzida). | Não |
-| 3 | `ConvertStage` | Converter áudio bruto para Opus/OGG mono 32 kbps. | Não |
-| 4 | `TranscribeStage` | Se houver legenda válida, usá-la; caso contrário, executar WhisperX. | Pode usar atalho |
-| 5 | `AlignStage` | Alinhamento por palavra com wav2vec2 (apenas quando WhisperX foi usado em 4). | Sim |
-| 6 | `DiarizeStage` | Diarização (WhisperX primário → pyannote fallback). | Sim, se 1 falante forçado |
-| 7 | `RenderStage` | Renderizar MD a partir de transcrição + diarização + metadados. | Não |
-| 8 | `DeliverStage` | Aplicar retenção FIFO; enviar áudio + MD pelo Telegram. | Não |
+| 1 | `FetchMetadataStep` | Buscar metadados e validar duração/idioma. | Não |
+| 2 | `TryYouTubeSubtitlesStep` | Tentar legenda elegível do YouTube antes de transcrever áudio. | Sim |
+| 3 | `DownloadAudioStep` | Baixar a faixa de áudio original. | Sim, quando legenda aceita substitui ASR |
+| 4 | `ConvertAudioStep` | Converter áudio bruto para o formato configurado. | Sim, quando legenda aceita substitui ASR |
+| 5 | `SelectRuntimeStep` | Selecionar modelo, device e compute type efetivos. | Sim, quando legenda aceita substitui ASR |
+| 6 | `TranscribeStep` | Executar WhisperX quando não houver legenda aceita. | Sim |
+| 7 | `DiarizeStep` | Atribuir falantes por WhisperX/pyannote ou falante único forçado. | Sim |
+| 8 | `RenderMarkdownStep` | Gerar Markdown final e snapshot de transcrição. | Não |
 
-Cada stage emite eventos de progresso (`ProgressEvent(percent, message)`) que são propagados aos `ProgressReporter`s registrados (Telegram e log).
+O runner emite callbacks de progresso por step e eventos de auditoria estruturada. O `BotAdapter` transforma esses eventos em mensagens Telegram; `ExecutionAuditLogger` persiste a trilha JSONL local.
 
 ### 4.2 Tratamento de erros no pipeline
-- Cada `Stage` pode lançar `StageError` (com sub-classes específicas: `DownloadFailedError`, `LanguageNotAllowedError`, `TranscriptionOOMError`, etc.).
-- O `Pipeline` captura, encaminha ao tratamento adequado e marca o job conforme política definida em [contrato §K](./01-contrato-funcional.md#k-erros-e-retentativas).
-- `TranscriptionOOMError` aciona o mecanismo de retentativa com modelo menor (decisão dentro do próprio `TranscribeStage`).
+- Cada `PipelineStep` pode lançar erros de rejeição de negócio (`VideoTooLongError`, `LanguageNotAllowedError`) ou erros operacionais dos adapters.
+- O use case de transcrição captura, encaminha ao tratamento adequado e marca o job conforme política definida em [contrato §K](./01-contrato-funcional.md#k-erros-e-retentativas).
+- `OutOfMemoryError` no `TranscribeStep` aciona retentativa com runtime menor quando a política configurada permite.
 
 ---
 
@@ -364,84 +235,86 @@ Constraint: `UNIQUE(job_id, original_label)`.
 
 ## 6. Fila sequencial
 
-Uma única instância de `SequentialQueueWorker` consome a fila. Como o usuário é único, essa simplificação é suficiente e elimina riscos de concorrência (acesso a GPU, modelos carregados em memória, escrita concorrente em SQLite).
+Uma única instância de `SequentialJobQueue` consome a fila. Como o usuário é único, essa simplificação é suficiente e elimina riscos de concorrência (acesso a GPU, modelos carregados em memória, escrita concorrente em SQLite).
 
 Implementação: um `asyncio.Task` em loop que:
 1. Lê o próximo `Job` na fila com status `pending` (ordenado por `enqueued_at`).
 2. Marca como `processing`.
-3. Instancia o `Pipeline` configurado para aquele job.
+3. Instancia o `PipelineRunner` configurado para aquele job.
 4. Executa.
 5. Marca o resultado (`completed`, `failed`, `cancelled`).
 6. Volta ao topo.
 
-Em paralelo, o `TelegramAdapter` continua respondendo a comandos administrativos (`/status`, `/cancel`, etc.) sem bloquear o loop.
+Em paralelo, o `TelegramBotAdapter` continua respondendo a comandos administrativos (`/status`, `/cancel`, etc.) sem bloquear o loop.
 
 ---
 
 ## 7. Composition root e injeção de dependências
 
-`bootstrap.py` é o **único** lugar do código que sabe simultaneamente das interfaces (ports) e das implementações concretas (adapters). Lá, ele:
+`composition_root.py` é o ponto central que conhece simultaneamente as interfaces de aplicação e os adapters concretos. Ele:
 
-1. Carrega `Config` (via pydantic-settings, lendo das envs).
-2. Valida ffmpeg, valida secrets obrigatórios.
-3. Detecta hardware via `TorchHardwareDetector`.
-4. Decide `EngineFactory` (que produzirá engines do tipo certo).
-5. Cria `SqliteJobRepository`, `SpeakerMapRepository`, `QueueRepository`.
-6. Cria `FilesystemArtifactStore` com a `RetentionPolicy(max_per_folder=5, keep_md=True)`.
-7. Cria `TelegramAdapter` com `Authorization(allowed_user_id=...)`.
-8. Cria `SequentialQueueWorker` com todas as dependências injetadas.
-9. Inicia o adapter do Telegram em polling.
-10. Inicia o worker da fila.
-11. Aguarda sinais de encerramento (`SIGINT`, `SIGTERM`).
+1. Recebe `AppSettings` de `application/config.py`.
+2. Prepara diretórios de runtime (`data/`, `downloads/`, `processed/`, `transcripts/`, `logs/`, `models/`).
+3. Cria repositórios SQLAlchemy e filesystem, incluindo snapshots de transcrição.
+4. Monta downloader, conversor de áudio, runtime/engines de transcrição e diarização.
+5. Cria `ExecutionAuditLogger` em `settings.logs_dir() / "execution_audit.jsonl"`.
+6. Injeta serviços de rename, exportação, legendas, sumarização, healthcheck e last-error no `BotAdapter`.
+7. Retorna um objeto `Composition` usado por `__main__.py` para iniciar o polling Telegram e encerrar recursos com segurança.
 
-Não há frameworks de DI: a injeção é manual, explícita e fácil de seguir.
-
----
+Não há framework de DI: a injeção é manual, explícita e auditável.
 
 ## 8. Strategy: motores intercambiáveis
 
 ### 8.1 `TranscriptionEngine` (port)
 ```python
 class TranscriptionEngine(Protocol):
-    async def transcribe(
+    def transcribe(
         self,
         audio_path: Path,
-        language_hint: Optional[Language],
-        on_progress: Callable[[float], None],
-    ) -> Transcript: ...
+        *,
+        device: Device,
+        compute_type: ComputeType,
+        model: ModelName,
+        allowed_languages: tuple[str, ...],
+        language_hint: str | None = None,
+        progress: Callable[[float, str], None] | None = None,
+    ) -> TranscriptionResult: ...
 ```
 
 Implementações:
-- `WhisperxAdapter` (única hoje).
+- `WhisperXTranscriptionEngine` (única hoje).
 - (futuro) `OpenAIWhisperApiAdapter`, `LocalLLMAdapter`, etc.
 
 ### 8.2 `DiarizationEngine` (port)
 ```python
 class DiarizationEngine(Protocol):
-    async def diarize(
+    def diarize(
         self,
         audio_path: Path,
-        on_progress: Callable[[float], None],
-    ) -> SpeakerAnnotation: ...
+        *,
+        device: str,
+        hf_token: str,
+        min_speakers: int | None = None,
+        max_speakers: int | None = None,
+        progress: Callable[[float, str], None] | None = None,
+    ) -> DiarizationResult: ...
 ```
 
 Implementações em ordem de tentativa:
-1. `WhisperxDiarizationAdapter` (primário).
-2. `PyannoteDirectAdapter` (fallback automático em caso de exceção do primário).
+1. `WhisperXDiarizationEngine` (primário).
+2. `PyannoteDiarizationEngine` (fallback automático quando o primário fica indisponível ou falha).
 
-A composição é feita por `FallbackDiarizationEngine` (decorator), que envolve os dois e implementa a política de fallback.
+A composição é feita por `CompositeDiarizationEngine`, que tenta cada engine na ordem configurada e preserva o último erro para diagnóstico.
 
 ---
 
 ## 9. Observador: progresso e logs
 
-`Pipeline` mantém uma lista de `ProgressReporter`s. Em produção:
-- `TelegramProgressReporter` — edita a mensagem do chat com throttle de 1s, marcos 10/25/50/75/90.
-- `JobLogReporter` — escreve no arquivo de log do job.
+`PipelineRunner` recebe callbacks opcionais de progresso e auditoria. Em produção:
+- `ProgressReporter` — edita uma única mensagem de progresso no Telegram.
+- `ExecutionAuditLogger` — escreve eventos JSONL estruturados em `data/logs/execution_audit.jsonl`.
 
-Em testes:
-- `RecordingProgressReporter` — guarda em lista para assertions.
-- `NoOpProgressReporter` — não faz nada.
+Em testes, os callbacks podem ser funções simples ou `None`, mantendo o pipeline desacoplado de Telegram e filesystem.
 
 ---
 
@@ -480,7 +353,7 @@ Cada specification é trivialmente unit-testável.
 
 ## 12. Configuração efetiva
 
-`Config` (em `config.py`) é uma classe `BaseSettings` do `pydantic-settings`. Variáveis lidas:
+`AppSettings` (em `application/config.py`) é uma classe `BaseSettings` do `pydantic-settings`. Variáveis lidas:
 
 | Var | Origem | Default | Sensível? |
 |---|---|---|---|

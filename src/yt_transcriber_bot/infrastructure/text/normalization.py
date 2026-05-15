@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import html
+import logging
 import re
+
+logger = logging.getLogger(__name__)
 
 _MOJIBAKE_MARKERS = ("Ã", "Â", "â", "�", "¤", "€", "™", "œ", "€�", "€¦")
 _PORTUGUESE_LETTERS = (
@@ -37,6 +40,7 @@ def normalize_artifact_text(text: str) -> str:
     text = text.replace("\u200b", "")
     text = text.replace("\ufeff", "")
     text = _repair_mojibake(text)
+    _warn_if_replacement_characters_remain(text)
     text = text.replace("\xa0", " ")
     return re.sub(r"\s+", " ", text).strip()
 
@@ -97,3 +101,14 @@ def _marker_count(text: str) -> int:
 
 def _portuguese_score(text: str) -> int:
     return sum(1 for char in text if char in _PORTUGUESE_CHARS)
+
+
+def _warn_if_replacement_characters_remain(text: str) -> None:
+    replacement_count = text.count("�")
+    if replacement_count == 0:
+        return
+    logger.warning(
+        "Texto normalizado ainda contém %s caractere(s) de substituição Unicode; "
+        "a origem pode ter codificação corrompida.",
+        replacement_count,
+    )

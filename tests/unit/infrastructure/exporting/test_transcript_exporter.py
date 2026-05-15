@@ -146,3 +146,36 @@ def test_export_filters_zero_duration_segments_and_normalizes_entities(tmp_path:
     assert len(data["transcript"]["segments"]) == 1
     assert data["transcript"]["segments"][0]["speaker"] == "SPEAKER_00"
     assert data["transcript"]["segments"][0]["text"] == "Olá mundo"
+
+
+def test_export_repairs_mojibake_in_derived_artifacts(tmp_path: Path) -> None:
+    repo = TranscriptSnapshotRepository(tmp_path / "segments")
+    snapshot = _snapshot()
+    repo.save(
+        "video",
+        TranscriptSnapshot(
+            metadata=snapshot.metadata,
+            transcript=Transcript(
+                segments=(
+                    TranscriptSegment(
+                        0.0,
+                        1.25,
+                        "VocÃª nÃ£o tem aÃ§Ã£o",
+                        "SPEAKER_00",
+                    ),
+                ),
+                language=Language("pt"),
+                language_confidence=0.95,
+                source="whisperx",
+            ),
+            context=snapshot.context,
+        ),
+    )
+    service = TranscriptExportService(repo)
+
+    srt = service.export(slug="video", output_base_path=tmp_path / "video.md", format="srt")
+    assert "SPEAKER_00: Você não tem ação" in srt.path.read_text(encoding="utf-8")
+
+    payload = service.export(slug="video", output_base_path=tmp_path / "video.md", format="json")
+    data = json.loads(payload.path.read_text(encoding="utf-8"))
+    assert data["transcript"]["segments"][0]["text"] == "Você não tem ação"

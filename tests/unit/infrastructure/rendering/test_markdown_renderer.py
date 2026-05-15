@@ -204,6 +204,26 @@ class TestTurns:
         assert "Olá. Como vai?" in md
         assert "Bem." in md
 
+    def test_turn_text_repairs_common_mojibake(self) -> None:
+        t = Transcript(
+            segments=(
+                TranscriptSegment(
+                    start_seconds=0,
+                    end_seconds=2,
+                    text="VocÃª nÃ£o tem aÃ§Ã£o.",
+                    speaker_label="SPEAKER_00",
+                ),
+            ),
+            language=Language(code="pt"),
+            language_confidence=0.9,
+            source="whisperx",
+        )
+
+        md = MarkdownTranscriptRenderer().render(_meta(), t, _ctx())
+
+        assert "Você não tem ação." in md
+        assert "VocÃª" not in md
+
     def test_turn_uses_aliases(self) -> None:
         md = MarkdownTranscriptRenderer().render(
             _meta(),

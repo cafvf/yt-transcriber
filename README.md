@@ -43,7 +43,7 @@ Toda a documentação detalhada está na pasta [`docs/`](./docs/):
 
 - Recebe links do YouTube por mensagem direta ou por `/transcribe <link>`.
 - Aceita override de idioma por `/pt <link>`, `/en <link>` ou `--lang pt|en`.
-- Mantém fila sequencial com deduplicação e limite configurável.
+- Mantém fila sequencial com limite configurável e deduplicação apenas para o mesmo vídeo+idioma que já esteja em processamento ou na fila.
 - Permite consultar fila e status com `/queue`, `/fila` e `/status`.
 - Permite cancelar job atual ou fila com `/cancel`, `/cancelall`, `/cancelartudo`, `/clearqueue`, `/cancelqueue`, `/limparfila`.
 - Lista histórico com `/list` e reenvia transcrições com `/last [n]`.
@@ -121,7 +121,7 @@ Limitações atuais importantes:
 
 - `/healthcheck` não substitui logs completos: ele resume o estado operacional e deve ser usado como triagem inicial.
 - `/lasterror` depende de erro persistido no banco de jobs ou em `data/logs/operational_errors.jsonl`; falhas catastróficas antes da inicialização completa do bot ainda exigem consulta ao terminal, systemd ou arquivo de log.
-- `/redo <link>` reprocessa imediatamente como novo job; confirmação inline com diff de configuração permanece futura.
+- `/redo <link>` reprocessa imediatamente um vídeo já concluído como novo job; se o mesmo vídeo+idioma ainda estiver em processamento ou na fila, a deduplicação operacional bloqueia a duplicata. Confirmação inline com diff de configuração permanece futura.
 - `/video_subs` gera apenas legenda selecionável; legenda queimada não está no escopo atual.
 - O bot ainda não aceita upload direto de áudio como entrada; apenas links do YouTube.
 - A busca no histórico ainda não está implementada.
