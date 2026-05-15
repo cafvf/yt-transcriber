@@ -708,9 +708,12 @@ A avaliação é **incremental e automatizada**. Em cada gate:
 
 ## Nota pós-observabilidade — Roadmap revisado
 
-Após a implementação de `/healthcheck` e `/lasterror`, o próximo ciclo funcional recomendado é o Gate 8: `/search <texto>` com busca textual em transcrições, resumos e metadados, estruturado para permitir busca semântica futura.
+Após a implementação de `/healthcheck` e `/lasterror`, o roadmap passa a distinguir duas trilhas:
 
-A ordem funcional revisada é:
+1. **Próxima sessão técnica**: Phases 6–9 documentadas em `docs/patches/PATCH_NOTES_2026-05-15-next-session-phases.md`, cobrindo hardening de cancelamento, fila durável, reaproveitamento de inspeção do YouTube e redução de overhead operacional.
+2. **Próximo ciclo funcional**: Gate 8 (`/search <texto>`) com busca textual em transcrições, resumos e metadados, estruturado para permitir busca semântica futura.
+
+A ordem funcional revisada depois dessas fases técnicas é:
 
 1. `/search <texto>` + arquitetura para busca semântica.
 2. `/text [n]`.

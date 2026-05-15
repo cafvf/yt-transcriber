@@ -229,11 +229,22 @@ Nunca publique tokens, cookies, logs completos com segredos, bancos SQLite de pr
 
 ---
 
-## Próximo gate recomendado
+## Próxima sessão recomendada
+
+Antes de retomar o próximo gate funcional, a próxima sessão recomendada fica reservada para uma trilha curta de endurecimento técnico já documentada em `docs/patches/PATCH_NOTES_2026-05-15-next-session-phases.md` e no plano `.omx/plans/plan-bottleneck-remediation-20260515.md`.
+
+Fases previstas para a próxima sessão:
+
+1. **Phase 6 — Startup and cancellation hardening**
+2. **Phase 7 — Durable queue and restart recovery**
+3. **Phase 8 — YouTube inspection reuse and transcription hot path**
+4. **Phase 9 — Operational overhead cleanup and documentation closure**
+
+## Próximo gate funcional após essas fases
 
 **Gate 8 — Busca e recuperação de conhecimento**
 
-A observabilidade operacional (`/healthcheck` e `/lasterror`) está implementada. O próximo incremento recomendado é transformar o histórico local em uma base consultável, começando por busca textual e deixando a arquitetura preparada para busca semântica.
+A observabilidade operacional (`/healthcheck` e `/lasterror`) está implementada. Após as fases técnicas acima, o próximo incremento funcional recomendado continua sendo transformar o histórico local em uma base consultável, começando por busca textual e deixando a arquitetura preparada para busca semântica.
 
 Escopo proposto para o MVP:
 
