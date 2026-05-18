@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +48,7 @@ class FakeBackend(WhisperXBackend):
         model: str,
         allowed_languages: tuple[str, ...],
         language_hint: str | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> _RawTranscription:
         self.transcribe_calls.append(
             {
@@ -69,6 +71,7 @@ class FakeBackend(WhisperXBackend):
         audio_path: Path,
         *,
         device: str,
+        cancel_event: threading.Event | None = None,
     ) -> _AlignedTranscription:
         self.align_calls.append({"raw": raw, "audio_path": audio_path, "device": device})
         if self._align_exc is not None:

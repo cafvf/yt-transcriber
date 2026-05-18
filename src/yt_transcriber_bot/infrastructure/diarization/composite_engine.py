@@ -9,9 +9,11 @@ Aplica padrão *Chain of Responsibility* sobre dois engines concretos
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+import threading
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from yt_transcriber_bot.application.cancellation import raise_if_cancelled
 from yt_transcriber_bot.application.ports.diarization_engine import (
     DiarizationEngine,
     DiarizationError,
@@ -38,10 +40,12 @@ class CompositeDiarizationEngine(DiarizationEngine):
         hf_token: str,
         min_speakers: int | None = None,
         max_speakers: int | None = None,
-        progress=None,
+        progress: Callable[[float, str], None] | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> DiarizationResult:
         last_error: Exception | None = None
         for engine in self._engines:
+            raise_if_cancelled(cancel_event)
             try:
                 if progress:
                     progress(0.10, f"Tentando diarização com {engine.__class__.__name__}...")
@@ -52,6 +56,7 @@ class CompositeDiarizationEngine(DiarizationEngine):
                     min_speakers=min_speakers,
                     max_speakers=max_speakers,
                     progress=progress,
+                    cancel_event=cancel_event,
                 )
             except DiarizationUnavailableError as exc:
                 logger.warning(

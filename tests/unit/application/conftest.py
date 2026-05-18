@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date
@@ -83,7 +84,13 @@ class FakeYouTubeDownloader(YouTubeDownloader):
             raise self.raise_on_list_subtitles
         return self.subtitles
 
-    def fetch_subtitle(self, video_id: VideoId, track: SubtitleTrack) -> FetchedSubtitle:
+    def fetch_subtitle(
+        self,
+        video_id: VideoId,
+        track: SubtitleTrack,
+        *,
+        cancel_event: threading.Event | None = None,
+    ) -> FetchedSubtitle:
         if self.fetched_subtitle is None:
             return FetchedSubtitle(
                 language=track.language,
@@ -92,7 +99,13 @@ class FakeYouTubeDownloader(YouTubeDownloader):
             )
         return self.fetched_subtitle
 
-    def download_audio(self, video_id: VideoId, dest_dir: Path) -> DownloadedAudio:
+    def download_audio(
+        self,
+        video_id: VideoId,
+        dest_dir: Path,
+        *,
+        cancel_event: threading.Event | None = None,
+    ) -> DownloadedAudio:
         if self.raise_on_audio is not None:
             raise self.raise_on_audio
         path = dest_dir / f"{video_id.value}.{self.audio_container}"
@@ -124,6 +137,7 @@ class FakeAudioConverter(AudioConverter):
         *,
         bitrate_kbps: int = 32,
         sample_rate_hz: int = 16000,
+        cancel_event: threading.Event | None = None,
     ) -> ConvertedAudio:
         self.convert_calls.append(
             {
@@ -154,6 +168,7 @@ class FakeAudioConverter(AudioConverter):
         dest_dir: Path,
         *,
         max_size_bytes: int = 49 * 1024 * 1024,
+        cancel_event: threading.Event | None = None,
     ) -> tuple[Path, ...]:
         return (source,)
 
@@ -199,6 +214,7 @@ class FakeTranscriptionEngine(TranscriptionEngine):
         allowed_languages: tuple[str, ...],
         language_hint: str | None = None,
         progress: Callable[[float, str], None] | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> TranscriptionResult:
         self.calls.append(
             {
@@ -242,6 +258,7 @@ class FakeDiarizationEngine(DiarizationEngine):
         min_speakers: int | None = None,
         max_speakers: int | None = None,
         progress: Callable[[float, str], None] | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> DiarizationResult:
         self.calls.append(
             {

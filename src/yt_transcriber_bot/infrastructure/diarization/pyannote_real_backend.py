@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable, Iterable
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from yt_transcriber_bot.application.cancellation import raise_if_cancelled
 from yt_transcriber_bot.infrastructure.diarization._compat import (
     call_with_hf_token,
     iter_speaker_turns,
@@ -25,7 +27,7 @@ class RealPyannoteBackend:
         model_name: str = "pyannote/speaker-diarization-community-1",
     ) -> None:
         self._model_name = model_name
-        self._cache: dict[tuple[str, str, str], object] = {}
+        self._cache: dict[tuple[str, str, str], Any] = {}
 
     def diarize(
         self,
@@ -36,15 +38,17 @@ class RealPyannoteBackend:
         min_speakers: int | None,
         max_speakers: int | None,
         progress: Callable[[float, str], None] | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> Iterable[_RawDiarSegment]:
-        import torch  # type: ignore[import-untyped]
-        from pyannote.audio import Pipeline  # type: ignore[import-untyped]
+        import torch
+        from pyannote.audio import Pipeline
 
         from yt_transcriber_bot.infrastructure.diarization.pyannote_diarization import (
             _RawDiarSegment,
         )
 
         cache_key = (self._model_name, device, hf_token[:8])
+        raise_if_cancelled(cancel_event)
         if progress:
             progress(0.25, "Carregando modelo de diarização pyannote...")
         if cache_key not in self._cache:
@@ -64,8 +68,10 @@ class RealPyannoteBackend:
         if max_speakers is not None:
             kwargs["max_speakers"] = max_speakers
 
-        annotation = pipeline(str(audio_path), **kwargs)  # type: ignore[operator]
+        raise_if_cancelled(cancel_event)
+        annotation = pipeline(str(audio_path), **kwargs)
 
+        raise_if_cancelled(cancel_event)
         if progress:
             progress(0.75, "Coletando trechos por falante...")
         out: list[_RawDiarSegment] = []

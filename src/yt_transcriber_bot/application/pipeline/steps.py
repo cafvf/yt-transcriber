@@ -14,6 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from yt_transcriber_bot.application.config import AppSettings
 from yt_transcriber_bot.application.pipeline.context import PipelineContext
@@ -53,6 +54,18 @@ from yt_transcriber_bot.domain.value_objects.duration import Duration
 from yt_transcriber_bot.domain.value_objects.language import Language
 from yt_transcriber_bot.domain.value_objects.model_name import ModelName
 from yt_transcriber_bot.domain.value_objects.slug import Slug
+from yt_transcriber_bot.infrastructure.text.normalization import (
+    normalize_artifact_text,
+    text_has_unresolved_corruption,
+)
+
+if TYPE_CHECKING:
+    from yt_transcriber_bot.domain.entities.transcript import Transcript
+    from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
+    from yt_transcriber_bot.infrastructure.persistence.filesystem.transcript_snapshot import (
+        TranscriptSnapshotRepository,
+    )
+    from yt_transcriber_bot.infrastructure.rendering.markdown_renderer import RenderContext
 
 logger = logging.getLogger(__name__)
 
@@ -188,7 +201,11 @@ class TryYouTubeSubtitlesStep(PipelineStep):
             return
 
         try:
-            fetched = self._dl.fetch_subtitle(ctx.job.video_id, chosen)
+            fetched = self._dl.fetch_subtitle(
+                ctx.job.video_id,
+                chosen,
+                cancel_event=ctx.cancel_event,
+            )
         except Exception as exc:
             logger.warning("download da legenda falhou: %s", exc)
             ctx.add_diagnostic(f"Falha ao baixar legenda: {exc}")
@@ -198,8 +215,22 @@ class TryYouTubeSubtitlesStep(PipelineStep):
             ctx.add_diagnostic("Legenda baixada vazia; ignorando.")
             return
 
+        normalized_segments = tuple(
+            (
+                float(start),
+                float(end),
+                normalize_artifact_text(str(text)),
+            )
+            for start, end, text in fetched.segments
+        )
+        if _subtitle_segments_have_unresolved_corruption(normalized_segments):
+            ctx.add_diagnostic(
+                "Legenda do YouTube rejeitada por integridade; baixando áudio e usando WhisperX."
+            )
+            return
+
         if chosen.is_auto_generated:
-            quality = assess_auto_subtitle_quality(fetched.segments)
+            quality = assess_auto_subtitle_quality(normalized_segments)
             ctx.add_diagnostic(f"Qualidade da legenda automática: {quality.summary()}")
             if not quality.accepted:
                 ctx.add_diagnostic(
@@ -210,11 +241,11 @@ class TryYouTubeSubtitlesStep(PipelineStep):
         # FetchedSubtitle.segments == tuple[(start, end, text)]
         ctx.transcribed_segments = tuple(
             TranscribedSegment(
-                start_seconds=float(s[0]),
-                end_seconds=float(s[1]),
-                text=str(s[2]),
+                start_seconds=start,
+                end_seconds=end,
+                text=text,
             )
-            for s in fetched.segments
+            for start, end, text in normalized_segments
         )
         ctx.transcription_language = target_language
         ctx.transcription_confidence = 1.0
@@ -256,6 +287,12 @@ class TryYouTubeSubtitlesStep(PipelineStep):
         if manual:
             return manual[0]
         return candidates[0]
+
+
+def _subtitle_segments_have_unresolved_corruption(
+    segments: tuple[tuple[float, float, str], ...],
+) -> bool:
+    return any(text_has_unresolved_corruption(text) for _, _, text in segments if text.strip())
 
 
 @dataclass(frozen=True)
@@ -411,7 +448,11 @@ class DownloadAudioStep(PipelineStep):
     def execute(self, ctx: PipelineContext) -> None:
         self._downloads_dir.mkdir(parents=True, exist_ok=True)
         try:
-            result = self._dl.download_audio(ctx.job.video_id, dest_dir=self._downloads_dir)
+            result = self._dl.download_audio(
+                ctx.job.video_id,
+                dest_dir=self._downloads_dir,
+                cancel_event=ctx.cancel_event,
+            )
         except NoAudioStreamError as exc:
             raise PipelineRejectionError(
                 f"Vídeo sem fluxo de áudio (provavelmente live ou só vídeo): {exc}"
@@ -460,6 +501,7 @@ class ConvertAudioStep(PipelineStep):
             dest,
             bitrate_kbps=self._settings.audio_bitrate_kbps,
             sample_rate_hz=self._settings.audio_sample_rate_hz,
+            cancel_event=ctx.cancel_event,
         ).path
 
 
@@ -548,6 +590,7 @@ class TranscribeStep(PipelineStep):
                 allowed_languages=tuple(self._settings.allowed_languages),
                 language_hint=ctx.requested_language,
                 progress=self._progress.on_progress,
+                cancel_event=ctx.cancel_event,
             )
         except OutOfMemoryError as exc:
             ctx.add_diagnostic(f"OOM durante transcrição ({exc}); retentando menor.")
@@ -569,6 +612,7 @@ class TranscribeStep(PipelineStep):
                 allowed_languages=tuple(self._settings.allowed_languages),
                 language_hint=ctx.requested_language,
                 progress=self._progress.on_progress,
+                cancel_event=ctx.cancel_event,
             )
 
         ctx.transcribed_segments = result.segments
@@ -628,6 +672,7 @@ class DiarizeStep(PipelineStep):
             device=device_str,
             hf_token=self._settings.hf_token,
             progress=self._progress.on_progress,
+            cancel_event=ctx.cancel_event,
         )
         if self._progress.on_progress:
             self._progress.on_progress(0.75, "Associando falantes aos segmentos...")
@@ -684,7 +729,7 @@ class RenderMarkdownStep(PipelineStep):
         transcripts_dir: Path,
         settings: AppSettings,
         diarization_model_name: str = "pyannote/speaker-diarization-community-1",
-        snapshot_repository: object | None = None,
+        snapshot_repository: TranscriptSnapshotRepository | None = None,
     ) -> None:
         self._renderer = renderer
         self._transcripts_dir = transcripts_dir
@@ -727,6 +772,13 @@ class RenderMarkdownStep(PipelineStep):
             render_context,
             speaker_aliases=ctx.job.speaker_renames,
         )
+        if ctx.youtube_subtitle_used and text_has_unresolved_corruption(rendered):
+            ctx.add_diagnostic(
+                "Markdown derivado de legenda rejeitado por integridade antes do envio."
+            )
+            raise PipelineRejectionError(
+                "A legenda do YouTube permaneceu corrompida após renderização."
+            )
         dest.write_text(rendered, encoding="utf-8")
         self._save_snapshot_if_available(
             slug=dest.stem,
@@ -745,9 +797,9 @@ class RenderMarkdownStep(PipelineStep):
         self,
         *,
         slug: str,
-        metadata: object,
-        transcript: object,
-        render_context: object,
+        metadata: VideoMetadata,
+        transcript: Transcript,
+        render_context: RenderContext,
         ctx: PipelineContext,
     ) -> None:
         if self._snapshot_repository is None:
@@ -757,9 +809,9 @@ class RenderMarkdownStep(PipelineStep):
                 TranscriptSnapshot,
             )
 
-            self._snapshot_repository.save(  # type: ignore[attr-defined]
+            self._snapshot_repository.save(
                 slug,
-                TranscriptSnapshot(  # type: ignore[arg-type]
+                TranscriptSnapshot(
                     metadata=metadata,
                     transcript=transcript,
                     context=render_context,

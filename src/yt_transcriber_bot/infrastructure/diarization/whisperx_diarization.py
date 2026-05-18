@@ -6,11 +6,13 @@ A implementação real do backend só importa ``whisperx`` no acto de instanciar
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from yt_transcriber_bot.application.cancellation import raise_if_cancelled
 from yt_transcriber_bot.application.ports.diarization_engine import (
     DiarizationEngine,
     DiarizationError,
@@ -39,6 +41,7 @@ class WhisperXDiarizeBackend(Protocol):
         min_speakers: int | None,
         max_speakers: int | None,
         progress: Callable[[float, str], None] | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> Iterable[_RawDiarSegment]: ...
 
 
@@ -57,7 +60,9 @@ class WhisperXDiarizationEngine(DiarizationEngine):
         min_speakers: int | None = None,
         max_speakers: int | None = None,
         progress: Callable[[float, str], None] | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> DiarizationResult:
+        raise_if_cancelled(cancel_event)
         if not audio_path.exists():
             raise DiarizationError(f"Audio nao existe: {audio_path}")
         if not hf_token:
@@ -73,6 +78,7 @@ class WhisperXDiarizationEngine(DiarizationEngine):
                     min_speakers=min_speakers,
                     max_speakers=max_speakers,
                     progress=progress,
+                    cancel_event=cancel_event,
                 )
             )
         except DiarizationError:
@@ -85,6 +91,7 @@ class WhisperXDiarizationEngine(DiarizationEngine):
         if not raw:
             raise DiarizationUnavailableError("WhisperX devolveu zero segmentos")
 
+        raise_if_cancelled(cancel_event)
         if progress:
             progress(0.90, "Diarização WhisperX concluída.")
         segments = tuple(_to_domain(raw))

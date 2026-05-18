@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -63,6 +64,7 @@ class FakeWxBackend(WhisperXDiarizeBackend):
         min_speakers: int | None,
         max_speakers: int | None,
         progress: Callable[[float, str], None] | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> Iterable[WxSeg]:
         assert self.calls is not None
         self.calls.append(
@@ -97,6 +99,7 @@ class FakePyannoteBackend(PyannoteBackend):
         min_speakers: int | None,
         max_speakers: int | None,
         progress: Callable[[float, str], None] | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> Iterable[PyannoteSeg]:
         assert self.calls is not None
         self.calls.append(
@@ -251,6 +254,7 @@ class _FakeEngine(DiarizationEngine):
         min_speakers: int | None = None,
         max_speakers: int | None = None,
         progress: Callable[[float, str], None] | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> DiarizationResult:
         self.called += 1
         if self.exc is not None:

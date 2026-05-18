@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import json
 import subprocess
+import threading
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from yt_transcriber_bot.application.cancellation import OperationCanceledError, raise_if_cancelled
 from yt_transcriber_bot.application.ports.audio_converter import (
     AudioConversionError,
     AudioConverter,
@@ -31,20 +34,55 @@ class CompletedRun:
 
 
 class CommandRunner(Protocol):
-    def run(self, args: Sequence[str]) -> CompletedRun: ...
+    def run(
+        self,
+        args: Sequence[str],
+        *,
+        cancel_event: threading.Event | None = None,
+    ) -> CompletedRun: ...
 
 
 class SubprocessCommandRunner:
     """Implementação real de ``CommandRunner`` usando ``subprocess.run``."""
 
-    def run(self, args: Sequence[str]) -> CompletedRun:
-        proc = subprocess.run(
+    def run(
+        self,
+        args: Sequence[str],
+        *,
+        cancel_event: threading.Event | None = None,
+    ) -> CompletedRun:
+        if cancel_event is None:
+            completed = subprocess.run(
+                list(args),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            return CompletedRun(
+                returncode=completed.returncode,
+                stdout=completed.stdout,
+                stderr=completed.stderr,
+            )
+
+        raise_if_cancelled(cancel_event)
+        process = subprocess.Popen(
             list(args),
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            check=False,
         )
-        return CompletedRun(returncode=proc.returncode, stdout=proc.stdout, stderr=proc.stderr)
+        while process.poll() is None:
+            if cancel_event.is_set():
+                process.terminate()
+                try:
+                    process.wait(timeout=1.0)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=1.0)
+                raise OperationCanceledError("Processo ffmpeg cancelado pelo usuário")
+            time.sleep(0.05)
+        stdout, stderr = process.communicate()
+        return CompletedRun(returncode=process.returncode, stdout=stdout, stderr=stderr)
 
 
 class FfmpegAudioConverter(AudioConverter):
@@ -76,7 +114,9 @@ class FfmpegAudioConverter(AudioConverter):
         *,
         bitrate_kbps: int = 32,
         sample_rate_hz: int = 16000,
+        cancel_event: threading.Event | None = None,
     ) -> ConvertedAudio:
+        raise_if_cancelled(cancel_event)
         if not source.exists():
             raise AudioConversionError(f"Arquivo de origem não existe: {source}")
         if bitrate_kbps < 16 or bitrate_kbps > 128:
@@ -109,7 +149,12 @@ class FfmpegAudioConverter(AudioConverter):
             f"{bitrate_kbps}k",
             str(dest),
         ]
-        result = self._runner.run(args)
+        try:
+            result = self._runner.run(args, cancel_event=cancel_event)
+        except OperationCanceledError:
+            if dest.exists():
+                dest.unlink(missing_ok=True)
+            raise
         if result.returncode != 0:
             raise AudioConversionError(
                 f"ffmpeg retornou {result.returncode}: {result.stderr.strip()[:500]}"
@@ -136,7 +181,9 @@ class FfmpegAudioConverter(AudioConverter):
         dest_dir: Path,
         *,
         max_size_bytes: int = 49 * 1024 * 1024,
+        cancel_event: threading.Event | None = None,
     ) -> tuple[Path, ...]:
+        raise_if_cancelled(cancel_event)
         if not source.exists():
             raise AudioConversionError(f"Arquivo não existe: {source}")
         size = source.stat().st_size
@@ -171,7 +218,12 @@ class FfmpegAudioConverter(AudioConverter):
             "1",
             str(out_pattern),
         ]
-        result = self._runner.run(args)
+        try:
+            result = self._runner.run(args, cancel_event=cancel_event)
+        except OperationCanceledError:
+            for candidate in dest_dir.glob(f"{source.stem}_part*{source.suffix}"):
+                candidate.unlink(missing_ok=True)
+            raise
         if result.returncode != 0:
             raise AudioConversionError(f"ffmpeg segment falhou: {result.stderr.strip()[:500]}")
         produced = sorted(dest_dir.glob(f"{source.stem}_part*{source.suffix}"))

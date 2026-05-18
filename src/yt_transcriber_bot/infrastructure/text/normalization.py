@@ -27,6 +27,18 @@ _COMMON_CP1252_SEQUENCES = {
 _COMMON_LATIN1_UTF8_SEQUENCES = {
     char.encode("utf-8").decode("latin-1"): char for char in _PORTUGUESE_LETTERS
 }
+_RESIDUAL_CORRUPTION_MARKERS = (
+    "�",
+    "Ã",
+    "\u00e2\u20ac\u0153",
+    "\u00e2\u20ac\x9d",
+    "\u00e2\u20ac\x9c",
+    "\u00e2\u20ac\u2122",
+    "\u00e2\u20ac\u02dc",
+    "\u00e2\u20ac\u00a6",
+    "\u00e2\u20ac\u201c",
+    "\u00e2\u20ac\u201d",
+)
 
 
 def normalize_artifact_text(text: str) -> str:
@@ -43,6 +55,21 @@ def normalize_artifact_text(text: str) -> str:
     _warn_if_replacement_characters_remain(text)
     text = text.replace("\xa0", " ")
     return re.sub(r"\s+", " ", text).strip()
+
+
+def unresolved_text_corruption_score(text: str) -> int:
+    """Conta marcadores residuais de corrupção textual após normalização.
+
+    O objetivo aqui é ser conservador: detectar apenas sinais que ainda são
+    fortemente indicativos de mojibake/decodificação quebrada, sem punir
+    acentos portugueses válidos.
+    """
+
+    return sum(text.count(marker) for marker in _RESIDUAL_CORRUPTION_MARKERS)
+
+
+def text_has_unresolved_corruption(text: str) -> bool:
+    return unresolved_text_corruption_score(text) > 0
 
 
 def _repair_mojibake(text: str) -> str:

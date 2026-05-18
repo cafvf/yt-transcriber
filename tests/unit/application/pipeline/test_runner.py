@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from yt_transcriber_bot.application.cancellation import OperationCanceledError
 from yt_transcriber_bot.application.pipeline.context import PipelineContext
 from yt_transcriber_bot.application.pipeline.runner import (
     PipelineCanceledError,
@@ -172,3 +173,18 @@ class TestPipelineRunner:
         with pytest.raises(PipelineCanceledError):
             runner.run(ctx)
         assert s2.executed == 0
+
+    def test_operation_canceled_inside_step_becomes_pipeline_canceled(self) -> None:
+        class CancelingStep(PipelineStep):
+            @property
+            def name(self) -> str:
+                return "active_cancel"
+
+            def execute(self, ctx: PipelineContext) -> None:
+                raise OperationCanceledError("cancelado durante etapa ativa")
+
+        runner = PipelineRunner(steps=(CancelingStep(),))
+        ctx = PipelineContext(job=_make_job())
+
+        with pytest.raises(PipelineCanceledError, match="durante etapa ativa"):
+            runner.run(ctx)

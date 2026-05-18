@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -79,7 +80,19 @@ class YouTubeDownloader(ABC):
     def list_subtitles(self, video_id: VideoId) -> tuple[SubtitleTrack, ...]: ...
 
     @abstractmethod
-    def fetch_subtitle(self, video_id: VideoId, track: SubtitleTrack) -> FetchedSubtitle: ...
+    def fetch_subtitle(
+        self,
+        video_id: VideoId,
+        track: SubtitleTrack,
+        *,
+        cancel_event: threading.Event | None = None,
+    ) -> FetchedSubtitle: ...
 
     @abstractmethod
-    def download_audio(self, video_id: VideoId, dest_dir: Path) -> DownloadedAudio: ...
+    def download_audio(
+        self,
+        video_id: VideoId,
+        dest_dir: Path,
+        *,
+        cancel_event: threading.Event | None = None,
+    ) -> DownloadedAudio: ...

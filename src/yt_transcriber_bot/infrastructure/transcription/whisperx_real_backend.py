@@ -7,8 +7,11 @@ importando sem ter ``whisperx`` instalado.
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+from yt_transcriber_bot.application.cancellation import raise_if_cancelled
 
 if TYPE_CHECKING:
     from yt_transcriber_bot.infrastructure.transcription.whisperx_engine import (
@@ -22,7 +25,7 @@ class RealWhisperXBackend:
 
     def __init__(self, batch_size: int = 16) -> None:
         self._batch_size = batch_size
-        self._cache: dict[tuple[str, str, str], Any] = {}
+        self._cache: dict[tuple[str, str, str, str], Any] = {}
 
     def transcribe(
         self,
@@ -33,8 +36,9 @@ class RealWhisperXBackend:
         model: str,
         allowed_languages: tuple[str, ...],
         language_hint: str | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> _RawTranscription:
-        import whisperx  # type: ignore[import-untyped]
+        import whisperx
 
         from yt_transcriber_bot.infrastructure.transcription.whisperx_engine import (
             _RawTranscription,
@@ -42,6 +46,7 @@ class RealWhisperXBackend:
 
         normalized_hint = (language_hint or "").strip().lower() or None
         cache_key = (model, device, compute_type, normalized_hint or "auto")
+        raise_if_cancelled(cancel_event)
         if cache_key not in self._cache:
             self._cache[cache_key] = whisperx.load_model(
                 model,
@@ -51,11 +56,14 @@ class RealWhisperXBackend:
             )
         loaded = self._cache[cache_key]
 
+        raise_if_cancelled(cancel_event)
         audio = whisperx.load_audio(str(audio_path))
+        raise_if_cancelled(cancel_event)
         result = loaded.transcribe(
             audio,
             batch_size=self._batch_size,
         )
+        raise_if_cancelled(cancel_event)
         # whisperx devolve dict com "segments" e "language"
         segments = tuple(result.get("segments", ()))
         language = str(result.get("language") or normalized_hint or "en")
@@ -69,15 +77,19 @@ class RealWhisperXBackend:
         audio_path: Path,
         *,
         device: str,
+        cancel_event: threading.Event | None = None,
     ) -> _AlignedTranscription:
-        import whisperx  # type: ignore[import-untyped]
+        import whisperx
 
         from yt_transcriber_bot.infrastructure.transcription.whisperx_engine import (
             _AlignedTranscription,
         )
 
+        raise_if_cancelled(cancel_event)
         align_model, metadata = whisperx.load_align_model(language_code=raw.language, device=device)
+        raise_if_cancelled(cancel_event)
         audio = whisperx.load_audio(str(audio_path))
+        raise_if_cancelled(cancel_event)
         aligned = whisperx.align(
             list(raw.segments),
             align_model,
@@ -86,4 +98,5 @@ class RealWhisperXBackend:
             device,
             return_char_alignments=False,
         )
+        raise_if_cancelled(cancel_event)
         return _AlignedTranscription(segments=tuple(aligned.get("segments", ())))

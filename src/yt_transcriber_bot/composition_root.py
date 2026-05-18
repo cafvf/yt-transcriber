@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from yt_transcriber_bot.application.config import AppSettings
 from yt_transcriber_bot.application.ports.audio_converter import AudioConverter
 from yt_transcriber_bot.application.ports.diarization_engine import DiarizationEngine
-from yt_transcriber_bot.application.ports.gpu_detector import GpuDetector
+from yt_transcriber_bot.application.ports.gpu_detector import GpuDetector, HardwareProfile
 from yt_transcriber_bot.application.ports.job_repository import JobRepository
 from yt_transcriber_bot.application.ports.transcription_engine import (
     TranscriptionEngine,
@@ -107,15 +107,14 @@ def _make_gpu_detector() -> GpuDetector:
 class _StubGpuDetector(GpuDetector):
     """Detector que sempre devolve perfil de CPU."""
 
-    def detect(self) -> object:  # pragma: no cover - usado só em ambientes sem torch
+    def detect(self) -> HardwareProfile:  # pragma: no cover - usado só em ambientes sem torch
         from yt_transcriber_bot.application.ports.gpu_detector import HardwareProfile
 
         return HardwareProfile(
-            cuda_available=False,
-            cuda_device_count=0,
-            gpu_name=None,
-            vram_gb=0.0,
-            compute_capability=None,
+            has_cuda=False,
+            cuda_compute_capability=None,
+            vram_total_gb=0.0,
+            gpu_name="",
         )
 
 

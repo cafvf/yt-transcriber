@@ -7,6 +7,7 @@ sendo preenchidos por cada step à medida que executam.
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -44,6 +45,7 @@ class PipelineContext:
     diagnostics: list[str] = field(default_factory=list)
     started_at: datetime | None = None
     finished_at: datetime | None = None
+    cancel_event: threading.Event | None = None
 
     def add_diagnostic(self, msg: str) -> None:
         self.diagnostics.append(msg)

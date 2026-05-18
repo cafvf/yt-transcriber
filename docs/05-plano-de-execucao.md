@@ -710,7 +710,7 @@ A avaliação é **incremental e automatizada**. Em cada gate:
 
 Após a implementação de `/healthcheck` e `/lasterror`, o roadmap passa a distinguir duas trilhas:
 
-1. **Próxima sessão técnica**: Phases 6–9 documentadas em `docs/patches/PATCH_NOTES_2026-05-15-next-session-phases.md`, cobrindo hardening de cancelamento, fila durável, reaproveitamento de inspeção do YouTube e redução de overhead operacional.
+1. **Próxima sessão técnica**: a trilha de hardening segue nas **Phases 7–9**. A **Phase 6** já foi concluída em `docs/patches/PATCH_NOTES_2026-05-17-phase6-hardening.md`; a sequência remanescente continua documentada em `docs/patches/PATCH_NOTES_2026-05-15-next-session-phases.md`, cobrindo fila durável, reaproveitamento de inspeção do YouTube e redução de overhead operacional.
 2. **Próximo ciclo funcional**: Gate 8 (`/search <texto>`) com busca textual em transcrições, resumos e metadados, estruturado para permitir busca semântica futura.
 
 A ordem funcional revisada depois dessas fases técnicas é:

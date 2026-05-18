@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import threading
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import pytest
 
+from yt_transcriber_bot.application.cancellation import OperationCanceledError
 from yt_transcriber_bot.application.ports.audio_converter import AudioConversionError
 from yt_transcriber_bot.infrastructure.audio.ffmpeg_converter import (
     CommandRunner,
@@ -36,7 +38,12 @@ class FakeRunner(CommandRunner):
         self._responses = list(responses or [])
         self._on_args = on_args
 
-    def run(self, args: Sequence[str]) -> CompletedRun:
+    def run(
+        self,
+        args: Sequence[str],
+        *,
+        cancel_event: threading.Event | None = None,
+    ) -> CompletedRun:
         captured = tuple(args)
         self.calls.append(captured)
         if self._on_args is not None:
@@ -168,6 +175,21 @@ class TestConvertWithMockRunner:
         runner = FakeRunner(on_args=writer)
         FfmpegAudioConverter(runner=runner).convert_to_opus_mono(src, dest)
         assert dest.exists()
+
+    def test_cancellation_removes_partial_output(self, tmp_path: Path) -> None:
+        src = tmp_path / "in.m4a"
+        _create_dummy_file(src)
+        dest = tmp_path / "out.ogg"
+
+        class CancelingRunner(FakeRunner):
+            def run(self, args, *, cancel_event=None):  # type: ignore[override]
+                _create_dummy_file(dest, size=64)
+                raise OperationCanceledError("cancelado")
+
+        conv = FfmpegAudioConverter(runner=CancelingRunner())
+        with pytest.raises(OperationCanceledError, match="cancelado"):
+            conv.convert_to_opus_mono(src, dest, cancel_event=threading.Event())
+        assert not dest.exists()
 
 
 # ======================================================================

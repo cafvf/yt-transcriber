@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable, Iterable
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from yt_transcriber_bot.application.cancellation import raise_if_cancelled
 from yt_transcriber_bot.infrastructure.diarization._compat import (
     call_with_hf_token,
     iter_speaker_turns,
@@ -21,7 +23,7 @@ class RealWhisperXDiarBackend:
     """Wrapper preguiçoso sobre ``whisperx.diarize.DiarizationPipeline``."""
 
     def __init__(self) -> None:
-        self._cache: dict[tuple[str, str], object] = {}
+        self._cache: dict[tuple[str, str], Any] = {}
 
     def diarize(
         self,
@@ -32,14 +34,16 @@ class RealWhisperXDiarBackend:
         min_speakers: int | None,
         max_speakers: int | None,
         progress: Callable[[float, str], None] | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> Iterable[_RawDiarSegment]:
-        from whisperx.diarize import DiarizationPipeline  # type: ignore[import-untyped]
+        from whisperx.diarize import DiarizationPipeline
 
         from yt_transcriber_bot.infrastructure.diarization.whisperx_diarization import (
             _RawDiarSegment,
         )
 
         cache_key = (device, hf_token[:8])
+        raise_if_cancelled(cancel_event)
         if progress:
             progress(0.25, "Carregando modelo de diarização WhisperX/pyannote...")
         if cache_key not in self._cache:
@@ -49,11 +53,13 @@ class RealWhisperXDiarBackend:
         pipeline = self._cache[cache_key]
         if progress:
             progress(0.50, "Executando diarização no áudio...")
-        annotation = pipeline(  # type: ignore[operator]
+        raise_if_cancelled(cancel_event)
+        annotation = pipeline(
             str(audio_path),
             min_speakers=min_speakers,
             max_speakers=max_speakers,
         )
+        raise_if_cancelled(cancel_event)
         if progress:
             progress(0.75, "Coletando trechos por falante...")
         out: list[_RawDiarSegment] = []

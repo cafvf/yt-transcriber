@@ -33,3 +33,25 @@ def test_real_subtitle_fetcher_uses_declared_charset(monkeypatch) -> None:
     )
 
     assert real_subtitle_fetcher("https://example.com/x.vtt", "vtt") == "Olá mundo"
+
+
+def test_real_subtitle_fetcher_prefers_utf8_when_charset_is_missing(monkeypatch) -> None:
+    payload = "Você não tem ação.".encode()
+
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda url, timeout=30: _FakeResponse(payload),
+    )
+
+    assert real_subtitle_fetcher("https://example.com/x.vtt", "vtt") == "Você não tem ação."
+
+
+def test_real_subtitle_fetcher_recovers_latin1_when_charset_is_missing(monkeypatch) -> None:
+    payload = "Olá, João.".encode("iso-8859-1")
+
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda url, timeout=30: _FakeResponse(payload),
+    )
+
+    assert real_subtitle_fetcher("https://example.com/x.vtt", "vtt") == "Olá, João."

@@ -37,7 +37,7 @@ Mostra a lista resumida de comandos implementados.
 Mostra o job em processamento e os links pendentes na fila. Se não houver nada em andamento, responde que o bot está pronto para receber links.
 
 ### `/cancel`
-- Durante processamento: sinaliza cancelamento do job em curso.
+- Durante processamento: sinaliza cancelamento do job em curso e interrompe o trabalho ativo de download/conversão/transcrição/diarização; arquivos parciais são limpos antes do job ser marcado como `cancelled`.
 - Durante diálogo de `/rename`: encerra a sessão; renomes válidos já aplicados permanecem no Markdown e no histórico.
 - Sem nada em andamento: responde `Nada para cancelar.`
 
@@ -226,13 +226,13 @@ Quando o YouTube já oferece legendas no idioma original, o bot economiza tempo 
   ```
   [4/7] Verificando legendas... ✓ Encontrada (manual, PT). Pulando WhisperX.
   ```
-  O `.md` é gerado a partir da legenda manual + diarização.
+  O `.md` é gerado a partir da legenda manual + diarização. Antes de enviar, o texto passa por normalização e checagem de integridade; se a legenda vier corrompida (ex.: mojibake), o atalho é rejeitado e o fluxo volta para WhisperX.
 
 - **Legenda auto-gerada**:
   ```
   [4/7] Verificando legendas... ✓ Encontrada (auto-gerada, PT). Pulando WhisperX.
   ```
-  O `.md` marca a origem como legenda auto-gerada do YouTube. Caso a qualidade não seja suficiente, use `/redo <link>` para reprocessar explicitamente.
+  O `.md` marca a origem como legenda auto-gerada do YouTube. Caso a qualidade ou a integridade textual não sejam suficientes, o bot rejeita a legenda e usa WhisperX. Se quiser reprocessar explicitamente um caso que passou pelo atalho, use `/redo <link>`.
 
 ### 3.3 Vídeo rejeitado
 O bot pode rejeitar vídeos por vários motivos. Mensagens típicas:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,6 +35,7 @@ class AudioConverter(ABC):
         *,
         bitrate_kbps: int = 32,
         sample_rate_hz: int = 16000,
+        cancel_event: threading.Event | None = None,
     ) -> ConvertedAudio: ...
 
     @abstractmethod
@@ -43,4 +45,5 @@ class AudioConverter(ABC):
         dest_dir: Path,
         *,
         max_size_bytes: int = 49 * 1024 * 1024,
+        cancel_event: threading.Event | None = None,
     ) -> tuple[Path, ...]: ...

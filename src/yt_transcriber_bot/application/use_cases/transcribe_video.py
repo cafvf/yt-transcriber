@@ -11,6 +11,7 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from yt_transcriber_bot.application.config import AppSettings
 from yt_transcriber_bot.application.pipeline.context import PipelineContext
@@ -43,6 +44,11 @@ from yt_transcriber_bot.domain.entities.job import Job, JobStatus
 
 logger = logging.getLogger(__name__)
 
+if TYPE_CHECKING:
+    from yt_transcriber_bot.infrastructure.persistence.filesystem.transcript_snapshot import (
+        TranscriptSnapshotRepository,
+    )
+
 
 @dataclass
 class TranscribeVideoResult:
@@ -71,7 +77,7 @@ class TranscribeVideoDependencies:
     renderer: object
     settings: AppSettings
     repository: JobRepository
-    snapshot_repository: object | None = None
+    snapshot_repository: TranscriptSnapshotRepository | None = None
     diarization_model_name: str = "pyannote/speaker-diarization-community-1"
 
 

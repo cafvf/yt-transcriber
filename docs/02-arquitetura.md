@@ -247,6 +247,8 @@ Implementação: um `asyncio.Task` em loop que:
 
 Em paralelo, o `TelegramBotAdapter` continua respondendo a comandos administrativos (`/status`, `/cancel`, etc.) sem bloquear o loop.
 
+O cancelamento do job em curso é cooperativo, mas atravessa toda a cadeia de portas/adapters relevantes: `PipelineRunner` injeta um `threading.Event` no `PipelineContext`, os steps repassam esse sinal para downloader/converter/ASR/diarização, e os adapters reais interrompem trabalho ativo sempre que possível (`yt-dlp` via `progress_hooks`, `ffmpeg` via `subprocess.Popen` + `terminate`, wrappers de WhisperX/pyannote com checkpoints antes/depois das fases mais caras). O caminho de legendas do YouTube também usa espera cancelável nas retentativas transitórias e uma etapa de integridade textual antes da renderização final do Markdown.
+
 ---
 
 ## 7. Composition root e injeção de dependências

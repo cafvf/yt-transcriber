@@ -1,5 +1,9 @@
 # Patch Notes — 2026-05-15 — Next-session phases
 
+> **Status update (2026-05-17):** Phase 6 from this roadmap was completed in
+> `docs/patches/PATCH_NOTES_2026-05-17-phase6-hardening.md`. The next entry
+> point for this roadmap is now **Phase 7**.
+
 ## Summary
 
 Documented the next working session as a staged technical hardening roadmap that follows the completed Phase 5 performance pass without discarding the already documented product next steps.
@@ -96,10 +100,9 @@ After Phases 6–9, the product roadmap remains:
 
 ## Session handoff note
 
-If the next session starts from documentation only, begin with:
+If the next session starts from documentation only, continue with:
 
-1. Phase 6
-2. Phase 7
-3. Phase 8
-4. Phase 9
-5. then resume the previously documented Gate 8 product work
+1. Phase 7
+2. Phase 8
+3. Phase 9
+4. then resume the previously documented Gate 8 product work

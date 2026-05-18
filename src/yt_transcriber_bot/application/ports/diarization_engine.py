@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -54,6 +55,7 @@ class DiarizationEngine(ABC):
         min_speakers: int | None = None,
         max_speakers: int | None = None,
         progress: ProgressCallback | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> DiarizationResult: ...
 
 

@@ -231,14 +231,15 @@ Nunca publique tokens, cookies, logs completos com segredos, bancos SQLite de pr
 
 ## Próxima sessão recomendada
 
-Antes de retomar o próximo gate funcional, a próxima sessão recomendada fica reservada para uma trilha curta de endurecimento técnico já documentada em `docs/patches/PATCH_NOTES_2026-05-15-next-session-phases.md` e no plano `.omx/plans/plan-bottleneck-remediation-20260515.md`.
+A sessão técnica de **2026-05-17** concluiu a **Phase 6 — Startup and cancellation hardening**: correção do fallback CPU sem `torch`, endurecimento do caminho de legendas do YouTube contra mojibake e cancelamento efetivo durante download/conversão/transcrição/diarização, com limpeza de artefatos parciais.
+
+Antes de retomar o próximo gate funcional, a próxima sessão recomendada continua reservada para a trilha técnica documentada em `docs/patches/PATCH_NOTES_2026-05-15-next-session-phases.md`, no novo fechamento de Phase 6 em `docs/patches/PATCH_NOTES_2026-05-17-phase6-hardening.md` e no plano `.omx/plans/plan-bottleneck-remediation-20260515.md`.
 
 Fases previstas para a próxima sessão:
 
-1. **Phase 6 — Startup and cancellation hardening**
-2. **Phase 7 — Durable queue and restart recovery**
-3. **Phase 8 — YouTube inspection reuse and transcription hot path**
-4. **Phase 9 — Operational overhead cleanup and documentation closure**
+1. **Phase 7 — Durable queue and restart recovery**
+2. **Phase 8 — YouTube inspection reuse and transcription hot path**
+3. **Phase 9 — Operational overhead cleanup and documentation closure**
 
 ## Próximo gate funcional após essas fases
 

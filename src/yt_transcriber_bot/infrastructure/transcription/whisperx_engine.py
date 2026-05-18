@@ -7,11 +7,16 @@ erros e seleção de idioma seja testada sem rodar modelos.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from yt_transcriber_bot.application.cancellation import (
+    OperationCanceledError,
+    raise_if_cancelled,
+)
 from yt_transcriber_bot.application.ports.transcription_engine import (
     OutOfMemoryError,
     ProgressCallback,
@@ -54,6 +59,7 @@ class WhisperXBackend(Protocol):
         model: str,
         allowed_languages: tuple[str, ...],
         language_hint: str | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> _RawTranscription: ...
 
     def align(
@@ -62,6 +68,7 @@ class WhisperXBackend(Protocol):
         audio_path: Path,
         *,
         device: str,
+        cancel_event: threading.Event | None = None,
     ) -> _AlignedTranscription: ...
 
 
@@ -81,7 +88,9 @@ class WhisperXTranscriptionEngine(TranscriptionEngine):
         allowed_languages: tuple[str, ...],
         language_hint: str | None = None,
         progress: ProgressCallback | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> TranscriptionResult:
+        raise_if_cancelled(cancel_event)
         if not audio_path.exists():
             raise TranscriptionError(f"Arquivo de audio nao existe: {audio_path}")
         if not allowed_languages:
@@ -99,19 +108,27 @@ class WhisperXTranscriptionEngine(TranscriptionEngine):
                 model=model.name,
                 allowed_languages=allowed_languages,
                 language_hint=language_hint,
+                cancel_event=cancel_event,
             )
         except Exception as exc:
             raise self._map_exception(exc) from exc
 
+        raise_if_cancelled(cancel_event)
         if progress:
             progress(0.50, "Transcrição bruta concluída.")
             progress(0.75, "Alinhando timestamps...")
 
         try:
-            aligned = self._backend.align(raw, audio_path, device=str(device))
+            aligned = self._backend.align(
+                raw,
+                audio_path,
+                device=str(device),
+                cancel_event=cancel_event,
+            )
         except Exception as exc:
             raise self._map_exception(exc) from exc
 
+        raise_if_cancelled(cancel_event)
         if progress:
             progress(0.90, "Alinhamento concluído.")
 
@@ -136,8 +153,10 @@ class WhisperXTranscriptionEngine(TranscriptionEngine):
         return allowed[0]
 
     @staticmethod
-    def _map_exception(exc: Exception) -> TranscriptionError:
+    def _map_exception(exc: Exception) -> Exception:
         msg = str(exc).lower()
+        if isinstance(exc, OperationCanceledError):
+            return exc
         if "out of memory" in msg or "cuda oom" in msg or "oom" in msg:
             return OutOfMemoryError(str(exc))
         if isinstance(exc, TranscriptionError):

@@ -13,6 +13,7 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Sequence
 
+from yt_transcriber_bot.application.cancellation import OperationCanceledError
 from yt_transcriber_bot.application.pipeline.context import PipelineContext
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,7 @@ class PipelineRunner:
         progress: ProgressFn | None = None,
         audit: AuditFn | None = None,
     ) -> PipelineContext:
+        ctx.cancel_event = self._cancel_event
         for step in self._steps:
             self._check_canceled()
             if not step.should_run(ctx):
@@ -81,6 +83,17 @@ class PipelineRunner:
             _audit_step(audit, "step_started", ctx, step.name)
             try:
                 step.execute(ctx)
+            except OperationCanceledError as exc:
+                _audit_step(
+                    audit,
+                    "step_failed",
+                    ctx,
+                    step.name,
+                    duration_ms=_elapsed_ms(started),
+                    error_type=type(exc).__name__,
+                    error_message=str(exc),
+                )
+                raise PipelineCanceledError(str(exc)) from exc
             except Exception as exc:
                 _audit_step(
                     audit,

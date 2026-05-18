@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,7 @@ from urllib.error import HTTPError, URLError
 
 import pytest
 
+from yt_transcriber_bot.application.cancellation import OperationCanceledError
 from yt_transcriber_bot.application.ports.youtube_downloader import (
     AgeRestrictedError,
     MembersOnlyError,
@@ -40,6 +42,10 @@ class _FakeYDL:
         self.received_download = download
         if isinstance(self._info_or_exc, Exception):
             raise self._info_or_exc
+        if download:
+            for hook in self.params.get("progress_hooks", []):
+                if callable(hook):
+                    hook({"status": "downloading", "downloaded_bytes": 1})
         if download and isinstance(self._info_or_exc, dict):
             # Simular escrita do arquivo se um path foi fornecido.
             outtmpl = self.params.get("outtmpl")
@@ -425,6 +431,26 @@ Ol&aacute;&nbsp;mundo &amp;#39;teste&amp;#39;
         result = downloader.fetch_subtitle(VideoId(value="dQw4w9WgXcQ"), track)
         assert result.segments[0][2] == "Olá mundo 'teste'"
 
+    def test_repairs_common_mojibake_in_subtitle_text(self) -> None:
+        vtt = """WEBVTT
+
+00:00:00.000 --> 00:00:02.000
+VocÃª nÃ£o tem aÃ§Ã£o.
+"""
+        downloader = _make(
+            {"title": "x", "uploader": "y", "duration": 10},
+            subtitle_payload=vtt,
+        )
+        track = SubtitleTrack(
+            language=Language.pt(),
+            is_auto_generated=True,
+            is_translated=False,
+            url="https://example.com/x.vtt",
+            ext="vtt",
+        )
+        result = downloader.fetch_subtitle(VideoId(value="dQw4w9WgXcQ"), track)
+        assert result.segments[0][2] == "Você não tem ação."
+
     def test_discards_zero_duration_cues(self) -> None:
         vtt = """WEBVTT
 
@@ -526,6 +552,36 @@ Hello world
         assert calls == 3
         assert sleeps == [0.5, 1.0]
 
+    def test_transient_subtitle_retry_stops_when_cancelled(self) -> None:
+        calls = 0
+        cancel_event = threading.Event()
+
+        def fetcher(url: str, ext: str) -> str:
+            nonlocal calls
+            calls += 1
+            cancel_event.set()
+            raise URLError("temporary DNS failure")
+
+        downloader = YtDlpDownloader(
+            ydl_factory=_factory_returning({"title": "x", "uploader": "y", "duration": 10}),
+            subtitle_fetcher=fetcher,
+        )
+        track = SubtitleTrack(
+            language=Language.en(),
+            is_auto_generated=False,
+            is_translated=False,
+            url="https://example.com/x.vtt",
+            ext="vtt",
+        )
+        with pytest.raises(OperationCanceledError, match="cancelad"):
+            downloader.fetch_subtitle(
+                VideoId(value="dQw4w9WgXcQ"),
+                track,
+                cancel_event=cancel_event,
+            )
+
+        assert calls == 1
+
     def test_non_transient_http_error_does_not_retry(self) -> None:
         calls = 0
         sleeps: list[float] = []
@@ -573,6 +629,46 @@ Hello world
 
 
 class TestDownloadAudio:
+    def test_download_canceled_before_start_raises(self, tmp_path: Path) -> None:
+        downloader = _make({"title": "x", "uploader": "y", "duration": 10, "ext": "m4a"})
+        cancel_event = threading.Event()
+        cancel_event.set()
+
+        with pytest.raises(OperationCanceledError, match="cancelad"):
+            downloader.download_audio(
+                VideoId(value="dQw4w9WgXcQ"),
+                tmp_path,
+                cancel_event=cancel_event,
+            )
+
+    def test_download_canceled_during_progress_hook_cleans_partial_files(
+        self, tmp_path: Path
+    ) -> None:
+        cancel_event = threading.Event()
+        info = {"title": "x", "uploader": "y", "duration": 10, "ext": "m4a"}
+
+        class _CancelingYDL(_FakeYDL):
+            def extract_info(self, url: str, download: bool = True) -> dict[str, Any]:
+                cancel_event.set()
+                return super().extract_info(url, download=download)
+
+        def factory(params: dict[str, Any]) -> _CancelingYDL:
+            return _CancelingYDL(params, info)
+
+        downloader = YtDlpDownloader(
+            ydl_factory=factory,
+            subtitle_fetcher=lambda url, ext: "",
+        )
+
+        with pytest.raises(OperationCanceledError, match="cancelad"):
+            downloader.download_audio(
+                VideoId(value="dQw4w9WgXcQ"),
+                tmp_path,
+                cancel_event=cancel_event,
+            )
+
+        assert list(tmp_path.glob("dQw4w9WgXcQ.*")) == []
+
     def test_downloads_to_dest_dir(self, tmp_path: Path) -> None:
         info = {
             "title": "x",

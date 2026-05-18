@@ -52,6 +52,7 @@ Política do bot:
 - **Legenda manual no idioma original do áudio**: usada como transcrição; apenas a diarização é executada. Avisa o usuário e marca no MD a origem (`Transcrição: legenda manual do YouTube`).
 - **Legenda auto-gerada no idioma original**: usada como fallback antes de recorrer ao WhisperX; o MD marca `Transcrição: legenda auto-gerada do YouTube`. O botão inline `[Refazer com WhisperX]` permanece como evolução futura; na versão atual, use `/redo <link>`.
 - **Legenda traduzida** ou em outro idioma: tratada como **inexistente**.
+- **Legenda textual corrompida** (ex.: mojibake, bytes mal decodificados ou caracteres de substituição residuais): tratada como **inaceitável**. O bot deve normalizar o texto, validar a integridade antes de persistir/enviar o `.md` e cair para WhisperX quando a legenda continuar suspeita após a reparação conservadora.
 - **Sem legenda válida**: WhisperX é executado normalmente.
 
 A justificativa é poupar tempo de CPU/GPU quando o YouTube já fornece transcrição confiável, sem sacrificar qualidade.
@@ -285,7 +286,7 @@ A entrega é **estritamente** o `.md` + o `.ogg` (e/ou múltiplos `.ogg` partici
 Na versão atual, `/redo <link>` executa imediatamente como novo job. A confirmação antes da execução, com diff de configuração entre a transcrição anterior e a corrente, permanece como evolução futura para reduzir o risco de reprocessamento involuntário de vídeos longos.
 
 ### J.3 `/cancel` — escopo
-- Durante **processamento** (download, conversão, transcrição, diarização): aborta o subprocess apropriado, limpa arquivos parciais, marca job como `cancelled`.
+- Durante **processamento** (download, conversão, transcrição, diarização e retentativas de legenda ainda pendentes): propaga o sinal de cancelamento até o adaptador ativo, aborta o subprocess apropriado quando houver um, limpa arquivos parciais e marca o job como `cancelled`.
 - Durante **diálogo de `/rename`**: encerra o diálogo e descarta apenas alterações ainda não enviadas; renomes válidos já aplicados permanecem no `.md`.
 - **Sem nada em andamento**: responde "Nada a cancelar".
 - Cancela apenas o job atual; para limpar a fila inteira existe `/clearqueue`.

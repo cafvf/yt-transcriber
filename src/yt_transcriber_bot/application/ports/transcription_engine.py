@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -57,4 +58,5 @@ class TranscriptionEngine(ABC):
         allowed_languages: tuple[str, ...],
         language_hint: str | None = None,
         progress: ProgressCallback | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> TranscriptionResult: ...

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from datetime import date
 
 from tests.unit.application.conftest import (
@@ -12,6 +13,7 @@ from tests.unit.application.conftest import (
     FakeTranscriptionEngine,
     FakeYouTubeDownloader,
 )
+from yt_transcriber_bot.application.cancellation import OperationCanceledError
 from yt_transcriber_bot.application.config import AppSettings
 from yt_transcriber_bot.application.ports.diarization_engine import (
     DiarizationError,
@@ -31,6 +33,7 @@ from yt_transcriber_bot.application.ports.youtube_downloader import (
 )
 from yt_transcriber_bot.application.use_cases.transcribe_video import (
     TranscribeVideoDependencies,
+    TranscribeVideoResult,
     TranscribeVideoUseCase,
 )
 from yt_transcriber_bot.domain.entities.job import Job, JobStatus
@@ -43,6 +46,9 @@ from yt_transcriber_bot.infrastructure.persistence.filesystem.transcript_snapsho
 )
 from yt_transcriber_bot.infrastructure.rendering.markdown_renderer import (
     MarkdownTranscriptRenderer,
+)
+from yt_transcriber_bot.infrastructure.text.normalization import (
+    text_has_unresolved_corruption,
 )
 
 
@@ -397,6 +403,171 @@ class TestYouTubeSubtitles:
         md = result.md_path.read_text(encoding="utf-8")
         assert "Legendas manuais do YouTube" in md
         assert "SPEAKER_00" in md
+
+    def test_falls_back_to_whisperx_when_subtitle_text_stays_corrupted(
+        self,
+        settings: AppSettings,
+        fake_repo: FakeJobRepository,
+        fake_downloader: FakeYouTubeDownloader,
+        fake_converter: FakeAudioConverter,
+        fake_gpu_cpu: FakeGpuDetector,
+        fake_transcription: FakeTranscriptionEngine,
+        fake_diarization: FakeDiarizationEngine,
+    ) -> None:
+        fake_downloader.subtitles = (
+            SubtitleTrack(
+                language=Language(code="pt"),
+                is_auto_generated=False,
+                is_translated=False,
+                url="http://x/pt.vtt",
+                ext="vtt",
+            ),
+        )
+        fake_downloader.fetched_subtitle = FetchedSubtitle(
+            language=Language(code="pt"),
+            is_auto_generated=False,
+            segments=(
+                (0.0, 2.0, "Ol� mundo."),
+                (2.0, 4.0, "Jo�o chegou."),
+            ),
+        )
+        uc = _make_uc(
+            settings,
+            fake_repo=fake_repo,
+            fake_downloader=fake_downloader,
+            fake_converter=fake_converter,
+            fake_gpu_cpu=fake_gpu_cpu,
+            fake_transcription=fake_transcription,
+            fake_diarization=fake_diarization,
+        )
+        result = uc.execute(_job())
+
+        assert result.job.status == JobStatus.COMPLETED
+        assert fake_transcription.calls != []
+        assert fake_diarization.calls != []
+        assert not any("Usando legendas do YouTube" in d for d in result.diagnostics)
+        assert any("Legenda do YouTube rejeitada por integridade" in d for d in result.diagnostics)
+
+    def test_repairs_subtitle_mojibake_before_markdown_and_snapshot_persistence(
+        self,
+        settings: AppSettings,
+        fake_repo: FakeJobRepository,
+        fake_downloader: FakeYouTubeDownloader,
+        fake_converter: FakeAudioConverter,
+        fake_gpu_cpu: FakeGpuDetector,
+        fake_transcription: FakeTranscriptionEngine,
+        fake_diarization: FakeDiarizationEngine,
+    ) -> None:
+        snapshots = TranscriptSnapshotRepository(settings.base_dir / "segments")
+        fake_downloader.subtitles = (
+            SubtitleTrack(
+                language=Language(code="pt"),
+                is_auto_generated=False,
+                is_translated=False,
+                url="http://x/pt.vtt",
+                ext="vtt",
+            ),
+        )
+        fake_downloader.fetched_subtitle = FetchedSubtitle(
+            language=Language(code="pt"),
+            is_auto_generated=False,
+            segments=(
+                (0.0, 2.0, "VocÃª nÃ£o tem aÃ§Ã£o."),
+                (2.0, 4.0, "JoÃ£o chegou."),
+            ),
+        )
+        uc = _make_uc(
+            settings,
+            fake_repo=fake_repo,
+            fake_downloader=fake_downloader,
+            fake_converter=fake_converter,
+            fake_gpu_cpu=fake_gpu_cpu,
+            fake_transcription=fake_transcription,
+            fake_diarization=fake_diarization,
+            snapshot_repository=snapshots,
+        )
+
+        result = uc.execute(_job())
+
+        assert result.job.status == JobStatus.COMPLETED
+        assert result.md_path is not None
+        md = result.md_path.read_text(encoding="utf-8")
+        assert "Você não tem ação." in md
+        assert "João chegou." in md
+        assert not text_has_unresolved_corruption(md)
+
+        snap = snapshots.load(result.md_path.stem)
+        assert snap is not None
+        assert snap.transcript.segments[0].text == "Você não tem ação."
+        assert snap.transcript.segments[1].text == "João chegou."
+
+
+class _BlockingTranscriptionEngine(FakeTranscriptionEngine):
+    started: threading.Event
+
+    def __init__(self, started: threading.Event) -> None:
+        super().__init__()
+        self.started = started
+
+    def transcribe(
+        self,
+        audio_path,
+        *,
+        device,
+        compute_type,
+        model,
+        allowed_languages,
+        language_hint=None,
+        progress=None,
+        cancel_event=None,
+    ):
+        self.started.set()
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                raise OperationCanceledError("cancelado durante transcrição")
+            if cancel_event is not None:
+                cancel_event.wait(0.01)
+
+
+class TestCancellation:
+    def test_active_transcription_cancellation_marks_job_cancelled(
+        self,
+        settings: AppSettings,
+        fake_repo: FakeJobRepository,
+        fake_downloader: FakeYouTubeDownloader,
+        fake_converter: FakeAudioConverter,
+        fake_gpu_cpu: FakeGpuDetector,
+        fake_diarization: FakeDiarizationEngine,
+    ) -> None:
+        started = threading.Event()
+        cancel_event = threading.Event()
+        engine = _BlockingTranscriptionEngine(started=started)
+        uc = _make_uc(
+            settings,
+            fake_repo=fake_repo,
+            fake_downloader=fake_downloader,
+            fake_converter=fake_converter,
+            fake_gpu_cpu=fake_gpu_cpu,
+            fake_transcription=engine,
+            fake_diarization=fake_diarization,
+        )
+        outcome: dict[str, object] = {}
+
+        def run_use_case() -> None:
+            outcome["result"] = uc.execute(_job(), cancel_event=cancel_event)
+
+        worker = threading.Thread(target=run_use_case)
+        worker.start()
+        assert started.wait(timeout=1.0)
+        cancel_event.set()
+        worker.join(timeout=2.0)
+        assert not worker.is_alive()
+
+        result = outcome["result"]
+        assert isinstance(result, TranscribeVideoResult)
+        assert result.canceled is True
+        assert result.job.status == JobStatus.CANCELLED
+        assert result.audio_path is not None
 
     def test_translated_subtitles_are_ignored(
         self,

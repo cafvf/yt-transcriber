@@ -13,6 +13,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import re
+import threading
 import time
 import urllib.error
 from collections.abc import Callable
@@ -20,6 +21,11 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
+from yt_transcriber_bot.application.cancellation import (
+    OperationCanceledError,
+    raise_if_cancelled,
+    sleep_with_cancel,
+)
 from yt_transcriber_bot.application.ports.youtube_downloader import (
     AgeRestrictedError,
     DownloadedAudio,
@@ -54,6 +60,10 @@ class _YDLFactory(Protocol):
 
 class _SubtitleFetcher(Protocol):
     def __call__(self, url: str, ext: str) -> str: ...
+
+
+class _DownloadCanceledError(RuntimeError):
+    """Aborta um download ativo do yt-dlp quando o usuário cancela."""
 
 
 # Formatos deliberadamente permissivos. O yt-dlp também faz seleção de
@@ -154,10 +164,18 @@ class YtDlpDownloader(YouTubeDownloader):
         return self._build_metadata(video_id, info)
 
     def _extract_info(
-        self, video_id: VideoId, *, download: bool, extra_params: dict[str, Any] | None = None
+        self,
+        video_id: VideoId,
+        *,
+        download: bool,
+        extra_params: dict[str, Any] | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> dict[str, Any]:
+        raise_if_cancelled(cancel_event)
         params = self._common_params()
         params["skip_download"] = not download
+        if download and cancel_event is not None:
+            params["progress_hooks"] = [self._make_cancel_progress_hook(cancel_event)]
         if extra_params:
             params.update(extra_params)
         try:
@@ -178,12 +196,17 @@ class YtDlpDownloader(YouTubeDownloader):
                 try:
                     with self._ydl_factory(retry_params) as ydl:
                         info = ydl.extract_info(video_id.canonical_url(), download=False)
+                except _DownloadCanceledError as retry_exc:
+                    raise OperationCanceledError(str(retry_exc)) from retry_exc
                 except Exception as retry_exc:  # pragma: no cover - mapeamento de mensagens
                     raise self._map_exception(retry_exc) from retry_exc
             else:
+                if isinstance(exc, _DownloadCanceledError):
+                    raise OperationCanceledError(str(exc)) from exc
                 raise self._map_exception(exc) from exc
         if info is None:
             raise VideoUnavailableError("yt-dlp retornou metadados vazios")
+        raise_if_cancelled(cancel_event)
         return info
 
     @staticmethod
@@ -344,10 +367,21 @@ class YtDlpDownloader(YouTubeDownloader):
             ext=ext,
         )
 
-    def fetch_subtitle(self, video_id: VideoId, track: SubtitleTrack) -> FetchedSubtitle:
+    def fetch_subtitle(
+        self,
+        video_id: VideoId,
+        track: SubtitleTrack,
+        *,
+        cancel_event: threading.Event | None = None,
+    ) -> FetchedSubtitle:
         if track.url is None:
             raise YouTubeError("Pista de legenda sem URL")
-        raw = self._fetch_subtitle_with_retry(video_id, track.url, track.ext)
+        raw = self._fetch_subtitle_with_retry(
+            video_id,
+            track.url,
+            track.ext,
+            cancel_event=cancel_event,
+        )
         segments = _parse_subtitle(raw, track.ext)
         return FetchedSubtitle(
             language=track.language,
@@ -355,9 +389,17 @@ class YtDlpDownloader(YouTubeDownloader):
             segments=segments,
         )
 
-    def _fetch_subtitle_with_retry(self, video_id: VideoId, url: str, ext: str) -> str:
+    def _fetch_subtitle_with_retry(
+        self,
+        video_id: VideoId,
+        url: str,
+        ext: str,
+        *,
+        cancel_event: threading.Event | None = None,
+    ) -> str:
         last_exc: Exception | None = None
         for attempt in range(1, self._subtitle_fetch_max_attempts + 1):
+            raise_if_cancelled(cancel_event)
             try:
                 return self._subtitle_fetcher(url, ext)
             except Exception as exc:
@@ -375,7 +417,10 @@ class YtDlpDownloader(YouTubeDownloader):
                     delay,
                     exc,
                 )
-                self._sleep_fn(delay)
+                if cancel_event is None:
+                    self._sleep_fn(delay)
+                else:
+                    sleep_with_cancel(delay, cancel_event=cancel_event)
         assert last_exc is not None
         raise last_exc
 
@@ -395,24 +440,51 @@ class YtDlpDownloader(YouTubeDownloader):
             return True
         return isinstance(exc, ConnectionError | OSError)
 
+    @staticmethod
+    def _make_cancel_progress_hook(
+        cancel_event: threading.Event,
+    ) -> Callable[[dict[str, Any]], None]:
+        def hook(status: dict[str, Any]) -> None:
+            if cancel_event.is_set():
+                raise _DownloadCanceledError("Download do YouTube cancelado pelo usuário")
+
+        return hook
+
     # ------------------------------------------------------------------
     # Audio download
     # ------------------------------------------------------------------
 
-    def download_audio(self, video_id: VideoId, dest_dir: Path) -> DownloadedAudio:
+    def download_audio(
+        self,
+        video_id: VideoId,
+        dest_dir: Path,
+        *,
+        cancel_event: threading.Event | None = None,
+    ) -> DownloadedAudio:
+        raise_if_cancelled(cancel_event)
         dest_dir.mkdir(parents=True, exist_ok=True)
         last_exc: Exception | None = None
 
         # 1) Tentativa rápida com seletor progressivo-first. Isto resolve a maior
         # parte dos casos e mantém compatibilidade com o comportamento anterior.
         try:
-            info = self._download_audio_with_selector(video_id, dest_dir, _AUDIO_FORMAT)
+            info = self._download_audio_with_selector(
+                video_id,
+                dest_dir,
+                _AUDIO_FORMAT,
+                cancel_event=cancel_event,
+            )
         except Exception as exc:  # pragma: no cover - mapeamento de mensagens
             mapped = self._map_exception(exc)
             if isinstance(mapped, MembersOnlyError | AgeRestrictedError | VideoUnavailableError):
                 raise mapped from exc
             last_exc = exc
-            info = self._download_audio_via_discovered_formats(video_id, dest_dir, last_exc)
+            info = self._download_audio_via_discovered_formats(
+                video_id,
+                dest_dir,
+                last_exc,
+                cancel_event=cancel_event,
+            )
 
         downloaded = self._validated_downloaded_path(info, dest_dir, video_id)
         ext = downloaded.suffix.lstrip(".").lower()
@@ -428,8 +500,14 @@ class YtDlpDownloader(YouTubeDownloader):
         )
 
     def _download_audio_with_selector(
-        self, video_id: VideoId, dest_dir: Path, format_selector: str | None
+        self,
+        video_id: VideoId,
+        dest_dir: Path,
+        format_selector: str | None,
+        *,
+        cancel_event: threading.Event | None = None,
     ) -> dict[str, Any]:
+        raise_if_cancelled(cancel_event)
         self._cleanup_previous_downloads(dest_dir, video_id)
         outtmpl = str(dest_dir / f"{video_id.value}.%(ext)s")
         params = self._common_params()
@@ -443,18 +521,29 @@ class YtDlpDownloader(YouTubeDownloader):
         )
         if format_selector:
             params["format"] = format_selector
+        if cancel_event is not None:
+            params["progress_hooks"] = [self._make_cancel_progress_hook(cancel_event)]
         try:
             with self._ydl_factory(params) as ydl:
                 info = ydl.extract_info(video_id.canonical_url(), download=True)
+        except _DownloadCanceledError as exc:
+            self._cleanup_previous_downloads(dest_dir, video_id)
+            raise OperationCanceledError(str(exc)) from exc
         except Exception:
             self._cleanup_previous_downloads(dest_dir, video_id)
             raise
         if info is None:
             raise VideoUnavailableError("yt-dlp retornou info vazia no download")
+        raise_if_cancelled(cancel_event)
         return info
 
     def _download_audio_via_discovered_formats(
-        self, video_id: VideoId, dest_dir: Path, initial_exc: Exception
+        self,
+        video_id: VideoId,
+        dest_dir: Path,
+        initial_exc: Exception,
+        *,
+        cancel_event: threading.Event | None = None,
     ) -> dict[str, Any]:
         """Fallback robusto: listar formatos e baixar por ``format_id`` concreto.
 
@@ -465,9 +554,10 @@ class YtDlpDownloader(YouTubeDownloader):
         """
         last_exc: Exception = initial_exc
         listing_info: dict[str, Any] = {}
+        raise_if_cancelled(cancel_event)
 
         try:
-            listing_info = self._list_formats_info(video_id)
+            listing_info = self._list_formats_info(video_id, cancel_event=cancel_event)
         except Exception as exc:  # pragma: no cover - mapeamento de mensagens
             last_exc = exc
             logger.warning("falha ao listar formatos com listformats=True: %s", exc)
@@ -483,8 +573,14 @@ class YtDlpDownloader(YouTubeDownloader):
             "tentando %d formato(s) concreto(s) para %s", len(candidate_ids), video_id.value
         )
         for format_id in candidate_ids:
+            raise_if_cancelled(cancel_event)
             try:
-                info = self._download_audio_with_selector(video_id, dest_dir, format_id)
+                info = self._download_audio_with_selector(
+                    video_id,
+                    dest_dir,
+                    format_id,
+                    cancel_event=cancel_event,
+                )
                 # Alguns casos de erro geram arquivo inexistente/vazio sem exceção
                 # forte do yt-dlp. Validamos aqui para passar ao próximo candidato.
                 self._validated_downloaded_path(info, dest_dir, video_id)
@@ -503,7 +599,12 @@ class YtDlpDownloader(YouTubeDownloader):
         diagnostic = self._format_download_diagnostic(video_id, listing_info, last_exc)
         raise YouTubeError(diagnostic) from last_exc
 
-    def _list_formats_info(self, video_id: VideoId) -> dict[str, Any]:
+    def _list_formats_info(
+        self,
+        video_id: VideoId,
+        *,
+        cancel_event: threading.Event | None = None,
+    ) -> dict[str, Any]:
         """Obtém formatos disponíveis sem aplicar seletor de download.
 
         ``listformats=True`` espelha ``yt-dlp -F`` e evita a etapa em que o
@@ -519,10 +620,12 @@ class YtDlpDownloader(YouTubeDownloader):
                 "ignore_no_formats_error": True,
             }
         )
+        raise_if_cancelled(cancel_event)
         with self._ydl_factory(params) as ydl:
             info = ydl.extract_info(video_id.canonical_url(), download=False)
         if info is None:
             raise VideoUnavailableError("yt-dlp retornou info vazia ao listar formatos")
+        raise_if_cancelled(cancel_event)
         return info
 
     @staticmethod
