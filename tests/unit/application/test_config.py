@@ -215,6 +215,7 @@ def test_summary_settings_defaults_are_lm_studio_compatible(
     assert settings.summary_chars_per_token >= 1.0
     assert settings.summary_tokenizer_backend == "auto"
     assert settings.summary_tokenizer_model == ""
+    assert settings.summary_tokenizer_trust_remote_code is False
     assert settings.summary_deduplicate_transcript is True
     assert settings.summary_merge_same_speaker_gap_s == 2.0
     assert settings.summary_min_overlap_words == 6
@@ -242,6 +243,14 @@ def test_summary_disable_thinking_can_be_disabled_from_env(
     monkeypatch.setenv("SUMMARY_DISABLE_THINKING", "false")
     settings = AppSettings()
     assert settings.summary_disable_thinking is False
+
+
+def test_summary_tokenizer_trust_remote_code_can_be_enabled_from_env(
+    env_no_dotenv: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SUMMARY_TOKENIZER_TRUST_REMOTE_CODE", "true")
+    settings = AppSettings()
+    assert settings.summary_tokenizer_trust_remote_code is True
 
 
 def test_summary_model_guard_can_be_disabled_from_env(

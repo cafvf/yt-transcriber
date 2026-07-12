@@ -1,282 +1,149 @@
 # YT Transcriber Bot
 
-Bot privado do Telegram para processar vídeos do YouTube e gerar artefatos auditáveis de transcrição. O fluxo principal recebe um link, baixa metadados/áudio com `yt-dlp`, usa legendas do YouTube quando a qualidade é aceitável, transcreve com WhisperX quando necessário, diariza falantes com pyannote, renderiza Markdown e permite exportações derivadas.
+Bot privado do Telegram para transcrever conteúdo do YouTube ou arquivos de
+áudio enviados pelo próprio usuário. Ele produz uma transcrição em Markdown,
+separa falantes quando o ambiente permite, mantém histórico local e oferece
+exportação, busca e resumo opcional por um servidor compatível com OpenAI.
 
-A versão atual também inclui exportação JSON/SRT/VTT, MP4 com legenda selecionável, renomeação/mesclagem de falantes por botões inline, histórico local em SQLite, sumarização via LM Studio/OpenAI-compatible com controle de contexto, tokenizer opcional, deduplicação, progresso no Telegram e retentativa adaptativa em caso de timeout, além de comandos de observabilidade operacional (`/healthcheck` e `/lasterror`).
+O projeto foi desenhado para **um único operador autorizado**, em uma máquina
+Linux ou WSL2. Não é um serviço público, multiusuário ou hospedado.
 
-## Paradigma de desenvolvimento
+## O que ele faz
 
-O projeto é conduzido com **Spec-Driven Development (SDD)** apoiado por IA: a especificação funcional e os documentos de arquitetura orientam a implementação antes do código. A IA é usada como agente de desenvolvimento, revisão, geração de patches e ampliação de testes, mas as decisões de produto, validação manual e curadoria final permanecem humanas.
+- aceita um link do YouTube, uma mensagem de voz, um áudio ou um documento de
+  áudio no Telegram;
+- prefere legendas aproveitáveis do YouTube e usa WhisperX quando necessário;
+- converte o áudio com ffmpeg, diariza falantes e entrega Markdown;
+- guarda histórico em SQLite, permite renomear/mesclar falantes e exportar
+  JSON, SRT, VTT e texto simples;
+- gera MP4 com legenda selecionável apenas para origens YouTube compatíveis;
+- pesquisa transcrições concluídas, produz resumo opcional e oferece
+  `/healthcheck` e `/lasterror` para operação local.
 
-Princípios complementares:
+## Começo rápido
 
-- **Extreme Programming**: entregas incrementais, escopo pequeno por rodada e feedback rápido.
-- **Test-Driven Development**: bugs relevantes devem virar testes de regressão antes ou junto da correção.
-- **Arquitetura hexagonal / Ports & Adapters**: domínio e aplicação separados de Telegram, YouTube, ffmpeg, WhisperX, pyannote, SQLite e LM Studio.
-- **Reprodutibilidade e auditabilidade**: cada artefato deve preservar metadados suficientes para entender entrada, modelo, idioma, origem da transcrição e parâmetros relevantes.
-- **Segurança por padrão**: `.env`, cookies, tokens, logs sensíveis e bancos locais não devem ser versionados.
-
----
-
-## Documentação
-
-Toda a documentação detalhada está na pasta [`docs/`](./docs/):
-
-| Documento | Conteúdo |
-|---|---|
-| [`docs/01-contrato-funcional.md`](./docs/01-contrato-funcional.md) | Contrato funcional e decisões de produto já consolidadas. |
-| [`docs/02-arquitetura.md`](./docs/02-arquitetura.md) | Arquitetura técnica, camadas, ports/adapters, modelo de dados e organização de diretórios. |
-| [`docs/03-manual-de-uso.md`](./docs/03-manual-de-uso.md) | Comandos atuais do bot, fluxos de uso, sumarização, exportações e troubleshooting. |
-| [`docs/04-manual-de-instalacao.md`](./docs/04-manual-de-instalacao.md) | Instalação em Linux/WSL2, `uv`, dependências de sistema, cookies, pyannote e LM Studio. |
-| [`docs/05-plano-de-execucao.md`](./docs/05-plano-de-execucao.md) | Histórico do plano em gates e critérios de aceitação. |
-| [`docs/06-funcionalidades-futuras.md`](./docs/06-funcionalidades-futuras.md) | Roadmap revisado: busca textual/semântica, texto limpo, upload de áudio, ASR multilíngue, tradução, `/redo` e Obsidian. |
-| [`docs/07-glossario-e-decisoes.md`](./docs/07-glossario-e-decisoes.md) | Glossário técnico e registros de decisão arquitetural. |
-| [`docs/08-seguranca-e-segredos.md`](./docs/08-seguranca-e-segredos.md) | Política de segredos, `.gitignore`, pre-commit, scanners locais e cuidados operacionais. |
-
-> A especificação é o contrato do projeto. Alterações relevantes devem ser refletidas primeiro nos documentos, depois nos testes, depois no código.
-
----
-
-## Capacidades atuais
-
-### Entrada, fila e histórico
-
-- Recebe links do YouTube por mensagem direta ou por `/transcribe <link>`.
-- Aceita override de idioma por `/pt <link>`, `/en <link>` ou `--lang pt|en`.
-- Mantém fila sequencial com limite configurável e deduplicação apenas para o mesmo vídeo+idioma que já esteja em processamento ou na fila.
-- Permite consultar fila e status com `/queue`, `/fila` e `/status`.
-- Permite cancelar job atual ou fila com `/cancel`, `/cancelall`, `/cancelartudo`, `/clearqueue`, `/cancelqueue`, `/limparfila`.
-- Lista histórico com `/list` e reenvia transcrições com `/last [n]`.
-
-### Transcrição e diarização
-
-- Baixa metadados e áudio com `yt-dlp`.
-- Usa cookies do YouTube via browser ou arquivo Netscape quando configurados.
-- Rejeita legendas automáticas ruins do YouTube e cai para WhisperX.
-- Usa WhisperX para ASR e pyannote/WhisperX para diarização.
-- Suporta política de modelo por idioma com `WHISPER_MODEL=auto`, `WHISPER_MODEL_PT`, `WHISPER_MODEL_EN` e `WHISPER_MODEL_DEFAULT`.
-- Renderiza Markdown estruturado com metadados, falantes e turnos com timestamps.
-
-### Revisão de falantes
-
-- `/rename [n]` abre botões inline para renomear um ou vários falantes em sequência.
-- O mesmo nome pode ser atribuído a múltiplos `SPEAKER_XX` para mesclar falantes.
-- Também aceita mapeamento em lote (`SPEAKER_00=João, SPEAKER_01=Maria`).
-- O Markdown é re-renderizado e blocos consecutivos do mesmo nome exibido são unidos.
-
-### Exportações
-
-- `/json [n]` ou `/export json [n]`: exporta JSON estruturado.
-- `/srt [n]` ou `/export srt [n]`: exporta legenda SubRip.
-- `/vtt [n]` ou `/export vtt [n]`: exporta legenda WebVTT.
-- `/video_subs [n]` ou `/videosubs [n]`: gera MP4 com legenda selecionável, sem queimar legenda na imagem.
-
-### Sumarização via LM Studio
-
-- `/summary [n]` gera Markdown de resumo a partir de uma transcrição já concluída.
-- Usa backend OpenAI-compatible, com LM Studio como alvo local recomendado.
-- Valida `SUMMARY_MODEL` contra `/v1/models`, quando habilitado.
-- Envia `enable_thinking=false`, `chat_template_kwargs={"enable_thinking": false}` e `reasoning_effort="none"` quando `SUMMARY_DISABLE_THINKING=true`.
-- Rejeita resposta vazia que contenha apenas `reasoning_content`.
-- Usa chunking por tokenizer Hugging Face local quando disponível; caso contrário, usa estimativa por caracteres/token.
-- Deduplica trechos adjacentes e une segmentos consecutivos do mesmo falante antes da sumarização.
-- Usa limites separados para resumos parciais e síntese final.
-- Em caso de timeout, subdivide o chunk e tenta novamente até o limite configurado.
-- Mostra progresso no Telegram durante o processamento.
-
-
-### Observabilidade operacional
-
-- `/healthcheck` executa um diagnóstico consolidado do ambiente, incluindo configuração obrigatória, `.env` efetivo, `ffmpeg`/`ffprobe`, `yt-dlp`, módulos Python essenciais, diretórios graváveis, SQLite, espaço em disco, cookies do YouTube, LM Studio e presença de `SUMMARY_MODEL` em `/v1/models`.
-- `/lasterror` exibe o último erro operacional sanitizado, cobrindo jobs de transcrição falhos e falhas derivadas de `/summary`, exportações, vídeo com legenda, limpeza de cache, `/clearcache` e exceções defensivas no pipeline.
-- Erros operacionais derivados são registrados em `data/logs/operational_errors.jsonl` com operação, etapa, severidade, classe da exceção, contexto, traceback final sanitizado e sugestões de verificação quando disponíveis.
-- A execução de jobs também gera auditoria estruturada em `data/logs/execution_audit.jsonl`, com eventos de fila/job/etapa e sem corpo de transcrição, payload de chat, tokens, cookies ou ruído de polling do Telegram.
-
----
-
-## Status atual
-
-| Área | Status |
-|---|---|
-| Bootstrap, configuração, domínio e persistência | Implementados |
-| Download YouTube, cookies e metadados | Implementados |
-| Transcrição WhisperX e diarização pyannote | Implementadas |
-| Markdown de transcrição | Implementado |
-| Fila, cancelamento e histórico | Implementados |
-| Renomeação e mesclagem de falantes | Implementadas |
-| Exportação JSON/SRT/VTT | Implementada |
-| MP4 com legenda selecionável | Implementado |
-| Sumarização via LM Studio/OpenAI-compatible | Implementada e estabilizada operacionalmente |
-| Segurança local e pre-commit | Implementados |
-| `/healthcheck` e `/lasterror` | Implementados |
-| Busca textual nas transcrições e resumos | Próxima funcionalidade priorizada |
-| Busca semântica | Planejada como evolução arquitetural da busca |
-| Exportação de texto limpo `/text [n]` | Funcionalidade futura priorizada |
-| Transcrição de arquivo de áudio enviado ao Telegram | Funcionalidade futura registrada |
-| Backend ASR multilíngue alternativo | Funcionalidade futura priorizada antes de tradução e Obsidian |
-| Tradução controlada | Funcionalidade futura posterior ao suporte ASR multilíngue |
-| Notas Obsidian/Notion | Funcionalidade futura de menor prioridade relativa |
-
-Limitações atuais importantes:
-
-- `/healthcheck` não substitui logs completos: ele resume o estado operacional e deve ser usado como triagem inicial.
-- `/lasterror` depende de erro persistido no banco de jobs ou em `data/logs/operational_errors.jsonl`; falhas catastróficas antes da inicialização completa do bot ainda exigem consulta ao terminal, systemd ou arquivo de log.
-- `/redo <link>` reprocessa imediatamente um vídeo já concluído como novo job; se o mesmo vídeo+idioma ainda estiver em processamento ou na fila, a deduplicação operacional bloqueia a duplicata. Confirmação inline com diff de configuração permanece futura.
-- `/video_subs` gera apenas legenda selecionável; legenda queimada não está no escopo atual.
-- O bot ainda não aceita upload direto de áudio como entrada; apenas links do YouTube.
-- A busca no histórico ainda não está implementada.
-
----
-
-## Como começar
+Pré-requisitos mínimos: Python 3.11 ou 3.12, [uv](https://docs.astral.sh/uv/),
+ffmpeg/ffprobe, uma conta Telegram com bot criado no BotFather e tokens locais
+para Telegram e Hugging Face. WhisperX, PyTorch e pyannote são instalados pelo
+`uv sync`, mas podem exigir GPU, memória e aceite dos modelos no Hugging Face.
 
 ```bash
-# 1. Clonar e entrar
 git clone <repo>
-cd yt-transcriber-bot
-
-# 2. Instalar uv, se ainda não existir
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# 3. Criar ambiente e instalar dependências
-uv sync
-
-# 4. Instalar dependências de sistema
-sudo dnf install ffmpeg          # Fedora
-sudo apt install ffmpeg          # Ubuntu/WSL
-
-# 5. Criar configuração local
+cd yt-transcriber
+uv sync --dev
+sudo apt install ffmpeg              # Ubuntu/WSL; use o equivalente da sua distro
 cp .env.example .env
-
-# 6. Editar .env com tokens e caminhos locais
-# TELEGRAM_BOT_TOKEN=...
-# TELEGRAM_ALLOWED_USER_ID=...
-# HF_TOKEN=...
-
-# 7. Verificar configuração efetiva
+# edite .env: TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USER_ID e HF_TOKEN
 uv run python scripts/config/print_effective_settings.py
-
-# 8. Rodar o bot
 uv run python -m yt_transcriber_bot
 ```
 
-Para diarização, aceite os termos dos modelos pyannote no Hugging Face conforme descrito em [`docs/04-manual-de-instalacao.md`](./docs/04-manual-de-instalacao.md).
+Use `uv run python -m yt_transcriber_bot` ou o comando instalado
+`uv run yt-transcriber-bot`. O processo recusa segredos ausentes e verifica as
+dependências de runtime antes de iniciar o polling.
 
----
+Leia o [manual de instalação](docs/04-manual-de-instalacao.md) antes de usar em
+um host persistente: ele cobre drivers/GPU, cookies YouTube, Hugging Face, LM
+Studio e systemd.
 
-## Configuração recomendada de modelos
+## Uso no Telegram
 
-### Whisper por idioma
+Envie uma URL do YouTube ou um arquivo de áudio. Para fixar idioma, use
+`/pt <link>` ou `/en <link>`; `/transcribe <link>` usa a seleção automática.
 
-```env
-WHISPER_MODEL=auto
-WHISPER_MODEL_PT=large-v3
-WHISPER_MODEL_EN=medium
-WHISPER_MODEL_DEFAULT=medium
+| Objetivo | Comando |
+|---|---|
+| Ajuda e estado | `/help`, `/status`, `/queue` ou `/fila` |
+| Cancelar | `/cancel`, `/cancelall` ou `/clearqueue` |
+| Histórico | `/list`, `/last [n]`, `/search <texto>` |
+| Reprocessar URL | `/redo <link> [--lang pt\|en]` |
+| Renomear falantes | `/rename [n]` |
+| Resumir | `/summary [n]` |
+| Exportar | `/text [n]`, `/json [n]`, `/srt [n]`, `/vtt [n]`, `/export <tipo> [n]` |
+| Vídeo com legenda | `/video_subs [n]` (somente YouTube) |
+| Diagnosticar | `/healthcheck`, `/lasterror`, `/clearcache` |
+
+`n` é o índice mostrado por `/list`. `/last` reenvia o Markdown salvo; não
+reenvia o áudio. `/redo <link>` reprocessa imediatamente e não pede confirmação inline: confirmação
+visual e comparação de configuração ainda não existem.
+
+O bot atende somente `TELEGRAM_ALLOWED_USER_ID`. Arquivos aceitos devem ser
+áudio reconhecível, usar extensão suportada (`mp3`, `m4a`, `ogg`, `opus`, `wav`,
+`flac` ou `webm`) e respeitar os limites de tamanho e duração configurados.
+
+## Como o processamento funciona
+
+```text
+YouTube: URL -> metadados -> legenda aproveitável ou download -> conversão
+Telegram: mídia validada e baixada para staging -> conversão
+ambos: seleção de runtime -> ASR -> diarização -> Markdown -> entrega/exportação
 ```
 
-Para português técnico ou fala espontânea brasileira, teste modelos especializados, por exemplo:
+Cada pedido vira um job. A fila de execução é sequencial e fica em memória;
+SQLite guarda o estado, origem e dados mínimos necessários para recovery. Após
+reinício (restart), pendentes seguros voltam à fila. A deduplicação protege a
+mesma origem/idioma em processamento ou na fila; jobs concluídos podem ser
+reprocessados. Jobs interrompidos em etapa ativa são marcados como falhos e não
+retomam no meio de ASR ou diarização; falha de entrega é `delivery_failed` e
+aparece em `/lasterror`.
 
-```env
-WHISPER_MODEL_PT=inesc-id/WhisperLv3-X-PT-All
-```
+Aceita links do YouTube, áudio, mensagens de voz e documentos de áudio.
 
-### Sumarização local
+Mídia Telegram é tratada como privada: não recebe URL ou ID sintético do
+YouTube. A política de retenção remove mídia bruta, conversões e logs associados
+a jobs antigos, mas preserva Markdown e snapshots de segmentos para histórico e
+renomeação de falantes.
 
-Exemplo para LM Studio:
+## Configuração essencial
 
-```env
-SUMMARY_BACKEND=openai_compatible
-SUMMARY_BASE_URL=http://127.0.0.1:1234/v1
-SUMMARY_MODEL=qwen/qwen3.5-9b
-SUMMARY_TEMPERATURE=0.2
-SUMMARY_DISABLE_THINKING=true
-SUMMARY_VALIDATE_MODEL=true
-SUMMARY_STRICT_MODEL_MATCH=true
+`.env.example` contém apenas exemplos. Copie-o para `.env`; ele nunca é usado
+como configuração real. Variáveis de ambiente têm precedência e
+`YT_TRANSCRIBER_ENV_FILE` permite escolher um arquivo `.env` explícito.
 
-SUMMARY_TOKENIZER_BACKEND=auto
-SUMMARY_MAX_INPUT_TOKENS=6000
-SUMMARY_MAX_CHARS_PER_CHUNK=18000
-SUMMARY_CHARS_PER_TOKEN=2.5
-SUMMARY_PARTIAL_MAX_TOKENS=512
-SUMMARY_FINAL_MAX_TOKENS=1024
-SUMMARY_TIMEOUT_S=600
-SUMMARY_TIMEOUT_SPLIT_RETRIES=2
-```
+| Grupo | Variáveis importantes |
+|---|---|
+| Acesso | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER_ID`, `HF_TOKEN` |
+| YouTube | `YOUTUBE_COOKIES_FILE` ou `YOUTUBE_COOKIES_BROWSER` |
+| ASR | `WHISPER_MODEL`, `WHISPER_MODEL_PT`, `WHISPER_MODEL_EN`, `DEVICE`, `COMPUTE_TYPE` |
+| Limites | `MAX_VIDEO_DURATION_MIN`, `TELEGRAM_MAX_MEDIA_SIZE_MB`, `TELEGRAM_MAX_QUEUE_SIZE`, `RETENTION_COUNT` |
+| Diretórios | `BASE_DIR`, `DB_PATH`, `MODELS_DIR` |
+| Resumo | `SUMMARY_BACKEND`, `SUMMARY_BASE_URL`, `SUMMARY_MODEL`, `SUMMARY_API_KEY` |
 
-Use em `SUMMARY_MODEL` exatamente o `id` retornado por:
+LM Studio é o backend local recomendado para resumo, mas é opcional: sem ele a
+transcrição continua funcionando e apenas `/summary` fica indisponível.
+
+## Documentação
+
+| Documento | Para quê serve |
+|---|---|
+| [00 — auditoria](docs/00-auditoria-da-documentacao.md) | Mapa desta reconciliação e decisões de escopo. |
+| [01 — contrato funcional](docs/01-contrato-funcional.md) | O que o produto faz e não faz. |
+| [02 — arquitetura](docs/02-arquitetura.md) | Camadas, pipeline, dados e recovery. |
+| [03 — manual de uso](docs/03-manual-de-uso.md) | Referência de comandos e exemplos. |
+| [04 — instalação](docs/04-manual-de-instalacao.md) | Dependências, configuração e execução. |
+| [06 — roadmap](docs/06-funcionalidades-futuras.md) | Próximas capacidades, sem promessas de entrega. |
+| [07 — glossário e decisões](docs/07-glossario-e-decisoes.md) | Vocabulário e decisões duráveis. |
+| [08 — segurança](docs/08-seguranca-e-segredos.md) | Dados privados, segredos e verificações. |
+| [09 — prontidão](docs/09-production-readiness.md) | Estado e lacunas para operação privada. |
+| [10 — ADR de recovery](docs/10-recovery-semantics-adr.md) | Semântica de reinício. |
+| [11 — runbook](docs/11-operator-runbook.md) | Operação systemd, backup e incidentes. |
+
+`/translate` e busca semântica continuam planejados; não são comandos atuais.
+
+`docs/05-plano-de-execucao.md`, `docs/gate-reports/`, `docs/patches/` e
+`ops-evidence/` são histórico e evidência; não substituem os guias acima.
+
+## Verificação local
 
 ```bash
-curl http://127.0.0.1:1234/v1/models
-```
-
----
-
-## Segurança e pre-commit
-
-Configuração recomendada:
-
-```bash
-cp .env.example .env
-uv sync --dev
-uv run pre-commit install
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy src
+uv run pytest
 uv run pre-commit run --all-files
+python3 scripts/security/scan_secrets.py --all
 ```
 
-Os hooks locais bloqueiam `.env`, cookies do YouTube, bancos SQLite, logs e padrões comuns de tokens. Se `gitleaks` estiver instalado no sistema, ele roda como camada complementar; se não estiver, o hook avisa e continua.
-
-Nunca publique tokens, cookies, logs completos com segredos, bancos SQLite de produção ou arquivos `.env`.
-
----
-
-## Próxima sessão recomendada
-
-A sessão técnica de **2026-05-17** concluiu a **Phase 6 — Startup and cancellation hardening**: correção do fallback CPU sem `torch`, endurecimento do caminho de legendas do YouTube contra mojibake e cancelamento efetivo durante download/conversão/transcrição/diarização, com limpeza de artefatos parciais.
-
-Antes de retomar o próximo gate funcional, a próxima sessão recomendada continua reservada para a trilha técnica documentada em `docs/patches/PATCH_NOTES_2026-05-15-next-session-phases.md`, no novo fechamento de Phase 6 em `docs/patches/PATCH_NOTES_2026-05-17-phase6-hardening.md` e no plano `.omx/plans/plan-bottleneck-remediation-20260515.md`.
-
-Fases previstas para a próxima sessão:
-
-1. **Phase 7 — Durable queue and restart recovery**
-2. **Phase 8 — YouTube inspection reuse and transcription hot path**
-3. **Phase 9 — Operational overhead cleanup and documentation closure**
-
-## Próximo gate funcional após essas fases
-
-**Gate 8 — Busca e recuperação de conhecimento**
-
-A observabilidade operacional (`/healthcheck` e `/lasterror`) está implementada. Após as fases técnicas acima, o próximo incremento funcional recomendado continua sendo transformar o histórico local em uma base consultável, começando por busca textual e deixando a arquitetura preparada para busca semântica.
-
-Escopo proposto para o MVP:
-
-- `/search <texto>` para busca textual em transcrições, resumos e metadados.
-- Indexação de Markdown, summaries, título, canal, URL, `video_id`, idioma e falantes renomeados.
-- Uso de SQLite FTS5 quando disponível, com fallback documentado se o ambiente não suportar FTS5.
-- Atualização automática do índice após nova transcrição, `/rename` e `/summary`.
-- Testes de ranking básico, busca sem resultado, sanitização e compatibilidade com transcrições antigas.
-
-Evolução prevista da própria busca:
-
-- `/search semantic <texto>` ou comando equivalente para busca por embeddings locais.
-- `/related [n]` para encontrar transcrições/resumos semanticamente próximos.
-- Separação explícita entre índice textual e índice vetorial, sem substituir a transcrição literal como fonte da verdade.
-
-Roadmap priorizado após o Gate 8:
-
-1. `/text [n]` para exportação de texto limpo.
-2. Upload de arquivo de áudio pelo Telegram para transcrição sem YouTube.
-3. Backend alternativo de ASR e suporte multilíngue ampliado.
-4. `/translate` como artefato derivado posterior ao suporte multilíngue.
-5. Melhorias no `/redo`.
-6. Integração com Obsidian/Notion.
-
-Itens removidos da prioridade principal atual:
-
-- `/stats`, por não ser necessário ao fluxo de uso atual.
-- Recuperação avançada após interrupção, por não justificar complexidade imediata.
-
----
-
-## Licença
-
-A definir pelo proprietário do projeto.
+Nunca versiona `.env`, cookies, tokens, banco SQLite, mídia, transcrições,
+modelos ou logs. Consulte a [política de segurança](docs/08-seguranca-e-segredos.md)
+antes de compartilhar diagnósticos ou backups.

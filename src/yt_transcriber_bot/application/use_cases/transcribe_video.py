@@ -19,18 +19,19 @@ from yt_transcriber_bot.application.pipeline.runner import (
     AuditFn,
     PipelineCanceledError,
     PipelineRunner,
+    PipelineStep,
+)
+from yt_transcriber_bot.application.pipeline.source_acquisition import (
+    SourceAcquisitionResolver,
 )
 from yt_transcriber_bot.application.pipeline.steps import (
     ConvertAudioStep,
     DiarizeStep,
-    DownloadAudioStep,
-    FetchMetadataStep,
     PipelineRejectionError,
     RenderMarkdownStep,
     SelectRuntimeStep,
     TranscribeStep,
     TranscriptionStepProgress,
-    TryYouTubeSubtitlesStep,
 )
 from yt_transcriber_bot.application.ports.audio_converter import AudioConverter
 from yt_transcriber_bot.application.ports.diarization_engine import DiarizationEngine
@@ -40,6 +41,7 @@ from yt_transcriber_bot.application.ports.transcription_engine import (
     TranscriptionEngine,
 )
 from yt_transcriber_bot.application.ports.youtube_downloader import YouTubeDownloader
+from yt_transcriber_bot.application.services.sanitization import sanitize_text
 from yt_transcriber_bot.domain.entities.job import Job, JobStatus
 
 logger = logging.getLogger(__name__)
@@ -103,29 +105,10 @@ class TranscribeVideoUseCase:
     ) -> TranscribeVideoResult:
         deps = self._deps
         runner = PipelineRunner(
-            steps=(
-                FetchMetadataStep(deps.downloader, deps.settings),
-                TryYouTubeSubtitlesStep(deps.downloader, deps.settings),
-                DownloadAudioStep(deps.downloader, deps.settings.downloads_dir()),
-                ConvertAudioStep(deps.converter, deps.settings.processed_dir(), deps.settings),
-                SelectRuntimeStep(deps.gpu_detector, deps.settings),
-                TranscribeStep(
-                    deps.transcription_engine,
-                    deps.settings,
-                    progress=TranscriptionStepProgress(on_progress=progress_transcribe),
-                ),
-                DiarizeStep(
-                    deps.diarization_engine,
-                    deps.settings,
-                    progress=TranscriptionStepProgress(on_progress=progress_diarize),
-                ),
-                RenderMarkdownStep(
-                    deps.renderer,
-                    deps.settings.transcripts_dir(),
-                    deps.settings,
-                    diarization_model_name=deps.diarization_model_name,
-                    snapshot_repository=deps.snapshot_repository,
-                ),
+            steps=self._assemble_steps(
+                job,
+                progress_transcribe=progress_transcribe,
+                progress_diarize=progress_diarize,
             ),
             cancel_event=cancel_event,
         )
@@ -148,7 +131,8 @@ class TranscribeVideoUseCase:
                 canceled=True,
             )
         except PipelineRejectionError as exc:
-            job.transition_to(JobStatus.FAILED, error=str(exc))
+            failure_reason = sanitize_text(str(exc), deps.settings)
+            job.transition_to(JobStatus.FAILED, error=failure_reason)
             deps.repository.save(job)
             return TranscribeVideoResult(
                 job=job,
@@ -158,11 +142,12 @@ class TranscribeVideoUseCase:
                 language_code=ctx.transcription_language,
                 language_source=ctx.language_source,
                 language_confidence=ctx.transcription_confidence,
-                failure_reason=str(exc),
+                failure_reason=failure_reason,
             )
         except Exception as exc:
-            logger.exception("Pipeline falhou: %s", exc)
-            job.transition_to(JobStatus.FAILED, error=f"{type(exc).__name__}: {exc}")
+            failure_reason = sanitize_text(f"{type(exc).__name__}: {exc}", deps.settings)
+            logger.error("Pipeline falhou: %s", failure_reason)
+            job.transition_to(JobStatus.FAILED, error=failure_reason)
             deps.repository.save(job)
             return TranscribeVideoResult(
                 job=job,
@@ -172,10 +157,10 @@ class TranscribeVideoUseCase:
                 language_code=ctx.transcription_language,
                 language_source=ctx.language_source,
                 language_confidence=ctx.transcription_confidence,
-                failure_reason=str(exc),
+                failure_reason=failure_reason,
             )
 
-        job.transition_to(JobStatus.COMPLETED)
+        job.transition_to(JobStatus.DELIVERING)
         deps.repository.save(job)
         return TranscribeVideoResult(
             job=job,
@@ -189,22 +174,44 @@ class TranscribeVideoUseCase:
 
     def runner_for(self, job: Job) -> PipelineRunner:
         """Devolve um runner separado para que o caller possa cancelar."""
+        return PipelineRunner(steps=self._assemble_steps(job))
+
+    def _assemble_steps(
+        self,
+        job: Job,
+        *,
+        progress_transcribe: Callable[[float, str], None] | None = None,
+        progress_diarize: Callable[[float, str], None] | None = None,
+    ) -> tuple[PipelineStep, ...]:
+        """Monta prefixo da origem e sufixo comum uma única vez por execução."""
         deps = self._deps
-        return PipelineRunner(
-            steps=(
-                FetchMetadataStep(deps.downloader, deps.settings),
-                TryYouTubeSubtitlesStep(deps.downloader, deps.settings),
-                DownloadAudioStep(deps.downloader, deps.settings.downloads_dir()),
-                ConvertAudioStep(deps.converter, deps.settings.processed_dir(), deps.settings),
-                SelectRuntimeStep(deps.gpu_detector, deps.settings),
-                TranscribeStep(deps.transcription_engine, deps.settings),
-                DiarizeStep(deps.diarization_engine, deps.settings),
-                RenderMarkdownStep(
-                    deps.renderer,
-                    deps.settings.transcripts_dir(),
-                    deps.settings,
-                    diarization_model_name=deps.diarization_model_name,
-                    snapshot_repository=deps.snapshot_repository,
-                ),
-            )
+        source = job.media_source
+        if source is None:
+            raise ValueError("Job sem origem de mídia")
+        source_steps = (
+            SourceAcquisitionResolver(deps.downloader, deps.settings)
+            .resolve(source.source_type)
+            .steps()
         )
+        common_suffix: tuple[PipelineStep, ...] = (
+            ConvertAudioStep(deps.converter, deps.settings.processed_dir(), deps.settings),
+            SelectRuntimeStep(deps.gpu_detector, deps.settings),
+            TranscribeStep(
+                deps.transcription_engine,
+                deps.settings,
+                progress=TranscriptionStepProgress(on_progress=progress_transcribe),
+            ),
+            DiarizeStep(
+                deps.diarization_engine,
+                deps.settings,
+                progress=TranscriptionStepProgress(on_progress=progress_diarize),
+            ),
+            RenderMarkdownStep(
+                deps.renderer,
+                deps.settings.transcripts_dir(),
+                deps.settings,
+                diarization_model_name=deps.diarization_model_name,
+                snapshot_repository=deps.snapshot_repository,
+            ),
+        )
+        return source_steps + common_suffix

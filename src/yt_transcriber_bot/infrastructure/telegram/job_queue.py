@@ -142,15 +142,15 @@ class SequentialJobQueue(Generic[T]):
     async def _run(self) -> None:
         while True:
             item = await self._queue.get()
-            async with self._lock:
-                # Tira da lista de pendentes (se ainda estiver lá).
-                with contextlib.suppress(ValueError):
-                    self._pending.remove(item)
-                if item.is_canceled():
-                    # Cancelado antes mesmo de começar.
-                    continue
-                self._current = item
             try:
+                async with self._lock:
+                    # Tira da lista de pendentes (se ainda estiver lá).
+                    with contextlib.suppress(ValueError):
+                        self._pending.remove(item)
+                    if item.is_canceled():
+                        # Cancelado antes mesmo de começar.
+                        continue
+                    self._current = item
                 await self._worker(item)
             except asyncio.CancelledError:
                 raise

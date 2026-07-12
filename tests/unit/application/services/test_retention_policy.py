@@ -21,6 +21,9 @@ class FakeRepo:
     def list_completed_oldest_first(self) -> list[Job]:
         return list(self.jobs)
 
+    def list_by_statuses_oldest_first(self, statuses: set[JobStatus]) -> list[Job]:
+        return [job for job in self.jobs if job.status in statuses]
+
     # restantes não são chamadas pela RetentionPolicy
     def save(self, job: Job) -> None: ...
     def get_by_id(self, job_id: str) -> Job | None: ...

@@ -72,7 +72,7 @@ def _normalize_format(value: str) -> ExportFormat:
             + ", ".join(SUPPORTED_EXPORT_FORMATS)
             + "."
         )
-    return fmt  # type: ignore[return-value]
+    return fmt
 
 
 def _display_speaker(label: str, aliases: Mapping[str, str]) -> str:
@@ -88,21 +88,24 @@ def _render_json(snap: TranscriptSnapshot, aliases: Mapping[str, str]) -> str:
     m = snap.metadata
     t = snap.transcript
     c = snap.context
+    metadata = {
+        "title": m.title,
+        "channel": m.channel,
+        "duration_seconds": m.duration.total_seconds,
+        "duration_hms": m.duration.to_hms(),
+        "upload_date": m.upload_date.isoformat() if m.upload_date else None,
+        "original_language": m.original_language.code if m.original_language else None,
+        "has_alternate_audio_tracks": m.has_alternate_audio_tracks,
+        "alternate_languages": [lang.code for lang in m.alternate_languages],
+    }
+    if m.source_label == "YouTube":
+        metadata = {"video_id": str(m.video_id), "url": m.canonical_url(), **metadata}
+    else:
+        metadata = {"source": m.source_label, **metadata}
     data = {
         "schema_version": 1,
         "format": "yt_transcriber_bot.transcript_export",
-        "metadata": {
-            "video_id": str(m.video_id),
-            "url": m.canonical_url(),
-            "title": m.title,
-            "channel": m.channel,
-            "duration_seconds": m.duration.total_seconds,
-            "duration_hms": m.duration.to_hms(),
-            "upload_date": m.upload_date.isoformat() if m.upload_date else None,
-            "original_language": m.original_language.code if m.original_language else None,
-            "has_alternate_audio_tracks": m.has_alternate_audio_tracks,
-            "alternate_languages": [lang.code for lang in m.alternate_languages],
-        },
+        "metadata": metadata,
         "transcript": {
             "language": t.language.code,
             "language_confidence": t.language_confidence,

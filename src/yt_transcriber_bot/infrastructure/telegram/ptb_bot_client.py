@@ -10,15 +10,21 @@ Mantém a interface mínima exigida por ``TelegramBotAdapter``. Responsabilidade
 from __future__ import annotations
 
 import logging
+import secrets
 from pathlib import Path
 from typing import Any
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
+from yt_transcriber_bot.application.ports.incoming_media import (
+    IncomingMedia,
+    IncomingMediaDownloader,
+)
+
 logger = logging.getLogger(__name__)
 
 
-class PTBBotClient:
+class PTBBotClient(IncomingMediaDownloader):
     """Adapter fino para a Bot API via python-telegram-bot."""
 
     def __init__(self, bot: Bot) -> None:
@@ -54,6 +60,16 @@ class PTBBotClient:
             await self._bot.send_video(
                 chat_id=chat_id, video=fh, filename=file_path.name, caption=caption
             )
+
+    async def download(self, media: IncomingMedia, dest_dir: Path) -> Path:
+        """Baixa com nome local opaco, sem reproduzir o nome enviado pelo usuário."""
+        suffix = Path(media.file_name or "voice.ogg").suffix.lower() or ".ogg"
+        safe_name = f"{secrets.token_hex(16)}{suffix}"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        path = dest_dir / safe_name
+        telegram_file = await self._bot.get_file(media.file_id)
+        await telegram_file.download_to_drive(custom_path=path)
+        return Path(path)
 
 
 def _to_inline_keyboard_markup(reply_markup: Any | None) -> InlineKeyboardMarkup | None:

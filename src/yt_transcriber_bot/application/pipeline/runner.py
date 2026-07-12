@@ -137,7 +137,7 @@ def _audit_step(
         return
     payload: dict[str, object] = {
         "job_id": ctx.job.job_id,
-        "video_id": ctx.job.video_id.value,
+        "video_id": ctx.job.video_id.value if ctx.job.video_id is not None else None,
         "step_name": step_name,
         "job_status": ctx.job.status.value,
     }

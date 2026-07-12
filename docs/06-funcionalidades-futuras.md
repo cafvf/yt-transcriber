@@ -11,7 +11,10 @@ O roadmap abaixo foi revisado após a estabilização de `/healthcheck` e `/last
 As funcionalidades abaixo saíram do roadmap e devem permanecer documentadas no README, no contrato funcional, no manual e nas patch notes:
 
 - `/healthcheck`: diagnóstico operacional de configuração, dependências, diretórios, SQLite, cookies, LM Studio, tokenizer/orçamento de sumarização e espaço em disco.
-- `/lasterror`: recuperação do último erro operacional sanitizado, cobrindo jobs `failed` e erros derivados de `/summary`, exportações, vídeo legendado, limpeza de cache e exceções defensivas do pipeline.
+- `/lasterror`: recuperação do último erro operacional sanitizado, cobrindo jobs `failed`, jobs `delivery_failed` e erros derivados de `/summary`, exportações, vídeo legendado, limpeza de cache, falha de entrega registrada como `transcribe_delivery` e exceções defensivas do pipeline.
+- `/search <texto>`: busca textual privada no histórico concluído do usuário, com metadados, transcrições/snapshots e resumos; retorna índice, título, identidade da origem (ID do YouTube quando houver), data e trecho sanitizado. Usa FTS5 quando disponível e fallback compatível limitado quando não estiver; atualiza o índice após transcrição, `/rename` e `/summary`.
+- `/text [n]`: exportação `.txt` limpa a partir do snapshot concluído, preservando metadados mínimos e aliases de falantes sem reprocessar mídia.
+- Entrada Telegram: `audio`, `voice` e documentos de áudio, com validação de tipo/extensão, tamanho e duração, pipeline comum e identidade persistida sem `video_id` sintético.
 
 Elas não devem ser tratadas como futuras. Evoluções incrementais ainda podem ser propostas como refinamentos de observabilidade, não como nova feature principal.
 
@@ -19,28 +22,15 @@ Elas não devem ser tratadas como futuras. Evoluções incrementais ainda podem 
 
 ## Roadmap priorizado
 
-### 1. `/search <texto>` + arquitetura para busca semântica (`alta`, `médio`)
+### 1. Busca semântica sobre o histórico (`média`, `médio/grande`)
 
-Busca textual em transcrições, resumos e metadados já processados, com arquitetura preparada para uma camada semântica futura.
+O MVP textual de `/search <texto>` já cobre transcrições, resumos e metadados
+do próprio usuário. Esta evolução acrescentará recuperação por significado sem
+substituir o comportamento textual, os artefatos literais ou o escopo privado.
 
 **Motivação.** O histórico local só é realmente útil se puder ser pesquisado por tema, pessoa, expressão técnica, vídeo, canal ou data. Esta funcionalidade transforma o bot de um processador de vídeos em uma base consultável de conhecimento.
 
-**Escopo mínimo do MVP textual.**
-
-- Comando `/search <texto>`.
-- Busca em Markdown de transcrição, resumos, título, canal, URL, `video_id`, idioma e nomes amigáveis de falantes.
-- Retorno compacto no Telegram com os melhores resultados, cada um contendo índice histórico, título, `video_id`, data e trecho relevante.
-- Reenvio do artefato via `/last [n]`, `/summary [n]` ou exportação já existente.
-- Atualização do índice após nova transcrição, `/rename` e `/summary`.
-
-**Estratégia técnica sugerida para o MVP.**
-
-- Usar SQLite FTS5 quando disponível.
-- Manter fallback documentado se FTS5 não estiver presente no SQLite local.
-- Indexar textos derivados como artefatos, sem substituir a transcrição literal.
-- Criar testes de ranking básico, busca sem resultado, sanitização e compatibilidade com transcrições antigas.
-
-**Evolução semântica futura dentro da mesma linha.**
+**Escopo futuro.**
 
 - Comando futuro `/search semantic <texto>` ou opção equivalente.
 - Comando futuro `/related [n]` para recuperar transcrições semanticamente próximas.
@@ -51,50 +41,7 @@ A busca semântica não deve entrar no primeiro MVP para evitar dependência pre
 
 ---
 
-### 2. `/text [n]` — texto limpo da transcrição (`alta`, `pequeno`)
-
-Exportar uma versão limpa da transcrição, em `.txt`, para leitura, cópia, revisão humana ou uso como entrada em outra LLM.
-
-**Escopo mínimo.**
-
-- Comando `/text [n]`.
-- Sem índice, usa a transcrição mais recente.
-- Gera arquivo `.txt` derivado do snapshot da transcrição.
-- Preserva título, metadados mínimos e falantes quando disponíveis.
-- Remove formatação Markdown pesada.
-- Não reprocessa áudio, ASR ou diarização.
-
-**Variações futuras possíveis.**
-
-- `/text clean [n]`: texto corrido, sem timestamps.
-- `/text speakers [n]`: texto agrupado por falante.
-- `/text timestamps [n]`: texto simples preservando timestamps essenciais.
-
----
-
-### 3. Transcrição de arquivo de áudio enviado ao Telegram (`alta`, `médio`)
-
-Permitir que o usuário envie um arquivo de áudio diretamente ao bot e receba a mesma saída do pipeline de YouTube: Markdown, diarização, exportações e resumo.
-
-**Escopo previsto.**
-
-- Receber `audio`, `voice` ou `document` com MIME de áudio.
-- Aceitar formatos como `.mp3`, `.wav`, `.m4a`, `.ogg` e `.flac`, conforme suporte real do `ffmpeg`.
-- Validar tamanho, duração e extensão.
-- Salvar em diretório de downloads com metadados mínimos.
-- Criar job sem `youtube_url`, mas com `source_type=telegram_audio` ou equivalente.
-- Reaproveitar normalização de áudio, WhisperX, diarização, renderização, exportações e sumarização.
-
-**Cuidados.**
-
-- Limites do Telegram para upload/download.
-- Diferença entre mensagens `voice` comprimidas e arquivos de áudio de maior qualidade.
-- Política de retenção semelhante à de vídeos processados.
-- Ajustes no histórico, já que alguns jobs não terão `video_id` nem URL do YouTube.
-
----
-
-### 4. Backend alternativo de ASR e suporte multilíngue ampliado (`alta`, `médio/grande`)
+### 2. Backend alternativo de ASR e suporte multilíngue ampliado (`alta`, `médio/grande`)
 
 Adicionar ou estruturar backends alternativos ao fluxo atual com WhisperX/faster-whisper, permitindo melhor cobertura para idiomas além de português e inglês.
 
@@ -174,11 +121,17 @@ Comando `/stats` para vídeos processados, horas transcritas, tempo médio por e
 
 **Decisão atual.** Não é prioridade porque não atende uma dor imediata do fluxo de estudo/transcrição. Pode ser retomado se houver necessidade de auditoria de uso ou otimização operacional.
 
-### Recuperação avançada após interrupção (`baixa`, `médio`)
+### Retomada seletiva avançada após interrupção (`baixa`, `médio`)
 
-Detecção e retomada seletiva de jobs interrompidos por queda do processo, hibernação ou reinício.
+Retomada de progresso interno de jobs interrompidos por queda do processo,
+hibernação ou reinício, por exemplo continuar a partir de checkpoints internos
+de ASR/diarização.
 
-**Decisão atual.** Não é prioridade porque a complexidade é alta em relação ao ganho imediato. O foco operacional atual deve permanecer em `/healthcheck`, `/lasterror`, logs sanitizados e reprocessamento explícito.
+**Decisão atual.** Retomada seletiva dentro de um job não é prioridade porque a
+complexidade é alta em relação ao ganho imediato. Isso não substitui o hardening
+técnico já adotado para produção privada: recuperação de `pending`,
+requeue/reconciliação mínima após restart e semântica de falha de entrega
+`delivery_failed`.
 
 ---
 

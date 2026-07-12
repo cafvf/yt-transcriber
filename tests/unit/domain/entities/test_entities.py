@@ -14,6 +14,7 @@ from yt_transcriber_bot.domain.entities.transcript import (
 from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
 from yt_transcriber_bot.domain.value_objects.duration import Duration
 from yt_transcriber_bot.domain.value_objects.language import Language
+from yt_transcriber_bot.domain.value_objects.media_source import MediaSource
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
 
 # ----------------------------------------------------------------------
@@ -188,6 +189,14 @@ class TestJob:
         assert job.error_message is None
         assert not job.is_terminal()
 
+    def test_new_uses_youtube_media_source_by_default(self) -> None:
+        video_id = VideoId(value="dQw4w9WgXcQ")
+
+        job = Job.new(video_id, user_id=42)
+
+        assert job.video_id == video_id
+        assert job.media_source == MediaSource.youtube(video_id)
+
     def test_unique_job_ids(self) -> None:
         j1 = Job.new(VideoId(value="dQw4w9WgXcQ"), user_id=1)
         j2 = Job.new(VideoId(value="dQw4w9WgXcQ"), user_id=1)
@@ -211,6 +220,33 @@ class TestJob:
         job.transition_to(JobStatus.COMPLETED)
         with pytest.raises(ValueError, match="terminal"):
             job.transition_to(JobStatus.PENDING)
+
+    def test_completed_job_cannot_reopen_for_delivery_failure(self) -> None:
+        job = Job.new(VideoId(value="dQw4w9WgXcQ"), user_id=1)
+        job.md_path = "/tmp/transcript.md"
+        job.transition_to(JobStatus.COMPLETED)
+
+        with pytest.raises(ValueError, match="terminal"):
+            job.transition_to(JobStatus.DELIVERING)
+        with pytest.raises(ValueError, match="terminal"):
+            job.transition_to(JobStatus.DELIVERY_FAILED, error="falha na entrega")
+
+        assert job.status is JobStatus.COMPLETED
+        assert job.is_terminal()
+        assert job.md_path == "/tmp/transcript.md"
+        assert job.error_message is None
+
+    def test_delivering_job_can_complete_or_record_delivery_failure(self) -> None:
+        job = Job.new(VideoId(value="dQw4w9WgXcQ"), user_id=1)
+        job.md_path = "/tmp/transcript.md"
+
+        job.transition_to(JobStatus.DELIVERING)
+        job.transition_to(JobStatus.DELIVERY_FAILED, error="falha na entrega")
+
+        assert job.status is JobStatus.DELIVERY_FAILED
+        assert job.is_terminal()
+        assert job.md_path == "/tmp/transcript.md"
+        assert job.error_message == "falha na entrega"
 
     def test_transition_idempotent_on_same_terminal(self) -> None:
         job = Job.new(VideoId(value="dQw4w9WgXcQ"), user_id=1)

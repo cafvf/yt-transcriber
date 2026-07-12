@@ -102,6 +102,7 @@ def test_healthcheck_includes_extended_operational_checks(tmp_path: Path) -> Non
     assert "Registro de erros operacionais" in rendered
     assert "Orçamento de sumarização" in rendered
     assert "Tokenizer de sumarização" in rendered
+    assert "trust_remote_code=false" in rendered
     assert "Thinking da LLM" in rendered
 
 
@@ -118,3 +119,96 @@ def test_healthcheck_fails_when_huggingface_token_is_missing(tmp_path: Path) -> 
 
     assert "Healthcheck: problemas encontrados" in rendered
     assert "SUMMARY_TOKENIZER_BACKEND=hf exige transformers" in rendered
+
+
+def test_healthcheck_does_not_expose_cookie_file_path(tmp_path: Path) -> None:
+    cookies_path = tmp_path / "private" / "youtube-cookies.txt"
+    cookies_path.parent.mkdir(parents=True)
+    cookies_path.write_text("# " + "Netscape HTTP Cookie File\n", encoding="utf-8")
+    settings = _settings(tmp_path, youtube_cookies_file=str(cookies_path))
+    service = HealthCheckService(
+        settings=settings,
+        models_probe=lambda *_args: {"data": [{"id": "qwen/qwen3.5-9b"}]},
+        executable_finder=lambda name: f"/usr/bin/{name}",
+        module_checker=lambda name: True,
+    )
+
+    rendered = service.run().render(settings)
+
+    assert "Cookies YouTube" in rendered
+    assert "arquivo configurado existe" in rendered
+    assert str(cookies_path) not in rendered
+
+
+def test_healthcheck_render_does_not_expose_configured_local_paths(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    service = HealthCheckService(
+        settings=settings,
+        models_probe=lambda *_args: {"data": [{"id": "qwen/qwen3.5-9b"}]},
+        executable_finder=lambda name: f"/private/bin/{name}",
+        module_checker=lambda name: True,
+    )
+
+    rendered = service.run().render(settings)
+
+    assert str(settings.base_dir) not in rendered
+    assert str(settings.db_path) not in rendered
+    assert str(settings.logs_dir()) not in rendered
+    assert "/private/bin" not in rendered
+
+
+def test_healthcheck_reports_tokenizer_remote_code_opt_in_safely(tmp_path: Path) -> None:
+    settings = _settings(tmp_path, summary_tokenizer_trust_remote_code=True)
+    service = HealthCheckService(
+        settings=settings,
+        models_probe=lambda *_args: {"data": [{"id": "qwen/qwen3.5-9b"}]},
+        executable_finder=lambda name: f"/usr/bin/{name}",
+        module_checker=lambda name: True,
+    )
+
+    rendered = service.run().render(settings)
+
+    assert "trust_remote_code=true" in rendered
+    assert "revise a origem do tokenizer" in rendered
+
+
+def test_healthcheck_uses_injected_sqlite_probe(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    calls: list[Path] = []
+
+    def sqlite_probe(path: Path) -> None:
+        calls.append(path)
+
+    service = HealthCheckService(
+        settings=settings,
+        models_probe=lambda *_args: {"data": [{"id": "qwen/qwen3.5-9b"}]},
+        executable_finder=lambda name: f"/usr/bin/{name}",
+        module_checker=lambda name: True,
+        sqlite_probe=sqlite_probe,
+    )
+
+    rendered = service.run().render(settings)
+
+    assert calls == [settings.db_path]
+    assert "SQLite: acessível" in rendered
+
+
+def test_healthcheck_reports_injected_sqlite_probe_failure(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+
+    def sqlite_probe(_path: Path) -> None:
+        raise RuntimeError(f"boom at {settings.db_path}")
+
+    service = HealthCheckService(
+        settings=settings,
+        models_probe=lambda *_args: {"data": [{"id": "qwen/qwen3.5-9b"}]},
+        executable_finder=lambda name: f"/usr/bin/{name}",
+        module_checker=lambda name: True,
+        sqlite_probe=sqlite_probe,
+    )
+
+    rendered = service.run().render(settings)
+
+    assert "SQLite" in rendered
+    assert "falha ao acessar o banco SQLite" in rendered
+    assert str(settings.db_path) not in rendered

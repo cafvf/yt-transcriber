@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 from datetime import date
 
@@ -15,6 +16,7 @@ from tests.unit.application.conftest import (
 )
 from yt_transcriber_bot.application.cancellation import OperationCanceledError
 from yt_transcriber_bot.application.config import AppSettings
+from yt_transcriber_bot.application.pipeline.context import PipelineContext
 from yt_transcriber_bot.application.ports.diarization_engine import (
     DiarizationError,
     DiarizationResult,
@@ -28,6 +30,7 @@ from yt_transcriber_bot.application.ports.transcription_engine import (
 )
 from yt_transcriber_bot.application.ports.youtube_downloader import (
     FetchedSubtitle,
+    NoAudioStreamError,
     SubtitleTrack,
     VideoUnavailableError,
 )
@@ -110,7 +113,7 @@ class TestHappyPath:
             fake_diarization=fake_diarization,
         )
         result = uc.execute(_job())
-        assert result.job.status == JobStatus.COMPLETED
+        assert result.job.status == JobStatus.DELIVERING
         assert result.md_path is not None
         assert result.md_path.exists()
         assert result.audio_path is not None
@@ -171,15 +174,59 @@ class TestHappyPath:
             fake_diarization=fake_diarization,
         )
         uc.execute(_job(), progress_step=lambda s, m: events.append((s, m)))
-        names = {e[0] for e in events}
-        # Sem legendas YT: passa por todos os 8 steps
-        assert "fetch_metadata" in names
-        assert "download_audio" in names
-        assert "convert_audio" in names
-        assert "select_runtime" in names
-        assert "transcribe" in names
-        assert "diarize" in names
-        assert "render_md" in names
+        # Sem legendas YT: cada etapa publica início e conclusão, em ordem.
+        assert [step for step, _ in events] == [
+            "fetch_metadata",
+            "fetch_metadata",
+            "try_youtube_subtitles",
+            "try_youtube_subtitles",
+            "download_audio",
+            "download_audio",
+            "convert_audio",
+            "convert_audio",
+            "select_runtime",
+            "select_runtime",
+            "transcribe",
+            "transcribe",
+            "diarize",
+            "diarize",
+            "render_md",
+            "render_md",
+        ]
+
+    def test_runner_for_has_the_same_youtube_step_order_as_execute(
+        self,
+        settings: AppSettings,
+        fake_repo: FakeJobRepository,
+        fake_downloader: FakeYouTubeDownloader,
+        fake_converter: FakeAudioConverter,
+        fake_gpu_cpu: FakeGpuDetector,
+        fake_transcription: FakeTranscriptionEngine,
+        fake_diarization: FakeDiarizationEngine,
+    ) -> None:
+        uc = _make_uc(
+            settings,
+            fake_repo=fake_repo,
+            fake_downloader=fake_downloader,
+            fake_converter=fake_converter,
+            fake_gpu_cpu=fake_gpu_cpu,
+            fake_transcription=fake_transcription,
+            fake_diarization=fake_diarization,
+        )
+        job = _job()
+        execute_events: list[tuple[str, str]] = []
+        uc.execute(job, progress_step=lambda step, message: execute_events.append((step, message)))
+
+        runner_events: list[tuple[str, str]] = []
+        context = PipelineContext(job=job)
+        returned_context = uc.runner_for(job).run(
+            context,
+            progress=lambda step, message: runner_events.append((step, message)),
+        )
+
+        assert returned_context is context
+        assert context.job is job
+        assert [step for step, _ in runner_events] == [step for step, _ in execute_events]
 
     def test_collision_appends_suffix(
         self,
@@ -242,6 +289,42 @@ class TestHappyPath:
 
 
 class TestRejections:
+    def test_pipeline_rejection_sanitizes_persisted_and_returned_reason(
+        self,
+        settings: AppSettings,
+        fake_repo: FakeJobRepository,
+        fake_downloader: FakeYouTubeDownloader,
+        fake_converter: FakeAudioConverter,
+        fake_gpu_cpu: FakeGpuDetector,
+        fake_transcription: FakeTranscriptionEngine,
+        fake_diarization: FakeDiarizationEngine,
+    ) -> None:
+        raw_secret = "sk-secret12345"
+        raw_payload = "private transcript text"
+        fake_downloader.raise_on_audio = NoAudioStreamError(
+            f'authorization: Bearer {raw_secret}; transcript: "{raw_payload}"'
+        )
+        uc = _make_uc(
+            settings,
+            fake_repo=fake_repo,
+            fake_downloader=fake_downloader,
+            fake_converter=fake_converter,
+            fake_gpu_cpu=fake_gpu_cpu,
+            fake_transcription=fake_transcription,
+            fake_diarization=fake_diarization,
+        )
+        job = _job()
+
+        result = uc.execute(job)
+
+        stored = fake_repo.get_by_id(job.job_id)
+        assert stored is not None
+        assert stored.status is JobStatus.FAILED
+        assert stored.error_message == result.failure_reason
+        assert raw_secret not in (result.failure_reason or "")
+        assert raw_payload not in (result.failure_reason or "")
+        assert "[REDACTED]" in (result.failure_reason or "")
+
     def test_video_too_long_rejected(
         self,
         settings: AppSettings,
@@ -335,7 +418,7 @@ class TestRejections:
             fake_diarization=fake_diarization,
         )
         result = uc.execute(_job())
-        assert result.job.status == JobStatus.COMPLETED
+        assert result.job.status == JobStatus.DELIVERING
 
 
 # ======================================================================
@@ -384,12 +467,25 @@ class TestYouTubeSubtitles:
         result = uc.execute(
             _job(), progress_step=lambda step, message: events.append((step, message))
         )
-        assert result.job.status == JobStatus.COMPLETED
+        assert result.job.status == JobStatus.DELIVERING
         # Caminho por legendas deve pular download/conversão/transcrição/diarização.
         assert result.audio_path is None
         assert fake_converter.convert_calls == []
         assert fake_transcription.calls == []
         assert fake_diarization.calls == []
+        assert [step for step, _ in events] == [
+            "fetch_metadata",
+            "fetch_metadata",
+            "try_youtube_subtitles",
+            "try_youtube_subtitles",
+            "download_audio",
+            "convert_audio",
+            "select_runtime",
+            "transcribe",
+            "diarize",
+            "render_md",
+            "render_md",
+        ]
         skipped_steps = {step for step, message in events if "Etapa pulada" in message}
         assert skipped_steps >= {
             "download_audio",
@@ -440,11 +536,32 @@ class TestYouTubeSubtitles:
             fake_transcription=fake_transcription,
             fake_diarization=fake_diarization,
         )
-        result = uc.execute(_job())
+        events: list[tuple[str, str]] = []
+        result = uc.execute(
+            _job(), progress_step=lambda step, message: events.append((step, message))
+        )
 
-        assert result.job.status == JobStatus.COMPLETED
+        assert result.job.status == JobStatus.DELIVERING
         assert fake_transcription.calls != []
         assert fake_diarization.calls != []
+        assert [step for step, _ in events] == [
+            "fetch_metadata",
+            "fetch_metadata",
+            "try_youtube_subtitles",
+            "try_youtube_subtitles",
+            "download_audio",
+            "download_audio",
+            "convert_audio",
+            "convert_audio",
+            "select_runtime",
+            "select_runtime",
+            "transcribe",
+            "transcribe",
+            "diarize",
+            "diarize",
+            "render_md",
+            "render_md",
+        ]
         assert not any("Usando legendas do YouTube" in d for d in result.diagnostics)
         assert any("Legenda do YouTube rejeitada por integridade" in d for d in result.diagnostics)
 
@@ -489,7 +606,7 @@ class TestYouTubeSubtitles:
 
         result = uc.execute(_job())
 
-        assert result.job.status == JobStatus.COMPLETED
+        assert result.job.status == JobStatus.DELIVERING
         assert result.md_path is not None
         md = result.md_path.read_text(encoding="utf-8")
         assert "Você não tem ação." in md
@@ -731,7 +848,7 @@ class TestCancellation:
             fake_diarization=fake_diarization,
         )
         result = uc.execute(_job())
-        assert result.job.status == JobStatus.COMPLETED
+        assert result.job.status == JobStatus.DELIVERING
         assert result.md_path is not None
         md = result.md_path.read_text(encoding="utf-8")
         assert "UNKNOWN" not in md
@@ -766,7 +883,7 @@ class TestOomRetry:
             fake_diarization=fake_diarization,
         )
         result = uc.execute(_job())
-        assert result.job.status == JobStatus.COMPLETED
+        assert result.job.status == JobStatus.DELIVERING
         assert len(fake_transcription.calls) == 2
         # Segundo call deve ter modelo menor e device CPU
         first = fake_transcription.calls[0]
@@ -869,6 +986,45 @@ class TestDiarizationOutcomes:
 
 
 class TestYouTubeFailures:
+    def test_no_audio_stream_stops_before_conversion_and_asr(
+        self,
+        settings: AppSettings,
+        fake_repo: FakeJobRepository,
+        fake_downloader: FakeYouTubeDownloader,
+        fake_converter: FakeAudioConverter,
+        fake_gpu_cpu: FakeGpuDetector,
+        fake_transcription: FakeTranscriptionEngine,
+        fake_diarization: FakeDiarizationEngine,
+    ) -> None:
+        fake_downloader.raise_on_audio = NoAudioStreamError("somente vídeo")
+        uc = _make_uc(
+            settings,
+            fake_repo=fake_repo,
+            fake_downloader=fake_downloader,
+            fake_converter=fake_converter,
+            fake_gpu_cpu=fake_gpu_cpu,
+            fake_transcription=fake_transcription,
+            fake_diarization=fake_diarization,
+        )
+
+        events: list[tuple[str, str]] = []
+        result = uc.execute(
+            _job(), progress_step=lambda step, message: events.append((step, message))
+        )
+
+        assert result.job.status == JobStatus.FAILED
+        assert "sem fluxo de áudio" in (result.failure_reason or "")
+        assert [step for step, _ in events] == [
+            "fetch_metadata",
+            "fetch_metadata",
+            "try_youtube_subtitles",
+            "try_youtube_subtitles",
+            "download_audio",
+        ]
+        assert fake_converter.convert_calls == []
+        assert fake_transcription.calls == []
+        assert fake_diarization.calls == []
+
     def test_video_unavailable_marks_failed(
         self,
         settings: AppSettings,
@@ -933,7 +1089,7 @@ class TestRenames:
 
 
 class TestRepositoryPersistence:
-    def test_completed_job_persisted(
+    def test_rendered_job_persisted_as_delivering(
         self,
         settings: AppSettings,
         fake_repo: FakeJobRepository,
@@ -956,7 +1112,7 @@ class TestRepositoryPersistence:
         uc.execute(job)
         stored = fake_repo.get_by_id(job.job_id)
         assert stored is not None
-        assert stored.status == JobStatus.COMPLETED
+        assert stored.status == JobStatus.DELIVERING
         assert stored.md_path is not None
 
     def test_failed_job_persisted(
@@ -985,6 +1141,57 @@ class TestRepositoryPersistence:
         assert stored is not None
         assert stored.status == JobStatus.FAILED
         assert stored.error_message is not None
+
+    def test_unexpected_failure_persists_and_returns_sanitized_reason(
+        self,
+        caplog,
+        settings: AppSettings,
+        fake_repo: FakeJobRepository,
+        fake_downloader: FakeYouTubeDownloader,
+        fake_converter: FakeAudioConverter,
+        fake_gpu_cpu: FakeGpuDetector,
+        fake_transcription: FakeTranscriptionEngine,
+        fake_diarization: FakeDiarizationEngine,
+    ) -> None:
+        raw_secret = "sk-secret12345"
+        raw_payload = "private transcript text"
+        fake_converter.raise_on_convert = RuntimeError(
+            f'ffmpeg failed authorization: Bearer {raw_secret} prompt: "{raw_payload}"'
+        )
+        uc = _make_uc(
+            settings,
+            fake_repo=fake_repo,
+            fake_downloader=fake_downloader,
+            fake_converter=fake_converter,
+            fake_gpu_cpu=fake_gpu_cpu,
+            fake_transcription=fake_transcription,
+            fake_diarization=fake_diarization,
+        )
+        job = _job()
+
+        caplog.set_level(
+            logging.ERROR,
+            logger="yt_transcriber_bot.application.use_cases.transcribe_video",
+        )
+        result = uc.execute(job)
+
+        stored = fake_repo.get_by_id(job.job_id)
+        assert stored is not None
+        assert stored.status == JobStatus.FAILED
+        assert stored.error_message == result.failure_reason
+        assert stored.error_message is not None
+        assert "RuntimeError" in stored.error_message
+        assert "[REDACTED]" in stored.error_message
+        assert raw_secret not in stored.error_message
+        assert raw_payload not in stored.error_message
+        assert result.failure_reason is not None
+        assert raw_secret not in result.failure_reason
+        assert raw_payload not in result.failure_reason
+        assert "Pipeline falhou" in caplog.text
+        assert "RuntimeError" in caplog.text
+        assert "[REDACTED]" in caplog.text
+        assert raw_secret not in caplog.text
+        assert raw_payload not in caplog.text
 
 
 # ======================================================================
@@ -1034,7 +1241,7 @@ class TestRuntimeSelection:
             fake_diarization=fake_diarization,
         )
         result = uc.execute(_job())
-        assert result.job.status == JobStatus.COMPLETED
+        assert result.job.status == JobStatus.DELIVERING
         # Engine deve ter sido chamado com device CUDA
         from yt_transcriber_bot.domain.value_objects.device import Device
 
@@ -1083,7 +1290,7 @@ class TestAutoSubtitleQualityGate:
             fake_diarization=fake_diarization,
         )
         result = uc.execute(_job())
-        assert result.job.status == JobStatus.COMPLETED
+        assert result.job.status == JobStatus.DELIVERING
         assert len(fake_transcription.calls) == 1
         assert any("Legenda automática rejeitada" in d for d in result.diagnostics)
 
@@ -1126,7 +1333,7 @@ class TestAutoSubtitleQualityGate:
             fake_diarization=fake_diarization,
         )
         result = uc.execute(_job())
-        assert result.job.status == JobStatus.COMPLETED
+        assert result.job.status == JobStatus.DELIVERING
         assert fake_transcription.calls == []
         assert any("Qualidade da legenda automática" in d for d in result.diagnostics)
 

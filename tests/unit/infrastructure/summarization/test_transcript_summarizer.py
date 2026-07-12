@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import sys
 from datetime import UTC, date, datetime
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -22,6 +24,7 @@ from yt_transcriber_bot.infrastructure.summarization.openai_compatible_client im
 from yt_transcriber_bot.infrastructure.summarization.transcript_summarizer import (
     SummaryProgress,
     TranscriptSummaryService,
+    _make_tokenizer,
 )
 
 
@@ -99,6 +102,57 @@ def test_summary_service_generates_markdown_with_metadata_and_aliases(tmp_path: 
     assert "Conteúdo resumido" in content
     assert "Consulte a transcrição original" in content
     assert "Apresentador: Olá mundo" in fake.requests[0].user_prompt
+
+
+def test_summary_service_repairs_mojibake_in_generated_summary_body(tmp_path: Path) -> None:
+    fake = FakeChatClient(
+        [
+            "## Resumo executivo\n"
+            "- JoÃ£o explicou aÃ§Ã£o.\n\n"
+            "## TÃ³picos principais\n"
+            "- â€œUnicodeâ€ e revisÃ£o."
+        ]
+    )
+    service = TranscriptSummaryService(
+        snapshots=_snapshot_repo(tmp_path),
+        chat_client=fake,
+        output_dir=tmp_path / "summaries",
+    )
+
+    result = service.summarize(slug="video", output_base_path=tmp_path / "video.md")
+
+    content = result.path.read_text(encoding="utf-8")
+    assert "João explicou ação." in content
+    assert "## Tópicos principais" in content
+    assert "“Unicode” e revisão." in content
+
+
+def test_summary_service_preserves_markdown_structure_while_cleaning_summary_body(
+    tmp_path: Path,
+) -> None:
+    fake = FakeChatClient(
+        [
+            "## Resumo executivo\n"
+            "- Primeiro item\n"
+            "- Segundo item com JoÃ£o\n\n"
+            "## CÃ³digo\n"
+            "```text\n"
+            "JoÃ£o\n"
+            "```\n"
+        ]
+    )
+    service = TranscriptSummaryService(
+        snapshots=_snapshot_repo(tmp_path),
+        chat_client=fake,
+        output_dir=tmp_path / "summaries",
+    )
+
+    result = service.summarize(slug="video", output_base_path=tmp_path / "video.md")
+
+    content = result.path.read_text(encoding="utf-8")
+    assert (
+        "\n- Primeiro item\n- Segundo item com João\n\n## Código\n```text\nJoÃ£o\n```\n" in content
+    )
 
 
 def test_summary_service_normalizes_entities_and_skips_zero_duration_segments(
@@ -528,3 +582,63 @@ def test_summary_service_deduplicates_repeated_adjacent_segments(tmp_path: Path)
     assert prompt.count("SPEAKER_00:") == 1
     assert prompt.count("alpha beta gamma delta") == 1
     assert "epsilon zeta" in prompt
+
+
+def test_make_tokenizer_disables_trust_remote_code_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded = _install_fake_transformers_tokenizer(monkeypatch)
+
+    tokenizer = _make_tokenizer(
+        backend="hf",
+        model="local/model",
+        chars_per_token=2.5,
+    )
+
+    assert tokenizer.description == "Hugging Face tokenizer local (local/model)"
+    assert recorded["local_files_only"] is True
+    assert recorded["trust_remote_code"] is False
+
+
+def test_make_tokenizer_can_opt_in_to_trust_remote_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded = _install_fake_transformers_tokenizer(monkeypatch)
+
+    _make_tokenizer(
+        backend="hf",
+        model="local/model",
+        chars_per_token=2.5,
+        trust_remote_code=True,
+    )
+
+    assert recorded["trust_remote_code"] is True
+
+
+def _install_fake_transformers_tokenizer(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
+    recorded: dict[str, object] = {}
+
+    class FakeTokenizer:
+        def encode(self, text: str, *, add_special_tokens: bool = False) -> list[int]:
+            return [1, 2, 3] if text else []
+
+        def decode(
+            self,
+            token_ids: list[int],
+            *,
+            skip_special_tokens: bool = True,
+            clean_up_tokenization_spaces: bool = False,
+        ) -> str:
+            return "decoded"
+
+    class FakeAutoTokenizer:
+        @staticmethod
+        def from_pretrained(model: str, **kwargs: object) -> FakeTokenizer:
+            recorded["model"] = model
+            recorded.update(kwargs)
+            return FakeTokenizer()
+
+    fake_transformers = ModuleType("transformers")
+    fake_transformers.AutoTokenizer = FakeAutoTokenizer
+    monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
+    return recorded

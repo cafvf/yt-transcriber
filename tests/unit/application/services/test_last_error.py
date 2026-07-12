@@ -38,6 +38,15 @@ def _failed_job(user_id: int, when: datetime, *, error: str) -> Job:
     return job
 
 
+def _delivery_failed_job(user_id: int, when: datetime, *, error: str) -> Job:
+    job = Job.new(VideoId("dQw4w9WgXcQ"), user_id)
+    object.__setattr__(job, "requested_at", when)
+    job.transition_to(JobStatus.DELIVERING)
+    job.transition_to(JobStatus.DELIVERY_FAILED, error=error)
+    object.__setattr__(job, "updated_at", when)
+    return job
+
+
 def test_lasterror_reports_no_recent_failure(tmp_path: Path) -> None:
     service = LastErrorService(repository=FakeRepo([]), settings=_settings(tmp_path))  # type: ignore[arg-type]
 
@@ -69,6 +78,27 @@ def test_lasterror_selects_latest_failed_job_and_sanitizes_secrets(tmp_path: Pat
     assert "[REDACTED]" in report.message
     assert "linha2" in report.message
     assert "linha1" not in report.message
+
+
+def test_lasterror_reports_delivery_failed_job_with_artifact_paths(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    job = _delivery_failed_job(
+        42,
+        datetime(2026, 5, 1, 12, tzinfo=UTC),
+        error="Falha ao entregar artefatos pelo Telegram",
+    )
+    job.md_path = str(tmp_path / "transcripts" / "video.md")
+    job.audio_path = str(tmp_path / "processed" / "video.mp3")
+    service = LastErrorService(repository=FakeRepo([job]), settings=settings)  # type: ignore[arg-type]
+
+    report = service.latest_for_user(42)
+
+    assert report.job is job
+    assert report.operational_error is None
+    assert "Tipo: job de transcrição" in report.message
+    assert "Status: delivery_failed" in report.message
+    assert f"Markdown parcial: {job.md_path}" in report.message
+    assert f"Áudio parcial: {job.audio_path}" in report.message
 
 
 def test_lasterror_reports_operational_error_from_summary(tmp_path: Path) -> None:
@@ -124,6 +154,43 @@ def test_lasterror_records_error_type_stage_traceback_and_hints(tmp_path: Path) 
     assert "TimeoutError" in report.message
     assert "Próximas verificações" in report.message
     assert "SUMMARY_MAX_INPUT_TOKENS" in report.message
+
+
+def test_lasterror_sanitizes_api_bodies_in_message_context_and_traceback(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    service = LastErrorService(repository=FakeRepo([]), settings=settings)  # type: ignore[arg-type]
+
+    try:
+        raise RuntimeError(
+            'HTTP 400 body={"messages":[{"role":"user","content":"raw transcript"}],'
+            '"input":"private input body","Authorization":"Bearer backend-token"}'
+        )
+    except RuntimeError as exc:
+        service.record_operation_error(
+            user_id=42,
+            operation="summary",
+            message=f"Backend recusou request_body={{'transcript':'private transcript text'}}: {exc}",
+            context={
+                "response_body": '{"content":"echoed prompt body"}',
+                "headers": "Authorization: Bearer context-token",
+            },
+            error=exc,
+            stage="llm",
+        )
+
+    raw_log = (settings.logs_dir() / "operational_errors.jsonl").read_text(encoding="utf-8")
+    report = service.latest_for_user(42)
+    combined = raw_log + "\n" + report.message
+
+    assert "raw transcript" not in combined
+    assert "private input body" not in combined
+    assert "private transcript text" not in combined
+    assert "echoed prompt body" not in combined
+    assert "backend-token" not in combined
+    assert "context-token" not in combined
+    assert "[REDACTED]" in combined
 
 
 def test_lasterror_prefers_newer_operational_error_over_older_failed_job(tmp_path: Path) -> None:

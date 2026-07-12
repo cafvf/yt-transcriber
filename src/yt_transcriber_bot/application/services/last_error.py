@@ -109,7 +109,9 @@ class LastErrorService:
         jobs = self._repository.list_recent_for_user(
             user_id, limit=self._settings.lasterror_recent_limit
         )
-        failed = [job for job in jobs if job.status == JobStatus.FAILED]
+        failed = [
+            job for job in jobs if job.status in {JobStatus.FAILED, JobStatus.DELIVERY_FAILED}
+        ]
         failed.sort(key=lambda job: job.updated_at, reverse=True)
         return failed[0] if failed else None
 
@@ -133,7 +135,7 @@ class LastErrorService:
             "",
             "Tipo: job de transcrição",
             "Operação: transcribe",
-            f"Vídeo: {job.video_id.value}",
+            f"Vídeo: {job.video_id.value if job.video_id is not None else 'Telegram (mídia privada)'}",
             f"Job: {job.job_id}",
             f"Status: {job.status.value}",
             f"Solicitado em: {job.requested_at.strftime('%Y-%m-%d %H:%M:%S %Z')}",

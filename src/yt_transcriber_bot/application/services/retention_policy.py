@@ -16,11 +16,13 @@ permanecem.
 from __future__ import annotations
 
 import logging
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
 from yt_transcriber_bot.application.ports.job_repository import JobRepository
 from yt_transcriber_bot.domain.entities.job import Job
+from yt_transcriber_bot.domain.value_objects.media_source import MediaSourceType
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +77,13 @@ class RetentionPolicy:
     @staticmethod
     def _purge_volatiles(job: Job) -> list[Path]:
         removed: list[Path] = []
-        for str_path in (job.audio_path, job.log_path):
+        source_path = (
+            job.source_url
+            if job.media_source is not None
+            and job.media_source.source_type is MediaSourceType.TELEGRAM_AUDIO
+            else None
+        )
+        for str_path in (source_path, job.audio_path, job.log_path):
             if not str_path:
                 continue
             path = Path(str_path)
@@ -85,4 +93,7 @@ class RetentionPolicy:
                     removed.append(path)
             except OSError as exc:
                 logger.warning("Falha ao remover %s: %s", path, exc)
+        if source_path:
+            with suppress(OSError):
+                Path(source_path).parent.rmdir()
         return removed

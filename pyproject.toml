@@ -157,7 +157,6 @@ module = [
     "yt_dlp.*",
     "whisperx.*",
     "pyannote.*",
-    "faster_whisper.*",
     "torch.*",
     "torchaudio.*",
     "slugify.*",

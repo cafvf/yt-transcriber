@@ -100,6 +100,31 @@ class TestSequential:
             await q.stop()
 
     @pytest.mark.asyncio
+    async def test_canceled_before_start_item_is_marked_task_done(self) -> None:
+        gate = asyncio.Event()
+        processed: list[str] = []
+
+        async def worker(item: QueuedItem[str]) -> None:
+            if item.payload == "active":
+                await gate.wait()
+            processed.append(item.payload)
+
+        q: SequentialJobQueue[str] = SequentialJobQueue(worker)
+        await q.start()
+        try:
+            await q.enqueue("active", "id-active")
+            await asyncio.sleep(0.01)
+            await q.enqueue("pending", "id-pending")
+            assert await q.clear_pending() == 1
+
+            gate.set()
+            await asyncio.wait_for(q._queue.join(), timeout=0.5)
+
+            assert processed == ["active"]
+        finally:
+            await q.stop()
+
+    @pytest.mark.asyncio
     async def test_cancel_unknown_id_returns_false(self) -> None:
         async def worker(item: QueuedItem[str]) -> None:
             return

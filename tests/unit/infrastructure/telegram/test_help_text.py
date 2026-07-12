@@ -23,9 +23,11 @@ PUBLIC_COMMANDS = [
     "/cancelall",
     "/cancelartudo",
     "/list",
+    "/search",
     "/last",
     "/rename",
     "/summary",
+    "/text",
     "/export",
     "/json",
     "/srt",
@@ -67,3 +69,8 @@ def test_help_text_groups_commands_by_user_intent() -> None:
         "Manutenção e ajuda",
     ]:
         assert section in HELP_TEXT
+
+
+def test_help_text_describes_telegram_media_and_youtube_only_video_subtitles() -> None:
+    assert "áudio, mensagem de voz ou documento de áudio" in HELP_TEXT
+    assert "para transcrições do YouTube" in _line_for("/video_subs")

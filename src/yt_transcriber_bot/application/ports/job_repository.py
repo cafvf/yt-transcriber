@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from yt_transcriber_bot.domain.entities.job import Job
+from yt_transcriber_bot.domain.entities.job import Job, JobStatus
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
 
 
@@ -28,6 +28,9 @@ class JobRepository(ABC):
 
     @abstractmethod
     def list_completed_oldest_first(self) -> list[Job]: ...
+
+    @abstractmethod
+    def list_by_statuses_oldest_first(self, statuses: set[JobStatus]) -> list[Job]: ...
 
     @abstractmethod
     def delete(self, job_id: str) -> None: ...

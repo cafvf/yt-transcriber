@@ -11,6 +11,7 @@ import pytest
 
 from yt_transcriber_bot.application.config import AppSettings
 from yt_transcriber_bot.application.services.healthcheck import HealthCheckItem, HealthCheckReport
+from yt_transcriber_bot.application.services.history_search import HistorySearchResult
 from yt_transcriber_bot.application.services.last_error import LastErrorReport
 from yt_transcriber_bot.application.services.rename_speakers import (
     RenameSpeakersService,
@@ -23,6 +24,7 @@ from yt_transcriber_bot.domain.entities.transcript import (
 from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
 from yt_transcriber_bot.domain.value_objects.duration import Duration
 from yt_transcriber_bot.domain.value_objects.language import Language
+from yt_transcriber_bot.domain.value_objects.media_source import MediaSource
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
 from yt_transcriber_bot.infrastructure.exporting.transcript_exporter import (
     TranscriptExportService,
@@ -46,6 +48,7 @@ from yt_transcriber_bot.infrastructure.telegram.bot_adapter import (
     TelegramBotAdapter,
     _parse_rename_mapping,
 )
+from yt_transcriber_bot.infrastructure.telegram.history import HistoryCollaboration
 
 # --------------------------------------------------------------------
 # Fakes
@@ -162,6 +165,21 @@ class FakeVideoSubtitleExportService:
         )()
 
 
+class FakePlainTextExportService:
+    def __init__(self, output_path: Path) -> None:
+        self.output_path = output_path
+        self.calls: list[dict[str, object]] = []
+        self.error: BaseException | None = None
+
+    def export(self, **kwargs: object) -> object:
+        self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
+        self.output_path.parent.mkdir(parents=True, exist_ok=True)
+        self.output_path.write_text("Título: texto\n\nSPEAKER_00: Conteúdo", encoding="utf-8")
+        return type("Result", (), {"path": self.output_path})()
+
+
 class FakeHealthCheckService:
     def run(self) -> HealthCheckReport:
         return HealthCheckReport(
@@ -186,6 +204,16 @@ class FakeLastErrorService:
     def record_operation_error(self, **kwargs: object) -> object:
         self.recorded.append(kwargs)
         return object()
+
+
+class FakeHistorySearchService:
+    def __init__(self) -> None:
+        self.calls: list[tuple[int, str]] = []
+        self.results: list[HistorySearchResult] = []
+
+    def search(self, *, user_id: int, query: str) -> list[HistorySearchResult]:
+        self.calls.append((user_id, query))
+        return self.results
 
 
 class FakeRepo:
@@ -220,6 +248,12 @@ class FakeRepo:
     def list_completed_oldest_first(self) -> list[Job]:
         return sorted(
             [j for j in self.jobs if j.status == JobStatus.COMPLETED],
+            key=lambda j: j.requested_at,
+        )
+
+    def list_by_statuses_oldest_first(self, statuses: set[JobStatus]) -> list[Job]:
+        return sorted(
+            [j for j in self.jobs if j.status in statuses],
             key=lambda j: j.requested_at,
         )
 
@@ -282,6 +316,11 @@ def video_subtitle_service(tmp_path: Path) -> FakeVideoSubtitleExportService:
 
 
 @pytest.fixture
+def plain_text_export_service(tmp_path: Path) -> FakePlainTextExportService:
+    return FakePlainTextExportService(tmp_path / "text_exports" / "transcript.txt")
+
+
+@pytest.fixture
 def healthcheck_service() -> FakeHealthCheckService:
     return FakeHealthCheckService()
 
@@ -289,6 +328,11 @@ def healthcheck_service() -> FakeHealthCheckService:
 @pytest.fixture
 def lasterror_service() -> FakeLastErrorService:
     return FakeLastErrorService()
+
+
+@pytest.fixture
+def history_search_service() -> FakeHistorySearchService:
+    return FakeHistorySearchService()
 
 
 @pytest.fixture
@@ -302,6 +346,7 @@ async def adapter(
     video_subtitle_service: FakeVideoSubtitleExportService,
     healthcheck_service: FakeHealthCheckService,
     lasterror_service: FakeLastErrorService,
+    history_search_service: FakeHistorySearchService,
     tmp_path: Path,
 ) -> TelegramBotAdapter:
     a = TelegramBotAdapter(
@@ -315,6 +360,7 @@ async def adapter(
         video_subtitle_export_service=video_subtitle_service,  # type: ignore[arg-type]
         healthcheck_service=healthcheck_service,  # type: ignore[arg-type]
         lasterror_service=lasterror_service,  # type: ignore[arg-type]
+        history_search_service=history_search_service,  # type: ignore[arg-type]
         models_dir=tmp_path / "models",
     )
     await a.start()
@@ -372,6 +418,73 @@ def _populate_snapshot(snapshots: TranscriptSnapshotRepository, slug: str) -> No
 # --------------------------------------------------------------------
 
 
+def test_history_collaboration_filters_scopes_sorts_and_limits_completed_jobs(
+    repo: FakeRepo, tmp_path: Path
+) -> None:
+    """Caracteriza a base comum de histórico usada pelos comandos numerados."""
+    older = _make_completed_job(42, tmp_path / "older.md", datetime(2026, 5, 1, 9, 0, tzinfo=UTC))
+    newer = _make_completed_job(42, tmp_path / "newer.md", datetime(2026, 5, 1, 11, 0, tzinfo=UTC))
+    foreign = _make_completed_job(
+        7, tmp_path / "foreign.md", datetime(2026, 5, 1, 12, 0, tzinfo=UTC)
+    )
+    pending = Job.new(VideoId("L9awVwLDH18"), 42)
+    repo.save(older)
+    repo.save(newer)
+    repo.save(foreign)
+    repo.save(pending)
+
+    history = HistoryCollaboration(repo)  # type: ignore[arg-type]
+
+    assert history.completed_jobs_for_user(42, limit=1) == [newer]
+    assert history.select_completed_job(42, index=2) == older
+    assert history.select_completed_job(42, index=3) is None
+
+
+def test_history_collaboration_prefers_batch_titles_and_falls_back_to_slug(
+    repo: FakeRepo, tmp_path: Path
+) -> None:
+    """Caracteriza o prefetch único para /list e o fallback textual legado."""
+
+    class TitleProvider:
+        def __init__(self) -> None:
+            self.batch_calls: list[tuple[str, ...]] = []
+
+        def metadata_for_many(self, slugs: tuple[str, ...]) -> dict[str, VideoMetadata]:
+            self.batch_calls.append(slugs)
+            return {
+                "named": VideoMetadata(
+                    video_id=VideoId("dQw4w9WgXcQ"),
+                    title="Título do snapshot",
+                    channel="Canal",
+                    duration=Duration.from_seconds(1),
+                    upload_date=None,
+                    original_language=Language("pt"),
+                )
+            }
+
+        def metadata_for(self, slug: str) -> VideoMetadata | None:
+            raise AssertionError("o prefetch em lote não deve usar busca unitária")
+
+    named = _make_completed_job(42, tmp_path / "named.md", datetime(2026, 5, 1, tzinfo=UTC))
+    fallback = _make_completed_job(
+        42,
+        tmp_path / "fallback.md",
+        datetime(2026, 5, 1, 1, 0, tzinfo=UTC),
+        video_id="L9awVwLDH18",
+    )
+    repo.save(named)
+    repo.save(fallback)
+    provider = TitleProvider()
+    history = HistoryCollaboration(repo, provider)  # type: ignore[arg-type]
+    jobs = history.completed_jobs_for_user(42, limit=10)
+
+    titles = history.prefetch_titles(jobs)
+
+    assert provider.batch_calls == [("fallback", "named")]
+    assert history.format_job(jobs[1], titles).startswith("Título do snapshot —")
+    assert history.format_job(jobs[0], titles).startswith("fallback — L9awVwLDH18")
+
+
 @pytest.mark.asyncio
 async def test_list_empty(adapter: TelegramBotAdapter, client: FakeBotClient) -> None:
     await adapter.handle_command_list(chat_id=1, user_id=42)
@@ -390,6 +503,109 @@ async def test_list_shows_recent_jobs(
     repo.save(_make_completed_job(42, md, datetime(2026, 5, 1, 12, 0, tzinfo=UTC)))
     await adapter.handle_command_list(chat_id=1, user_id=42)
     assert any("dQw4w9WgXcQ" in t for _, t, *_ in client.sent)
+
+
+# --------------------------------------------------------------------
+# /search
+# --------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_search_requires_query(adapter: TelegramBotAdapter, client: FakeBotClient) -> None:
+    await adapter.handle_command_search(chat_id=1, user_id=42, text="/search")
+
+    assert client.sent[-1][1] == "Uso: /search <texto>. Exemplo: /search privacidade."
+
+
+@pytest.mark.asyncio
+async def test_search_reports_no_results(
+    adapter: TelegramBotAdapter,
+    client: FakeBotClient,
+    history_search_service: FakeHistorySearchService,
+) -> None:
+    await adapter.handle_command_search(chat_id=1, user_id=42, text="/search inexistente")
+
+    assert history_search_service.calls == [(42, "inexistente")]
+    assert client.sent[-1][1] == "Nenhum resultado para “inexistente”."
+
+
+@pytest.mark.asyncio
+async def test_search_formats_current_history_index_and_sanitizes_delivery(
+    adapter: TelegramBotAdapter,
+    client: FakeBotClient,
+    history_search_service: FakeHistorySearchService,
+    repo: FakeRepo,
+    tmp_path: Path,
+) -> None:
+    older = _make_completed_job(42, tmp_path / "older.md", datetime(2026, 5, 1, 10, 0, tzinfo=UTC))
+    newer = _make_completed_job(
+        42,
+        tmp_path / "newer.md",
+        datetime(2026, 5, 1, 11, 0, tzinfo=UTC),
+        video_id="L9awVwLDH18",
+    )
+    repo.save(older)
+    repo.save(newer)
+    history_search_service.results = [
+        HistorySearchResult(
+            job_id=older.job_id,
+            title="Título\nprivado",
+            video_id="dQw4w9WgXcQ",
+            completed_at="2026-05-01 10:00",
+            snippet="cookie=segredo privacidade encontrada",
+        )
+    ]
+
+    await adapter.handle_message(chat_id=1, user_id=42, text="/search privacidade")
+
+    assert history_search_service.calls == [(42, "privacidade")]
+    message = client.sent[-1][1]
+    assert "2. Título privado — dQw4w9WgXcQ — 2026-05-01 10:00" in message
+    assert "cookie=[REDACTED]" in message
+
+
+@pytest.mark.asyncio
+async def test_search_telegram_result_uses_source_label_without_video_identity(
+    adapter: TelegramBotAdapter,
+    client: FakeBotClient,
+    history_search_service: FakeHistorySearchService,
+    repo: FakeRepo,
+    tmp_path: Path,
+) -> None:
+    telegram_job = _make_completed_job(
+        42, tmp_path / "telegram.md", datetime(2026, 5, 1, 10, 0, tzinfo=UTC)
+    )
+    telegram_job.video_id = None
+    telegram_job.media_source = MediaSource.telegram_audio("private-file-id")
+    repo.save(telegram_job)
+    history_search_service.results = [
+        HistorySearchResult(
+            job_id=telegram_job.job_id,
+            title="Mensagem de voz",
+            video_id=None,
+            source_label="Telegram (mídia privada)",
+            completed_at="2026-05-01 10:00",
+            snippet="privacidade encontrada",
+        )
+    ]
+
+    await adapter.handle_command_search(chat_id=1, user_id=42, text="/search privacidade")
+
+    message = client.sent[-1][1]
+    assert "Telegram (mídia privada)" in message
+    assert "dQw4w9WgXcQ" not in message
+
+
+@pytest.mark.asyncio
+async def test_search_ignores_unauthorized_user(
+    adapter: TelegramBotAdapter,
+    client: FakeBotClient,
+    history_search_service: FakeHistorySearchService,
+) -> None:
+    await adapter.handle_command_search(chat_id=1, user_id=7, text="/search privacidade")
+
+    assert history_search_service.calls == []
+    assert client.sent == []
 
 
 @pytest.mark.asyncio
@@ -677,11 +893,16 @@ async def test_redo_requires_link(settings: AppSettings, client: FakeBotClient) 
 
 
 @pytest.mark.asyncio
-async def test_redo_enqueues_fresh_processing(settings: AppSettings, client: FakeBotClient) -> None:
+async def test_redo_enqueues_fresh_processing(
+    settings: AppSettings,
+    client: FakeBotClient,
+    repo: FakeRepo,
+) -> None:
     adapter = TelegramBotAdapter(
         settings=settings,
         client=client,  # type: ignore[arg-type]
         use_case=MagicMock(),
+        repository=repo,  # type: ignore[arg-type]
     )
     await adapter.handle_command_redo(
         chat_id=1,
@@ -1066,6 +1287,34 @@ async def test_summary_latest_generates_and_sends_markdown(
 
     assert summary_service.calls
     assert summary_service.calls[0]["slug"] == "hello"
+
+
+@pytest.mark.asyncio
+async def test_summary_accepts_telegram_media_without_video_id(
+    adapter: TelegramBotAdapter,
+    client: FakeBotClient,
+    repo: FakeRepo,
+    snapshots: TranscriptSnapshotRepository,
+    summary_service: FakeSummaryService,
+    tmp_path: Path,
+) -> None:
+    md = tmp_path / "telegram-summary.md"
+    md.write_text("# placeholder")
+    job = Job.new(
+        None,
+        user_id=42,
+        media_source=MediaSource.telegram_audio("private-file-id"),
+        source_url=str(tmp_path / "private.ogg"),
+    )
+    job.md_path = str(md)
+    job.transition_to(JobStatus.COMPLETED)
+    repo.save(job)
+    _populate_snapshot(snapshots, "telegram-summary")
+
+    await adapter.handle_command_summary(chat_id=1, user_id=42, text="/summary")
+
+    assert summary_service.calls[0]["slug"] == "telegram-summary"
+    assert "apenas para transcrições do YouTube" not in client.sent[-1][1]
     assert "on_progress" in summary_service.calls[0]
     assert summary_service.output_path in client.docs
     assert any("Gerando resumo" in text for _, text, *_ in client.sent)
@@ -1135,6 +1384,104 @@ async def test_summary_fallback_text_command(
 # --------------------------------------------------------------------
 # /export json|srt|vtt [n]
 # --------------------------------------------------------------------
+
+
+# --------------------------------------------------------------------
+# /text [n]
+# --------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_text_latest_exports_snapshot_and_sends_reusable_document(
+    adapter: TelegramBotAdapter,
+    client: FakeBotClient,
+    repo: FakeRepo,
+    snapshots: TranscriptSnapshotRepository,
+    plain_text_export_service: FakePlainTextExportService,
+    tmp_path: Path,
+) -> None:
+    md = tmp_path / "latest.md"
+    md.write_text("# placeholder")
+    repo.save(_make_completed_job(42, md, datetime(2026, 5, 1, tzinfo=UTC)))
+    _populate_snapshot(snapshots, "latest")
+    adapter._plain_text_export_service = plain_text_export_service  # type: ignore[attr-defined]
+
+    await adapter.handle_command_text(chat_id=1, user_id=42, text="/text")  # type: ignore[attr-defined]
+
+    assert plain_text_export_service.calls[0]["slug"] == "latest"
+    assert plain_text_export_service.calls[0]["speaker_aliases"] == {}
+    assert plain_text_export_service.output_path in client.docs
+    assert any("texto" in text.lower() for _, text, *_ in client.sent)
+
+
+@pytest.mark.asyncio
+async def test_text_index_selects_penultimate_completed_job(
+    adapter: TelegramBotAdapter,
+    client: FakeBotClient,
+    repo: FakeRepo,
+    plain_text_export_service: FakePlainTextExportService,
+    tmp_path: Path,
+) -> None:
+    old_md = tmp_path / "old.md"
+    new_md = tmp_path / "new.md"
+    old_md.write_text("# old")
+    new_md.write_text("# new")
+    old_job = _make_completed_job(42, old_md, datetime(2026, 5, 1, 10, 0, tzinfo=UTC))
+    old_job.speaker_renames = {"SPEAKER_00": "Maria"}
+    repo.save(old_job)
+    repo.save(_make_completed_job(42, new_md, datetime(2026, 5, 1, 11, 0, tzinfo=UTC)))
+    adapter._plain_text_export_service = plain_text_export_service  # type: ignore[attr-defined]
+
+    await adapter.handle_command_text(chat_id=1, user_id=42, text="/text 2")  # type: ignore[attr-defined]
+
+    assert plain_text_export_service.calls[0]["slug"] == "old"
+    assert plain_text_export_service.calls[0]["speaker_aliases"] == {"SPEAKER_00": "Maria"}
+    assert plain_text_export_service.output_path in client.docs
+
+
+@pytest.mark.asyncio
+async def test_text_invalid_index_reuses_history_error(
+    adapter: TelegramBotAdapter, client: FakeBotClient
+) -> None:
+    await adapter.handle_command_text(chat_id=1, user_id=42, text="/text 0")  # type: ignore[attr-defined]
+
+    assert client.sent[-1][1] == "Use um número positivo. Exemplo: /last 2 ou /rename 2."
+
+
+@pytest.mark.asyncio
+async def test_text_missing_snapshot_is_sanitized_and_not_sent(
+    adapter: TelegramBotAdapter,
+    client: FakeBotClient,
+    repo: FakeRepo,
+    plain_text_export_service: FakePlainTextExportService,
+    tmp_path: Path,
+) -> None:
+    md = tmp_path / "expired.md"
+    md.write_text("# expired")
+    repo.save(_make_completed_job(42, md, datetime(2026, 5, 1, tzinfo=UTC)))
+    plain_text_export_service.error = FileNotFoundError("Snapshot inexistente: expired")
+    adapter._plain_text_export_service = plain_text_export_service  # type: ignore[attr-defined]
+
+    await adapter.handle_command_text(chat_id=1, user_id=42, text="/text")  # type: ignore[attr-defined]
+
+    assert client.docs == []
+    assert client.sent[-1][1] == "Snapshot dessa transcrição expirou. Reprocesse o vídeo."
+
+
+@pytest.mark.asyncio
+async def test_text_unavailable_and_unauthorized_do_not_export(
+    adapter: TelegramBotAdapter,
+    client: FakeBotClient,
+    plain_text_export_service: FakePlainTextExportService,
+) -> None:
+    await adapter.handle_command_text(chat_id=1, user_id=42, text="/text")  # type: ignore[attr-defined]
+    assert client.sent[-1][1] == "Exportação de texto indisponível neste bot."
+
+    adapter._plain_text_export_service = plain_text_export_service  # type: ignore[attr-defined]
+    sent_before = list(client.sent)
+    await adapter.handle_command_text(chat_id=1, user_id=7, text="/text")  # type: ignore[attr-defined]
+    assert client.sent == sent_before
+    assert plain_text_export_service.calls == []
 
 
 @pytest.mark.asyncio
@@ -1256,6 +1603,30 @@ async def test_video_subs_sends_soft_subtitled_mp4(
     assert client.videos
     assert client.videos[0][0].name == "video.mp4"
     assert "legenda selecionável" in (client.videos[0][1] or "")
+
+
+@pytest.mark.asyncio
+async def test_video_subs_rejects_telegram_media_without_synthetic_video_id(
+    adapter: TelegramBotAdapter,
+    client: FakeBotClient,
+    repo: FakeRepo,
+    video_subtitle_service: FakeVideoSubtitleExportService,
+    tmp_path: Path,
+) -> None:
+    job = Job.new(
+        None,
+        user_id=42,
+        media_source=MediaSource.telegram_audio("private-file-id"),
+        source_url=str(tmp_path / "private.ogg"),
+    )
+    job.md_path = str(tmp_path / "telegram.md")
+    job.transition_to(JobStatus.COMPLETED)
+    repo.save(job)
+
+    await adapter.handle_command_video_subs(chat_id=1, user_id=42, text="/video_subs")
+
+    assert video_subtitle_service.calls == []
+    assert "apenas para transcrições do YouTube" in client.sent[-1][1]
 
 
 @pytest.mark.asyncio

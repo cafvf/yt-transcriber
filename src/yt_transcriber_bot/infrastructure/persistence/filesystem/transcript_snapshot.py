@@ -94,18 +94,22 @@ class TranscriptSnapshotRepository:
         m = snap.metadata
         t = snap.transcript
         c = snap.context
+        metadata: dict[str, object] = {
+            "title": m.title,
+            "channel": m.channel,
+            "duration_seconds": m.duration.total_seconds,
+            "upload_date": m.upload_date.isoformat() if m.upload_date else None,
+            "original_language": m.original_language.code if m.original_language else None,
+            "has_alternate_audio_tracks": m.has_alternate_audio_tracks,
+            "alternate_languages": [lng.code for lng in m.alternate_languages],
+            "source_label": m.source_label,
+        }
+        if m.source_label == "YouTube":
+            metadata["video_id"] = str(m.video_id)
+            metadata["source_reference"] = m.source_reference
         return {
             "schema_version": SCHEMA_VERSION,
-            "metadata": {
-                "video_id": str(m.video_id),
-                "title": m.title,
-                "channel": m.channel,
-                "duration_seconds": m.duration.total_seconds,
-                "upload_date": m.upload_date.isoformat() if m.upload_date else None,
-                "original_language": m.original_language.code if m.original_language else None,
-                "has_alternate_audio_tracks": m.has_alternate_audio_tracks,
-                "alternate_languages": [lng.code for lng in m.alternate_languages],
-            },
+            "metadata": metadata,
             "transcript": {
                 "language": t.language.code,
                 "language_confidence": t.language_confidence,
@@ -176,8 +180,10 @@ class TranscriptSnapshotRepository:
         alt_langs = raw.get("alternate_languages", [])
         if not isinstance(alt_langs, list):
             alt_langs = []
+        source_label = str(raw.get("source_label", "YouTube"))
+        raw_video_id = raw.get("video_id")
         return VideoMetadata(
-            video_id=VideoId(str(raw["video_id"])),
+            video_id=VideoId(str(raw_video_id)) if raw_video_id else None,
             title=str(raw["title"]),
             channel=str(raw["channel"]),
             duration=Duration.from_seconds(float(raw["duration_seconds"])),  # type: ignore[arg-type]
@@ -185,4 +191,10 @@ class TranscriptSnapshotRepository:
             original_language=Language(str(original_lang)) if original_lang else None,
             has_alternate_audio_tracks=bool(raw["has_alternate_audio_tracks"]),
             alternate_languages=tuple(Language(str(code)) for code in alt_langs),
+            source_label=source_label,
+            source_reference=(
+                str(raw["source_reference"])
+                if source_label == "YouTube" and raw.get("source_reference")
+                else None
+            ),
         )

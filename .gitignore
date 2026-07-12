@@ -47,6 +47,7 @@ processed/
 transcripts/
 logs/
 models/
+ops-evidence/
 *.db
 *.db-journal
 *.db-shm

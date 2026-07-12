@@ -19,13 +19,23 @@ class JobModel(Base):
     __tablename__ = "jobs"
 
     job_id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    video_id: Mapped[str] = mapped_column(String(11), index=True, nullable=False)
+    video_id: Mapped[str | None] = mapped_column(String(11), index=True, nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     requested_by_user_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
     requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     config_signature: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False, default="youtube")
+    canonical_reference: Mapped[str] = mapped_column(Text, nullable=False)
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    requested_chat_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    requested_language: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    artifact_policy: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="audio+markdown"
+    )
     speaker_renames_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     md_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     audio_path: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -41,3 +51,15 @@ class JobModel(Base):
 
     def set_renames(self, mapping: dict[str, str]) -> None:
         self.speaker_renames_json = json.dumps(mapping, ensure_ascii=False)
+
+
+class SearchDocumentModel(Base):
+    """Documento derivado, portátil, usado pelo fallback sem FTS5."""
+
+    __tablename__ = "job_search_documents"
+
+    job_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

@@ -5,11 +5,15 @@ Marcados como ``integration`` porque tocam o engine SQLite de verdade.
 
 from __future__ import annotations
 
+import sqlite3
 import time
+from pathlib import Path
 
 import pytest
+from sqlalchemy import text
 
 from yt_transcriber_bot.domain.entities.job import Job, JobStatus
+from yt_transcriber_bot.domain.value_objects.media_source import MediaSource
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
 from yt_transcriber_bot.infrastructure.persistence.sqlalchemy.job_repository import (
     SqlAlchemyJobRepository,
@@ -24,7 +28,14 @@ def repo() -> SqlAlchemyJobRepository:
 
 
 def _make_job(user_id: int = 1, video: str = "dQw4w9WgXcQ") -> Job:
-    return Job.new(VideoId(value=video), user_id=user_id)
+    return Job.new(
+        VideoId(value=video),
+        user_id=user_id,
+        source_url=f"https://youtu.be/{video}",
+        requested_chat_id=1000 + user_id,
+        requested_language="pt",
+        artifact_policy="audio+markdown",
+    )
 
 
 class TestRoundtrip:
@@ -80,6 +91,54 @@ class TestRoundtrip:
         loaded = repo.get_by_id(job.job_id)
         assert loaded is not None
         assert loaded.error_message == "boom"
+
+    def test_persists_recovery_request_payload(self, repo: SqlAlchemyJobRepository) -> None:
+        job = _make_job()
+        repo.save(job)
+        loaded = repo.get_by_id(job.job_id)
+        assert loaded is not None
+        assert loaded.source_url == "https://youtu.be/dQw4w9WgXcQ"
+        assert loaded.requested_chat_id == 1001
+        assert loaded.requested_language == "pt"
+        assert loaded.artifact_policy == "audio+markdown"
+
+    def test_persists_default_youtube_media_source(self, repo: SqlAlchemyJobRepository) -> None:
+        job = _make_job()
+
+        repo.save(job)
+        loaded = repo.get_by_id(job.job_id)
+
+        assert loaded is not None
+        assert loaded.media_source.source_type == "youtube"
+        assert loaded.media_source.canonical_reference == (
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        )
+
+    def test_telegram_job_round_trip_persists_null_video_id(
+        self, repo: SqlAlchemyJobRepository
+    ) -> None:
+        job = Job.new(
+            None,
+            user_id=1,
+            media_source=MediaSource.telegram_audio("private-file-id"),
+            source_url="/private/staging/audio.ogg",
+            source_title="Mensagem de voz",
+        )
+
+        repo.save(job)
+
+        loaded = repo.get_by_id(job.job_id)
+        assert loaded is not None
+        assert loaded.video_id is None
+        assert loaded.media_source == MediaSource.telegram_audio("private-file-id")
+        with repo._engine.connect() as connection:
+            assert (
+                connection.execute(
+                    text("SELECT video_id FROM jobs WHERE job_id = :job_id"),
+                    {"job_id": job.job_id},
+                ).scalar_one()
+                is None
+            )
 
 
 class TestQueriesByVideoId:
@@ -172,3 +231,153 @@ class TestDelete:
 
     def test_delete_nonexistent_silent(self, repo: SqlAlchemyJobRepository) -> None:
         repo.delete("doesnotexist")  # não levanta
+
+
+class TestRecoveryQueries:
+    def test_list_by_statuses_oldest_first(self, repo: SqlAlchemyJobRepository) -> None:
+        pending = _make_job()
+        repo.save(pending)
+        time.sleep(0.01)
+        delivering = _make_job(video="aaaaaaaaaaa")
+        delivering.transition_to(JobStatus.DELIVERING)
+        repo.save(delivering)
+        time.sleep(0.01)
+        failed = _make_job(video="bbbbbbbbbbb")
+        failed.transition_to(JobStatus.FAILED, error="boom")
+        repo.save(failed)
+
+        rows = repo.list_by_statuses_oldest_first({JobStatus.PENDING, JobStatus.DELIVERING})
+        assert [job.job_id for job in rows] == [pending.job_id, delivering.job_id]
+
+
+def test_migrates_existing_sqlite_database_with_phase2_columns(tmp_path: Path) -> None:
+    db_path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE jobs (
+            job_id TEXT PRIMARY KEY,
+            video_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            requested_by_user_id INTEGER NOT NULL,
+            requested_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            error_message TEXT,
+            config_signature TEXT NOT NULL DEFAULT '',
+            speaker_renames_json TEXT NOT NULL DEFAULT '{}',
+            md_path TEXT,
+            audio_path TEXT,
+            log_path TEXT
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    repo = SqlAlchemyJobRepository.from_url(f"sqlite:///{db_path}")
+    job = _make_job()
+    repo.save(job)
+    loaded = repo.get_by_id(job.job_id)
+
+    assert loaded is not None
+    assert loaded.source_url == "https://youtu.be/dQw4w9WgXcQ"
+    assert loaded.requested_chat_id == 1001
+    assert loaded.requested_language == "pt"
+    assert loaded.artifact_policy == "audio+markdown"
+
+
+def test_migrates_legacy_jobs_to_youtube_media_source(tmp_path: Path) -> None:
+    db_path = tmp_path / "legacy-source.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE jobs (
+            job_id TEXT PRIMARY KEY,
+            video_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            requested_by_user_id INTEGER NOT NULL,
+            requested_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            error_message TEXT,
+            config_signature TEXT NOT NULL DEFAULT '',
+            speaker_renames_json TEXT NOT NULL DEFAULT '{}',
+            md_path TEXT,
+            audio_path TEXT,
+            log_path TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO jobs (
+            job_id, video_id, status, requested_by_user_id, requested_at, updated_at,
+            config_signature, speaker_renames_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "legacy-job",
+            "dQw4w9WgXcQ",
+            "completed",
+            42,
+            "2026-01-01T00:00:00+00:00",
+            "2026-01-01T00:00:00+00:00",
+            "",
+            "{}",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    repo = SqlAlchemyJobRepository.from_url(f"sqlite:///{db_path}")
+    loaded = repo.get_by_id("legacy-job")
+
+    assert loaded is not None
+    assert loaded.video_id == VideoId(value="dQw4w9WgXcQ")
+    assert loaded.media_source.source_type == "youtube"
+    assert loaded.media_source.canonical_reference == (
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    )
+
+
+def test_nullable_video_id_migration_rebuilds_indexed_legacy_sqlite_table(tmp_path: Path) -> None:
+    db_path = tmp_path / "indexed-legacy.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE jobs (
+            job_id TEXT PRIMARY KEY, video_id TEXT NOT NULL, status TEXT NOT NULL,
+            requested_by_user_id INTEGER NOT NULL, requested_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL, error_message TEXT, config_signature TEXT NOT NULL DEFAULT '',
+            speaker_renames_json TEXT NOT NULL DEFAULT '{}', md_path TEXT, audio_path TEXT, log_path TEXT
+        )
+        """
+    )
+    conn.execute("CREATE INDEX ix_jobs_video_id ON jobs (video_id)")
+    conn.execute(
+        "INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "legacy",
+            "dQw4w9WgXcQ",
+            "completed",
+            7,
+            "2026-01-01T00:00:00+00:00",
+            "2026-01-01T00:00:00+00:00",
+            None,
+            "",
+            "{}",
+            None,
+            None,
+            None,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    repo = SqlAlchemyJobRepository.from_url(f"sqlite:///{db_path}")
+    assert repo.get_by_id("legacy") is not None
+    telegram = Job.new(None, user_id=7, media_source=MediaSource.telegram_audio("private-file-id"))
+    repo.save(telegram)
+    assert repo.get_by_id(telegram.job_id) is not None
+    with repo._engine.connect() as connection:
+        assert connection.execute(text("PRAGMA index_list('jobs')")).mappings().all()
+    assert SqlAlchemyJobRepository.from_url(f"sqlite:///{db_path}").get_by_id("legacy") is not None

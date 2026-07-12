@@ -330,6 +330,13 @@ class FakeJobRepository(JobRepository):
         )
         return list(ordered)
 
+    def list_by_statuses_oldest_first(self, statuses: set[JobStatus]) -> list[Job]:
+        ordered = sorted(
+            (j for j in self.jobs.values() if j.status in statuses),
+            key=lambda j: j.requested_at,
+        )
+        return list(ordered)
+
     def delete(self, job_id: str) -> None:
         self.jobs.pop(job_id, None)
 

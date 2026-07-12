@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+import yt_transcriber_bot.__main__ as entrypoint
 
 
 def test_entrypoint_registers_queue_and_callback_handlers() -> None:
@@ -13,6 +18,8 @@ def test_entrypoint_registers_queue_and_callback_handlers() -> None:
     assert 'CommandHandler("healthcheck", on_healthcheck)' in source
     assert 'CommandHandler("lasterror", on_lasterror)' in source
     assert 'CommandHandler("summary", on_summary)' in source
+    assert 'CommandHandler("text", on_text_export)' in source
+    assert 'CommandHandler("search", on_search)' in source
     assert 'CommandHandler("export", on_export)' in source
     assert 'CommandHandler(["json", "srt", "vtt"], on_export_shortcut)' in source
     assert 'CommandHandler(["video_subs", "videosubs"], on_video_subs)' in source
@@ -26,3 +33,208 @@ def test_help_text_lists_summary_command() -> None:
     assert "• /lasterror" in source
     assert "• /summary [n]" in source
     assert "gera um resumo estruturado" in source
+    assert "• /search <texto>" in source
+
+
+def test_recovery_starts_inside_ptb_context() -> None:
+    source = Path("src/yt_transcriber_bot/__main__.py").read_text()
+    assert source.index("async with application:") < source.index("await adapter.start()")
+    assert "await application.initialize()" not in source
+
+
+def test_adapter_stops_before_ptb_shutdown() -> None:
+    source = Path("src/yt_transcriber_bot/__main__.py").read_text()
+    assert source.index("await adapter.stop()") < source.index("await application.updater.stop()")
+    assert source.index("await adapter.stop()") < source.index("await application.stop()")
+
+
+@pytest.mark.asyncio
+async def test_adapter_stops_before_ptb_context_exits_when_startup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    class FakeApplication:
+        bot = object()
+
+        def __init__(self) -> None:
+            self.updater = SimpleNamespace(stop=self.stop_updater)
+
+        def add_handler(self, _handler: object) -> None:
+            pass
+
+        async def __aenter__(self) -> FakeApplication:
+            events.append("ptb-enter")
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            events.append("ptb-exit")
+
+        async def stop_updater(self) -> None:
+            raise AssertionError("updater was never started")
+
+        async def stop(self) -> None:
+            raise AssertionError("application was never started")
+
+        async def start(self) -> None:
+            events.append("application-start")
+            raise RuntimeError("startup failed")
+
+    application = FakeApplication()
+
+    class FakeBuilder:
+        def token(self, _token: str) -> FakeBuilder:
+            return self
+
+        def build(self) -> FakeApplication:
+            return application
+
+    class FakeApplicationFactory:
+        @staticmethod
+        def builder() -> FakeBuilder:
+            return FakeBuilder()
+
+    class FakeAdapter:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        async def start(self) -> None:
+            events.append("adapter-start")
+
+        async def stop(self) -> None:
+            events.append("adapter-stop")
+
+    composition = SimpleNamespace(
+        use_case=object(),
+        repository=object(),
+        rename_service=object(),
+        export_service=object(),
+        plain_text_export_service=object(),
+        summary_service=object(),
+        video_subtitle_export_service=object(),
+        healthcheck_service=object(),
+        history_search_service=object(),
+        lasterror_service=object(),
+        retention_policy=object(),
+        audit_logger=object(),
+    )
+    settings = SimpleNamespace(
+        logs_dir=lambda: Path("/tmp/logs"),
+        telegram_allowed_user_id=1,
+        telegram_bot_token="token",
+        models_dir=Path("/tmp/models"),
+    )
+    monkeypatch.setattr(entrypoint, "AppSettings", lambda: settings)
+    monkeypatch.setattr(entrypoint, "_configure_logging", lambda _logs_dir: None)
+    monkeypatch.setattr(entrypoint, "_validate_environment", lambda _settings: None)
+    monkeypatch.setattr(entrypoint, "build", lambda _settings: composition)
+    monkeypatch.setattr(entrypoint, "Application", FakeApplicationFactory)
+    monkeypatch.setattr(entrypoint, "PTBBotClient", lambda _bot: object())
+    monkeypatch.setattr(entrypoint, "TelegramBotAdapter", FakeAdapter)
+    monkeypatch.setattr(entrypoint, "FfprobeAudioDurationInspector", lambda: object())
+
+    with pytest.raises(RuntimeError, match="startup failed"):
+        await entrypoint._run()
+
+    assert events.index("adapter-start") < events.index("application-start")
+    assert events.index("adapter-stop") < events.index("ptb-exit")
+    assert "updater-stop" not in events
+    assert "application-stop" not in events
+
+
+@pytest.mark.asyncio
+async def test_unstarted_ptb_resources_are_not_stopped_when_adapter_start_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    class FakeApplication:
+        bot = object()
+
+        def __init__(self) -> None:
+            self.updater = SimpleNamespace(stop=self.stop_updater)
+
+        def add_handler(self, _handler: object) -> None:
+            pass
+
+        async def __aenter__(self) -> FakeApplication:
+            events.append("ptb-enter")
+            events.append("initialize")
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            events.append("ptb-exit")
+
+        async def start(self) -> None:
+            events.append("application-start")
+
+        async def stop_updater(self) -> None:
+            events.append("updater-stop")
+
+        async def stop(self) -> None:
+            events.append("application-stop")
+
+    application = FakeApplication()
+
+    class FakeBuilder:
+        def token(self, _token: str) -> FakeBuilder:
+            return self
+
+        def build(self) -> FakeApplication:
+            return application
+
+    class FakeApplicationFactory:
+        @staticmethod
+        def builder() -> FakeBuilder:
+            return FakeBuilder()
+
+    class FakeAdapter:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        async def start(self) -> None:
+            events.append("adapter-start")
+            raise RuntimeError("recovery failed")
+
+        async def stop(self) -> None:
+            events.append("adapter-stop")
+
+    composition = SimpleNamespace(
+        use_case=object(),
+        repository=object(),
+        rename_service=object(),
+        export_service=object(),
+        plain_text_export_service=object(),
+        summary_service=object(),
+        video_subtitle_export_service=object(),
+        healthcheck_service=object(),
+        history_search_service=object(),
+        lasterror_service=object(),
+        retention_policy=object(),
+        audit_logger=object(),
+    )
+    settings = SimpleNamespace(
+        logs_dir=lambda: Path("/tmp/logs"),
+        telegram_allowed_user_id=1,
+        telegram_bot_token="token",
+        models_dir=Path("/tmp/models"),
+    )
+    monkeypatch.setattr(entrypoint, "AppSettings", lambda: settings)
+    monkeypatch.setattr(entrypoint, "_configure_logging", lambda _logs_dir: None)
+    monkeypatch.setattr(entrypoint, "_validate_environment", lambda _settings: None)
+    monkeypatch.setattr(entrypoint, "build", lambda _settings: composition)
+    monkeypatch.setattr(entrypoint, "Application", FakeApplicationFactory)
+    monkeypatch.setattr(entrypoint, "PTBBotClient", lambda _bot: object())
+    monkeypatch.setattr(entrypoint, "TelegramBotAdapter", FakeAdapter)
+    monkeypatch.setattr(entrypoint, "FfprobeAudioDurationInspector", lambda: object())
+
+    with pytest.raises(RuntimeError, match="recovery failed"):
+        await entrypoint._run()
+
+    assert events == [
+        "ptb-enter",
+        "initialize",
+        "adapter-start",
+        "adapter-stop",
+        "ptb-exit",
+    ]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -70,6 +71,87 @@ def test_round_trip(tmp_path: Path) -> None:
     assert len(loaded.transcript.segments) == 2
     assert loaded.transcript.segments[0].text == "Hello"
     assert loaded.context.whisper_model == "small"
+
+
+def test_youtube_snapshot_round_trip_preserves_video_identity(tmp_path: Path) -> None:
+    repo = TranscriptSnapshotRepository(tmp_path)
+    snap = _make_snapshot()
+
+    path = repo.save("youtube", snap)
+
+    persisted = json.loads(path.read_text(encoding="utf-8"))
+    assert persisted["metadata"]["video_id"] == "dQw4w9WgXcQ"
+    assert persisted["metadata"]["source_label"] == "YouTube"
+    assert repo.load("youtube") == snap
+
+
+def test_telegram_snapshot_does_not_persist_synthetic_youtube_identity(
+    tmp_path: Path,
+) -> None:
+    repo = TranscriptSnapshotRepository(tmp_path)
+    original = _make_snapshot()
+    snap = TranscriptSnapshot(
+        metadata=VideoMetadata(
+            video_id=None,
+            title="Mensagem de voz",
+            channel="Telegram",
+            duration=Duration.from_seconds(42),
+            upload_date=None,
+            original_language=None,
+            source_label="Telegram (mídia privada)",
+        ),
+        transcript=original.transcript,
+        context=original.context,
+    )
+
+    path = repo.save("telegram-audio", snap)
+
+    persisted = json.loads(path.read_text(encoding="utf-8"))
+    metadata = persisted["metadata"]
+    assert "video_id" not in metadata
+    assert "source_reference" not in metadata
+    assert "youtube" not in path.read_text(encoding="utf-8").lower()
+    loaded = repo.load("telegram-audio")
+    assert loaded is not None
+    assert loaded.metadata.video_id is None
+    assert loaded.metadata.source_label == "Telegram (mídia privada)"
+
+
+def test_loads_legacy_snapshot_with_video_id(tmp_path: Path) -> None:
+    repo = TranscriptSnapshotRepository(tmp_path)
+    legacy = {
+        "schema_version": 1,
+        "metadata": {
+            "video_id": "dQw4w9WgXcQ",
+            "title": "Hello World",
+            "channel": "Test Channel",
+            "duration_seconds": 120.0,
+            "upload_date": "2024-03-15",
+            "original_language": "en",
+            "has_alternate_audio_tracks": True,
+            "alternate_languages": ["pt"],
+        },
+        "transcript": {
+            "language": "en",
+            "language_confidence": 0.97,
+            "source": "whisperx",
+            "segments": [],
+        },
+        "context": {
+            "rendered_at": "2026-05-01T12:00:00+00:00",
+            "whisper_model": "small",
+            "diarization_model": "pyannote/speaker-diarization-3.1",
+            "transcription_source": "whisperx",
+        },
+    }
+    repo.path_for("legacy").parent.mkdir(parents=True, exist_ok=True)
+    repo.path_for("legacy").write_text(json.dumps(legacy), encoding="utf-8")
+
+    loaded = repo.load("legacy")
+
+    assert loaded is not None
+    assert loaded.metadata.video_id == VideoId("dQw4w9WgXcQ")
+    assert loaded.metadata.source_label == "YouTube"
 
 
 def test_load_missing_returns_none(tmp_path: Path) -> None:

@@ -94,7 +94,11 @@ class MarkdownTranscriptRenderer:
         lines = [
             f"# Transcrição — {metadata.title}",
             "",
-            f"**URL**: {metadata.canonical_url()}",
+            (
+                f"**URL**: {metadata.canonical_url()}"
+                if metadata.source_label == "YouTube"
+                else f"**Origem**: {metadata.source_label}"
+            ),
             f"**Canal**: {metadata.channel}",
             f"**Duração**: {metadata.duration.to_hms()}",
             f"**Data do vídeo**: {upload}",

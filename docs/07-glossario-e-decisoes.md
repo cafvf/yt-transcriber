@@ -232,7 +232,10 @@ ADRs documentam **por que** uma decisão foi tomada, não apenas **qual** decis�
 
 **Contexto.** Áudios brutos (do download) e processados ocupam dezenas de MB cada. Logs são pequenos mas crescem. MDs são minúsculos.
 
-**Decisão.** FIFO de 5 jobs em `downloads/`, `processed/`, `logs/`. Sem limite em `transcripts/`. O `.md` contém o link do YouTube no cabeçalho, servindo como auditoria completa do conteúdo legado.
+**Decisão.** FIFO de 5 jobs em `downloads/`, `processed/` e logs associados.
+Markdown e snapshots de segmentos são preservados para histórico e edição. O
+Markdown contém link/ID apenas quando a origem é YouTube; mídia Telegram é
+privada e não recebe identidade sintética.
 
 **Consequências.**
 - (+) Disco controlado nos artefatos pesados.
@@ -322,16 +325,22 @@ ADRs documentam **por que** uma decisão foi tomada, não apenas **qual** decis�
 
 ---
 
-## ADR-016 — `/redo` exige confirmação obrigatória mesmo quando explícito
+## ADR-016 — `/redo` atual imediato; confirmação planejada
 
 **Contexto.** Reprocessar um vídeo longo gasta minutos de GPU/CPU.
 
-**Decisão.** `/redo` sempre apresenta confirmação inline com o diff de configuração, mesmo se o usuário invocou explicitamente. Botões `[Confirmar]` `[Cancelar]`.
+**Decisão atual.** `/redo <link>` reprocessa imediatamente como novo job e não
+sobrescreve o job anterior. A deduplicação bloqueia apenas duplicatas do mesmo
+vídeo+idioma que ainda estejam em processamento ou na fila.
+
+**Decisão planejada.** Uma evolução futura deve apresentar confirmação inline
+com diff de configuração e botões `[Confirmar]` `[Cancelar]`, inclusive quando o
+usuário invocar `/redo` explicitamente.
 
 **Consequências.**
-- (+) Protege contra `/redo` acidental em vídeos longos.
-- (+) Usuário sempre sabe o que vai mudar.
-- (−) Um clique a mais em casos onde o usuário tem certeza.
+- (+) O comportamento atual é simples e explícito para reprocessar.
+- (−) Ainda não protege contra `/redo` acidental em vídeos longos.
+- (−) Ainda não informa diferenças de configuração antes de gastar CPU/GPU.
 
 ---
 
@@ -362,14 +371,14 @@ ADRs documentam **por que** uma decisão foi tomada, não apenas **qual** decis�
 
 ---
 
-## ADR-014 — Observabilidade operacional via `/healthcheck` e `/lasterror`
+## ADR-019 — Observabilidade operacional via `/healthcheck` e `/lasterror`
 
 **Contexto.** Durante a estabilização de sumarização local com LM Studio, os erros mais custosos não estavam no algoritmo de transcrição, mas na operação: `.env` incorreto, modelo divergente, servidor LM Studio desligado, timeouts, tokenizer indisponível e falhas de rede do Telegram. Depender apenas de logs completos do terminal tornava a depuração lenta e propensa a vazamento acidental de segredos.
 
 **Decisão.** O bot expõe dois comandos de observabilidade para o usuário autorizado:
 
 - `/healthcheck`, para triagem ativa de configuração, dependências, diretórios, SQLite, cookies, LM Studio, modelo configurado, tokenizer/orçamento de sumarização e espaço em disco;
-- `/lasterror`, para recuperar o último erro operacional sanitizado, combinando jobs `failed` com erros derivados persistidos em `data/logs/operational_errors.jsonl`.
+- `/lasterror`, para recuperar o último erro operacional sanitizado, combinando jobs `failed`, jobs `delivery_failed` e erros derivados persistidos em `data/logs/operational_errors.jsonl`, incluindo falha de entrega registrada como `transcribe_delivery`.
 
 Erros derivados de comandos como `/summary`, `/export`, `/video_subs` e `/clearcache` não devem transformar automaticamente uma transcrição concluída em job `failed`; eles são registrados como eventos operacionais separados.
 
@@ -383,15 +392,44 @@ Erros derivados de comandos como `/summary`, `/export`, `/video_subs` e `/clearc
 - (−) O arquivo JSONL de erros precisa de política futura de retenção se crescer demais.
 
 
-## ADR-013 — Priorização pós-observabilidade
+## ADR-020 — Priorização pós-observabilidade
 
-**Contexto.** Após a estabilização de `/healthcheck` e `/lasterror`, o projeto passou a ter melhor diagnóstico operacional. A discussão de produto indicou que estatísticas operacionais e recuperação avançada após interrupção não são dores imediatas. Por outro lado, busca em transcrições, exportação de texto limpo, entrada por áudio e suporte multilíngue ampliam diretamente a utilidade do bot no fluxo de pesquisa e estudo.
+**Contexto.** Após a estabilização de `/healthcheck` e `/lasterror`, o projeto passou a ter melhor diagnóstico operacional. A discussão de produto indicou que estatísticas operacionais e retomada seletiva avançada no meio de um job não são dores funcionais imediatas. Por outro lado, busca em transcrições, exportação de texto limpo, entrada por áudio e suporte multilíngue ampliam diretamente a utilidade do bot no fluxo de pesquisa e estudo.
 
-**Decisão.** O roadmap passa a priorizar, nesta ordem: `/search <texto>` com arquitetura preparada para busca semântica, `/text [n]`, upload de áudio pelo Telegram, backend ASR multilíngue, `/translate`, melhorias no `/redo` e, por fim, integração com Obsidian/Notion. `/stats` e recuperação avançada após interrupção deixam a prioridade principal e permanecem apenas como ideias arquivadas/baixa prioridade.
+**Decisão.** O roadmap funcional passa a priorizar, nesta ordem: `/search <texto>` com arquitetura preparada para busca semântica, `/text [n]`, upload de áudio pelo Telegram, backend ASR multilíngue, `/translate`, melhorias no `/redo` e, por fim, integração com Obsidian/Notion. `/stats` permanece fora da prioridade principal.
+
+Para a trilha de produção, a recuperação de `pending` e a reconciliação mínima
+após restart foram tratadas como hardening técnico separado do gate funcional.
+Retomada seletiva dentro de ASR/diarização continua sendo evolução posterior.
 
 **Consequências.**
 
 - (+) O próximo desenvolvimento foca no reaproveitamento dos artefatos já gerados.
 - (+) A tradução fica dependente de suporte ASR multilíngue mais sólido, reduzindo retrabalho.
 - (+) A integração com Obsidian/Notion será mais rica quando já houver busca, texto limpo, eventual tradução e melhor cobertura de idiomas.
-- (−) Métricas operacionais agregadas e retomada automática de jobs interrompidos não serão tratadas no curto prazo.
+- (−) Métricas operacionais agregadas e retomada seletiva de progresso interno não serão tratadas no curto prazo.
+
+---
+
+## ADR-021 — Busca textual privada com FTS5 opcional
+
+**Contexto.** O histórico local contém transcrições e resumos úteis, mas `/list`
+não permite recuperar conteúdo por tema. A disponibilidade de FTS5 varia entre
+builds locais de SQLite e os artefatos permanecem dados privados.
+
+**Decisão.** `/search <texto>` consulta somente jobs `completed` do usuário
+autorizado, em metadados e documentos derivados de transcrições/snapshots e
+resumos. O adapter de persistência usa FTS5 quando a capacidade está disponível;
+quando não estiver — ou se uma operação FTS recuperável falhar — aplica fallback
+compatível limitado com o mesmo contrato de resultado. Cada resposta inclui
+índice histórico, título, `video_id`, data e trecho sanitizado. O documento
+derivado é atualizado após transcrição, `/rename` e `/summary` e não substitui
+os artefatos literais.
+
+**Consequências.**
+
+- (+) Consulta útil sem nova dependência nem requisito de FTS5 no startup.
+- (+) Isolamento por usuário e sanitização preservam a política privada.
+- (+) Índices podem ser reconstruídos/backfilled sem migração destrutiva.
+- (−) Fallback tem limites e pode oferecer ranking menos sofisticado.
+- (−) Busca vetorial/semântica continua uma evolução separada.

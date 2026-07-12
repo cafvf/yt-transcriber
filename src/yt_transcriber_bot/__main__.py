@@ -21,8 +21,15 @@ from telegram.ext import (
 )
 
 from yt_transcriber_bot.application.config import AppSettings
+from yt_transcriber_bot.application.ports.incoming_media import (
+    IncomingMedia,
+    IncomingMediaKind,
+)
 from yt_transcriber_bot.composition_root import build
 from yt_transcriber_bot.infrastructure.telegram.bot_adapter import TelegramBotAdapter
+from yt_transcriber_bot.infrastructure.telegram.ffprobe_duration_inspector import (
+    FfprobeAudioDurationInspector,
+)
 from yt_transcriber_bot.infrastructure.telegram.ptb_bot_client import PTBBotClient
 
 
@@ -103,7 +110,7 @@ async def _run() -> None:
 
     composition = build(settings)
 
-    application: Application = Application.builder().token(settings.telegram_bot_token).build()
+    application = Application.builder().token(settings.telegram_bot_token).build()
     client = PTBBotClient(application.bot)
     adapter = TelegramBotAdapter(
         settings=settings,
@@ -112,13 +119,17 @@ async def _run() -> None:
         repository=composition.repository,
         rename_service=composition.rename_service,
         export_service=composition.export_service,
+        plain_text_export_service=composition.plain_text_export_service,
         summary_service=composition.summary_service,
         video_subtitle_export_service=composition.video_subtitle_export_service,
         healthcheck_service=composition.healthcheck_service,
+        history_search_service=composition.history_search_service,
         lasterror_service=composition.lasterror_service,
         retention_policy=composition.retention_policy,
         models_dir=settings.models_dir,
         audit_logger=composition.audit_logger,
+        media_downloader=client,
+        duration_inspector=FfprobeAudioDurationInspector(),
     )
 
     def _uid(update: Update) -> int:
@@ -130,6 +141,45 @@ async def _run() -> None:
     async def on_text(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         text = update.effective_message.text if update.effective_message else ""
         await adapter.handle_message(chat_id=_cid(update), user_id=_uid(update), text=text or "")
+
+    async def on_media(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        message = update.effective_message
+        if message is None:
+            return
+        if message.audio is not None:
+            media = IncomingMedia(
+                file_id=message.audio.file_id,
+                file_name=message.audio.file_name,
+                mime_type=message.audio.mime_type,
+                size_bytes=message.audio.file_size,
+                duration_seconds=message.audio.duration,
+                kind=IncomingMediaKind.AUDIO,
+            )
+        elif message.voice is not None:
+            media = IncomingMedia(
+                file_id=message.voice.file_id,
+                file_name=None,
+                mime_type=message.voice.mime_type,
+                size_bytes=message.voice.file_size,
+                duration_seconds=message.voice.duration,
+                kind=IncomingMediaKind.VOICE,
+            )
+        elif message.document is not None:
+            media = IncomingMedia(
+                file_id=message.document.file_id,
+                file_name=message.document.file_name,
+                mime_type=message.document.mime_type,
+                size_bytes=message.document.file_size,
+                duration_seconds=None,
+                kind=IncomingMediaKind.DOCUMENT,
+            )
+        else:
+            return
+        await adapter.handle_incoming_media(
+            chat_id=_cid(update),
+            user_id=_uid(update),
+            media=media,
+        )
 
     async def on_start(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await adapter.handle_command_start(chat_id=_cid(update), user_id=_uid(update))
@@ -183,6 +233,12 @@ async def _run() -> None:
     async def on_list(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await adapter.handle_command_list(chat_id=_cid(update), user_id=_uid(update))
 
+    async def on_search(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        text = update.effective_message.text if update.effective_message else ""
+        await adapter.handle_command_search(
+            chat_id=_cid(update), user_id=_uid(update), text=text or ""
+        )
+
     async def on_last(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         text = update.effective_message.text if update.effective_message else ""
         await adapter.handle_command_last(
@@ -204,6 +260,12 @@ async def _run() -> None:
     async def on_export(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         text = update.effective_message.text if update.effective_message else ""
         await adapter.handle_command_export(
+            chat_id=_cid(update), user_id=_uid(update), text=text or ""
+        )
+
+    async def on_text_export(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        text = update.effective_message.text if update.effective_message else ""
+        await adapter.handle_command_text(
             chat_id=_cid(update), user_id=_uid(update), text=text or ""
         )
 
@@ -229,7 +291,7 @@ async def _run() -> None:
             return
         await query.answer()
         data = query.data or ""
-        chat_id = query.message.chat_id if query.message else _cid(update)
+        chat_id = query.message.chat.id if query.message else _cid(update)
         user_id = query.from_user.id if query.from_user else _uid(update)
         await adapter.handle_callback_query(chat_id=chat_id, user_id=user_id, data=data)
 
@@ -249,9 +311,11 @@ async def _run() -> None:
     application.add_handler(CommandHandler("en", on_en))
     application.add_handler(CommandHandler("transcribe", on_transcribe))
     application.add_handler(CommandHandler("list", on_list))
+    application.add_handler(CommandHandler("search", on_search))
     application.add_handler(CommandHandler("last", on_last))
     application.add_handler(CommandHandler("rename", on_rename))
     application.add_handler(CommandHandler("summary", on_summary))
+    application.add_handler(CommandHandler("text", on_text_export))
     application.add_handler(CommandHandler("export", on_export))
     application.add_handler(CommandHandler(["json", "srt", "vtt"], on_export_shortcut))
     application.add_handler(CommandHandler(["video_subs", "videosubs"], on_video_subs))
@@ -259,22 +323,31 @@ async def _run() -> None:
     application.add_handler(CallbackQueryHandler(on_callback, pattern=r"^rename:"))
     application.add_handler(MessageHandler(filters.COMMAND, on_text))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
+    application.add_handler(
+        MessageHandler(filters.AUDIO | filters.VOICE | filters.Document.AUDIO, on_media)
+    )
 
-    await adapter.start()
-    try:
-        async with application:
-            await application.initialize()
+    async with application:
+        application_started = False
+        updater_started = False
+        try:
+            await adapter.start()
             await application.start()
+            application_started = True
             assert application.updater is not None
             await application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+            updater_started = True
             logger.info("Bot em polling. Pressione Ctrl+C para parar.")
             stop_event = asyncio.Event()
             with contextlib.suppress(KeyboardInterrupt, asyncio.CancelledError):
                 await stop_event.wait()
-            await application.updater.stop()
-            await application.stop()
-    finally:
-        await adapter.stop()
+        finally:
+            await adapter.stop()
+            if updater_started:
+                assert application.updater is not None
+                await application.updater.stop()
+            if application_started:
+                await application.stop()
 
 
 def main() -> None:

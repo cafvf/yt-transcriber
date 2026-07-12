@@ -7,7 +7,6 @@ import importlib.util
 import json
 import platform
 import shutil
-import sqlite3
 import urllib.request
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -31,6 +30,7 @@ class DiskUsageResult(Protocol):
 
 
 DiskUsage = Callable[[Path], DiskUsageResult]
+SQLiteProbe = Callable[[Path], None]
 
 
 @dataclass(frozen=True)
@@ -65,7 +65,7 @@ class HealthCheckReport:
         }[self.overall_status]
         lines = [title, ""]
         lines.extend(f"{item.icon} {item.name}: {item.detail}" for item in self.items)
-        return sanitize_text("\n".join(lines), settings)
+        return _sanitize_healthcheck_text("\n".join(lines), settings)
 
 
 class HealthCheckService:
@@ -79,12 +79,14 @@ class HealthCheckService:
         executable_finder: ExecutableFinder | None = None,
         module_checker: ModuleChecker | None = None,
         disk_usage: DiskUsage | None = None,
+        sqlite_probe: SQLiteProbe | None = None,
     ) -> None:
         self._settings = settings
         self._models_probe = models_probe or _urllib_get_json
         self._executable_finder = executable_finder or shutil.which
         self._module_checker = module_checker or _module_exists
         self._disk_usage = disk_usage or shutil.disk_usage
+        self._sqlite_probe = sqlite_probe
 
     def run(self) -> HealthCheckReport:
         items: list[HealthCheckItem] = []
@@ -109,11 +111,11 @@ class HealthCheckService:
                 f"{platform.python_implementation()} {platform.python_version()} "
                 f"em {platform.system()} {platform.machine()}.",
             ),
-            HealthCheckItem("Diretório atual", "ok", str(Path.cwd())),
+            HealthCheckItem("Diretório atual", "ok", "resolvido sem expor caminho absoluto."),
             HealthCheckItem(
                 "Raiz do projeto",
                 "ok" if root is not None else "warn",
-                str(root) if root is not None else "não encontrada a partir do diretório atual",
+                "encontrada." if root is not None else "não encontrada a partir do diretório atual",
             ),
         ]
 
@@ -163,7 +165,7 @@ class HealthCheckService:
             env_file = resolve_settings_env_file()
         except ValueError as exc:
             items.append(
-                HealthCheckItem("Arquivo .env", "fail", sanitize_text(str(exc), self._settings))
+                HealthCheckItem("Arquivo .env", "fail", _sanitize_exception(exc, self._settings))
             )
         else:
             if env_file.name == ".env.example":
@@ -171,13 +173,13 @@ class HealthCheckService:
                     HealthCheckItem("Arquivo .env", "fail", ".env.example não pode ser runtime.")
                 )
             elif env_file.exists():
-                items.append(HealthCheckItem("Arquivo .env", "ok", f"{env_file}"))
+                items.append(HealthCheckItem("Arquivo .env", "ok", "arquivo runtime encontrado."))
             else:
                 items.append(
                     HealthCheckItem(
                         "Arquivo .env",
                         "warn",
-                        f"{env_file} não existe; usando variáveis de ambiente/defaults.",
+                        "arquivo runtime não existe; usando variáveis de ambiente/defaults.",
                     )
                 )
         return items
@@ -190,7 +192,7 @@ class HealthCheckService:
                 HealthCheckItem(
                     executable,
                     "ok" if found else ("warn" if executable == "yt-dlp" else "fail"),
-                    f"encontrado no PATH: {found}." if found else "não encontrado no PATH.",
+                    "encontrado no PATH." if found else "não encontrado no PATH.",
                 )
             )
         modules = {
@@ -230,18 +232,17 @@ class HealthCheckService:
         return items
 
     def _check_sqlite(self) -> HealthCheckItem:
+        if self._sqlite_probe is None:
+            return HealthCheckItem("SQLite", "warn", "probe SQLite não configurado.")
         try:
-            self._settings.db_path.parent.mkdir(parents=True, exist_ok=True)
-            with sqlite3.connect(self._settings.db_path, timeout=5.0) as conn:
-                conn.execute("SELECT 1")
-                conn.execute("CREATE TEMP TABLE IF NOT EXISTS healthcheck_ping(x INTEGER)")
-                conn.execute("INSERT INTO healthcheck_ping(x) VALUES (1)")
-                conn.execute("DELETE FROM healthcheck_ping")
+            self._sqlite_probe(self._settings.db_path)
         except Exception as exc:
             return HealthCheckItem(
-                "SQLite", "fail", f"falha ao acessar {self._settings.db_path}: {exc}"
+                "SQLite",
+                "fail",
+                f"falha ao acessar o banco SQLite: {_sanitize_exception(exc, self._settings)}",
             )
-        return HealthCheckItem("SQLite", "ok", f"acessível em {self._settings.db_path}.")
+        return HealthCheckItem("SQLite", "ok", "acessível.")
 
     def _check_operational_error_log(self) -> HealthCheckItem:
         path = self._settings.logs_dir() / "operational_errors.jsonl"
@@ -254,22 +255,25 @@ class HealthCheckService:
                 return HealthCheckItem(
                     "Registro de erros operacionais",
                     "fail",
-                    f"{path} existe, mas não é arquivo.",
+                    "o caminho esperado existe, mas não é arquivo.",
                 )
         except Exception as exc:
             return HealthCheckItem(
-                "Registro de erros operacionais", "fail", f"não gravável em {path.parent}: {exc}"
+                "Registro de erros operacionais",
+                "fail",
+                f"não gravável no diretório de logs: {_sanitize_exception(exc, self._settings)}",
             )
-        detail = f"gravável em {path}."
+        detail = "gravável."
         if path.is_file():
             try:
                 lines = len(path.read_text(encoding="utf-8", errors="replace").splitlines())
-                detail = f"gravável em {path}; {lines} registro(s) existentes."
+                detail = f"gravável; {lines} registro(s) existentes."
             except OSError as exc:
                 return HealthCheckItem(
                     "Registro de erros operacionais",
                     "warn",
-                    f"arquivo existe, mas não consegui contar registros: {exc}",
+                    "arquivo existe, mas não consegui contar registros: "
+                    f"{_sanitize_exception(exc, self._settings)}",
                 )
         return HealthCheckItem("Registro de erros operacionais", "ok", detail)
 
@@ -279,14 +283,18 @@ class HealthCheckService:
             path.mkdir(parents=True, exist_ok=True)
             usage = self._disk_usage(path)
         except Exception as exc:
-            return HealthCheckItem("Espaço em disco", "warn", f"não consegui medir: {exc}")
+            return HealthCheckItem(
+                "Espaço em disco",
+                "warn",
+                f"não consegui medir: {_sanitize_exception(exc, self._settings)}",
+            )
         free_mb = usage.free / (1024 * 1024)
         threshold = self._settings.healthcheck_min_free_disk_mb
         status = "ok" if free_mb >= threshold else "warn"
         return HealthCheckItem(
             "Espaço em disco",
             status,
-            f"{free_mb:.0f} MB livres em {path}; mínimo recomendado {threshold} MB.",
+            f"{free_mb:.0f} MB livres no diretório base; mínimo recomendado {threshold} MB.",
         )
 
     def _check_youtube_cookies(self) -> HealthCheckItem:
@@ -295,12 +303,8 @@ class HealthCheckService:
         if cookies_file:
             path = Path(cookies_file).expanduser()
             if path.is_file():
-                return HealthCheckItem(
-                    "Cookies YouTube", "ok", f"arquivo configurado existe: {path}."
-                )
-            return HealthCheckItem(
-                "Cookies YouTube", "warn", f"arquivo configurado não existe: {path}."
-            )
+                return HealthCheckItem("Cookies YouTube", "ok", "arquivo configurado existe.")
+            return HealthCheckItem("Cookies YouTube", "warn", "arquivo configurado não existe.")
         if cookies_browser:
             return HealthCheckItem(
                 "Cookies YouTube", "ok", f"browser configurado: {cookies_browser}."
@@ -374,6 +378,15 @@ class HealthCheckService:
             )
         items.append(
             HealthCheckItem(
+                "trust_remote_code do tokenizer",
+                "warn" if self._settings.summary_tokenizer_trust_remote_code else "ok",
+                "trust_remote_code=true; habilitado explicitamente, revise a origem do tokenizer."
+                if self._settings.summary_tokenizer_trust_remote_code
+                else "trust_remote_code=false; desabilitado por padrão.",
+            )
+        )
+        items.append(
+            HealthCheckItem(
                 "Thinking da LLM",
                 "ok" if self._settings.summary_disable_thinking else "warn",
                 "SUMMARY_DISABLE_THINKING=true; enviará controles anti-reasoning."
@@ -391,7 +404,12 @@ class HealthCheckService:
         try:
             data = self._models_probe(url, headers, self._settings.healthcheck_lmstudio_timeout_s)
         except Exception as exc:
-            return HealthCheckItem("LM Studio", "fail", f"não consegui consultar {url}: {exc}")
+            return HealthCheckItem(
+                "LM Studio",
+                "fail",
+                "não consegui consultar /models do backend OpenAI-compatible: "
+                f"{_sanitize_exception(exc, self._settings)}",
+            )
         model_ids = _extract_model_ids(data)
         if self._settings.summary_model not in model_ids:
             shown = ", ".join(model_ids[:10]) if model_ids else "<nenhum modelo retornado>"
@@ -437,8 +455,12 @@ def _ensure_directory_writable(path: Path) -> tuple[bool, str]:
         marker.write_text("ok", encoding="utf-8")
         marker.unlink(missing_ok=True)
     except Exception as exc:
-        return False, f"não gravável/criável em {path}: {exc}"
-    return True, f"gravável em {path}."
+        return False, f"não gravável/criável: {exc}"
+    return True, "gravável."
+
+
+def _sanitize_exception(exc: BaseException, settings: AppSettings) -> str:
+    return sanitize_text(str(exc), settings)
 
 
 def _auth_headers(settings: AppSettings) -> dict[str, str]:
@@ -472,3 +494,34 @@ def _extract_model_ids(data: Mapping[str, Any]) -> list[str]:
                 if model_id:
                     ids.append(model_id)
     return ids
+
+
+def _sanitize_healthcheck_text(text: str, settings: AppSettings) -> str:
+    """Sanitiza segredos e caminhos locais em saída segura para Telegram."""
+
+    cleaned = sanitize_text(text, settings)
+    for path in sorted(
+        _healthcheck_sensitive_paths(settings), key=lambda item: len(str(item)), reverse=True
+    ):
+        rendered = str(path)
+        if rendered and rendered != "." and (path.is_absolute() or len(rendered) > 8):
+            cleaned = cleaned.replace(rendered, "[PATH]")
+    return cleaned
+
+
+def _healthcheck_sensitive_paths(settings: AppSettings) -> set[Path]:
+    paths = {
+        settings.base_dir,
+        settings.db_path,
+        settings.models_dir,
+        settings.downloads_dir(),
+        settings.processed_dir(),
+        settings.transcripts_dir(),
+        settings.logs_dir(),
+        settings.summaries_dir(),
+        settings.video_exports_dir(),
+    }
+    cookie_file = settings.youtube_cookies_file.strip()
+    if cookie_file:
+        paths.add(Path(cookie_file).expanduser())
+    return paths

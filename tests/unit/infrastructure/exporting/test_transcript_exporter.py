@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -72,6 +73,22 @@ def test_export_json_contains_metadata_segments_and_aliases(
     assert data["transcript"]["speaker_aliases"] == {"SPEAKER_00": "Maria"}
     assert data["transcript"]["segments"][0]["speaker"] == "Maria"
     assert data["transcript"]["segments"][1]["speaker"] == "SPEAKER_01"
+
+
+def test_export_json_telegram_source_omits_synthetic_youtube_identity(tmp_path: Path) -> None:
+    repo = TranscriptSnapshotRepository(tmp_path / "segments")
+    snap = _snapshot()
+    repo.save(
+        "audio",
+        replace(snap, metadata=replace(snap.metadata, source_label="Telegram (mídia privada)")),
+    )
+    result = TranscriptExportService(repo).export(
+        slug="audio", output_base_path=tmp_path / "audio", format="json", speaker_aliases={}
+    )
+    metadata = json.loads(result.path.read_text())["metadata"]
+    assert metadata["source"] == "Telegram (mídia privada)"
+    assert "video_id" not in metadata
+    assert "url" not in metadata
 
 
 def test_export_srt_uses_comma_milliseconds_and_sequence_numbers(

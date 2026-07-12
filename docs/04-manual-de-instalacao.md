@@ -2,7 +2,7 @@
 
 Este documento detalha a instalação do YT Transcriber Bot em **Fedora nativo** e **Ubuntu via WSL2**, dois ambientes oficialmente suportados. Outros sistemas baseados em Linux podem funcionar com adaptações triviais.
 
-A instalação tem nove etapas obrigatórias e duas opcionais. Tempo estimado total: 30–60 minutos (dominado pelo download dos modelos de IA na primeira execução).
+A instalação base leva cerca de 30–60 minutos, dominada pelo download dos modelos de IA na primeira execução. Para operação contínua em servidor, use também o [runbook do operador](./11-operator-runbook.md).
 
 ---
 
@@ -211,42 +211,40 @@ Cookies expiram. Se o bot começar a rejeitar vídeos com erro de autenticação
 Crie um arquivo `.env` na raiz do projeto (`~/yt-transcriber-bot/.env`) **apenas** se quiser sobrescrever defaults:
 
 ```bash
-# Modelo Whisper (tiny, base, small, medium, large-v3)
-WHISPER_MODEL=small
+# Modelo Whisper. Use auto para política por idioma.
+WHISPER_MODEL=auto
+WHISPER_MODEL_PT=large-v3
+WHISPER_MODEL_EN=medium
+WHISPER_MODEL_DEFAULT=medium
 
-# Device (auto, cpu, cuda)
+# Execução local
 DEVICE=auto
-
-# Compute type (auto, float16, int8_float16, int8)
 COMPUTE_TYPE=auto
-
-# Idiomas permitidos (csv)
-LANGUAGE_ALLOWLIST=pt,en
-
-# GPU mínima por Compute Capability (6.0 exclui Maxwell)
-MIN_GPU_COMPUTE_CAPABILITY=6.0
+PREFER_YOUTUBE_SUBTITLES=true
 
 # Áudio
 AUDIO_BITRATE_KBPS=32
-AUDIO_CODEC=libopus
-AUDIO_FORMAT=ogg
+AUDIO_SAMPLE_RATE_HZ=16000
 
 # Limite de duração (minutos)
 MAX_VIDEO_DURATION_MIN=180
 
 # Retenção FIFO
-MAX_FILES_PER_FOLDER=5
-
-# Mínimo de fala para aceitar vídeo
-MIN_SPEECH_RATIO=0.3
+RETENTION_COUNT=5
 
 # Paths (relativos ao diretório do projeto ou absolutos)
-DATA_DIR=./data
-MODELS_DIR=./models
-LOGS_DIR=./logs
+BASE_DIR=data
+DOWNLOADS_DIR_NAME=downloads
+PROCESSED_DIR_NAME=processed
+TRANSCRIPTS_DIR_NAME=transcripts
+LOGS_DIR_NAME=logs
+MODELS_DIR=models
+DB_PATH=data/jobs.db
 
-# Log level
-LOG_LEVEL=INFO
+# Observabilidade
+HEALTHCHECK_MIN_FREE_DISK_MB=500
+HEALTHCHECK_LMSTUDIO_TIMEOUT_S=5
+LASTERROR_RECENT_LIMIT=50
 ```
 
 > O `.env` local pode conter secrets para uso pessoal, mas **nunca deve ser versionado**.
@@ -448,10 +446,10 @@ No terminal, `Ctrl+C`. O bot encerra graciosamente, jobs em fila persistem.
 
 ## 11. (Opcional) Configurar como serviço systemd
 
-Para rodar o bot em background, com auto-start no boot e restart automático em crash.
+Para rodar o bot em background, com auto-start no boot e restart automático em crash. O runbook completo de operação, backup/restore, upgrade/rollback e recovery fica em [`11-operator-runbook.md`](./11-operator-runbook.md).
 
 ### 11.1 Criar arquivo de variáveis de ambiente para o serviço
-systemd não carrega seu `~/.bashrc`. Crie um arquivo dedicado:
+systemd não carrega seu `~/.bashrc`. Crie um arquivo dedicado para segredos e valores que precisam existir no processo do serviço. Configurações não sensíveis também podem permanecer no `.env` da raiz do projeto, porque o serviço roda com `WorkingDirectory` apontando para o repositório.
 
 ```bash
 sudo mkdir -p /etc/yt-transcriber-bot
@@ -541,34 +539,67 @@ uv run python --version       # esperado: Python 3.11.x
 # Versão do ffmpeg
 ffmpeg -version | head -1     # esperado: ffmpeg version 6.x
 
-# Variáveis carregadas
-echo $TELEGRAM_BOT_TOKEN | head -c 10   # mostra os primeiros 10 chars
-
-# Smoke test do bot (sem mandar mensagem)
+# Ambiente Python sincronizado com o lockfile
 cd ~/yt-transcriber-bot
-uv run python -m yt_transcriber_bot --check
-# deve imprimir: ✓ Configuração válida; ✓ ffmpeg OK; ✓ HF token alcança pyannote; ✓ DB OK
+uv sync --locked --check
+
+# Configuração efetiva, com segredos mascarados
+uv run python scripts/config/print_effective_settings.py
+
+# Imports principais sem iniciar o polling do Telegram
+uv run python - <<'PY'
+import importlib.util
+for module in ["telegram", "yt_dlp", "sqlalchemy", "torch", "whisperx", "pyannote.audio"]:
+    try:
+        present = importlib.util.find_spec(module) is not None
+    except (ImportError, ModuleNotFoundError, ValueError):
+        present = False
+    print(module, "OK" if present else "FALTANDO")
+PY
 ```
 
-Se tudo passou, mande `/start` no Telegram, depois um link de teste.
+Se tudo passou, inicie o bot, mande `/start` no Telegram e rode `/healthcheck` antes do primeiro link de teste.
 
 ---
 
-## 13. Atualização
+## 13. Atualização, backup e rollback
 
-Quando houver nova versão:
+Antes de atualizar uma instalação usada em produção privada, faça backup de
+`data/jobs.db`, `data/`, `models/` e arquivos de ambiente conforme o
+[runbook do operador](./11-operator-runbook.md#4-backup). Depois atualize:
 
 ```bash
 cd ~/yt-transcriber-bot
-git pull
-uv sync                       # reinstala dependências conforme uv.lock atualizado
-uv run python - <<'PY'
-import importlib.util
-for m in ["torch", "whisperx", "pyannote.audio"]:
-    print(m, "OK" if importlib.util.find_spec(m) else "FALTANDO")
-PY
-sudo systemctl restart yt-transcriber-bot   # se estiver usando systemd
+OLD_REV="$(git rev-parse HEAD)"
+echo "$OLD_REV" > /tmp/yt-transcriber-old-rev
+sudo systemctl stop yt-transcriber-bot   # se estiver usando systemd
+git fetch --all --prune
+git pull --ff-only
+uv sync --locked
+uv run python scripts/config/print_effective_settings.py
+sudo systemctl start yt-transcriber-bot  # se estiver usando systemd
 ```
+
+Depois rode no Telegram:
+
+```text
+/healthcheck
+/status
+```
+
+Se a versão nova falhar, pare o serviço, volte para a revisão salva e
+sincronize o ambiente:
+
+```bash
+cd ~/yt-transcriber-bot
+sudo systemctl stop yt-transcriber-bot
+git checkout "$(cat /tmp/yt-transcriber-old-rev)"
+uv sync --locked
+sudo systemctl start yt-transcriber-bot
+```
+
+Se houver suspeita de dados incompatíveis ou corrompidos, restaure o backup
+completo seguindo [`11-operator-runbook.md`](./11-operator-runbook.md#5-restore).
 
 ---
 

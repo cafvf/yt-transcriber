@@ -11,13 +11,23 @@ Este projeto manipula credenciais e dados locais sensíveis, incluindo token do 
 - `data/`, `downloads/`, `processed/`, `transcripts/`, `logs/`, `models/`;
 - bancos `*.db`, `*.sqlite`, `*.sqlite3`;
 - logs `*.log`;
+- backups (`yt-transcriber-backups/`, tarballs, dumps SQLite, cópias de `.env`/env systemd);
 - áudios, vídeos e legendas gerados localmente.
 
 O `.gitignore` do projeto já bloqueia esses caminhos.
 
 ## Logs de auditoria locais
 
-Jobs de transcrição gravam eventos estruturados em `data/logs/execution_audit.jsonl` para permitir auditoria de fila, etapas e resultado sem misturar ruído de polling do Telegram. O arquivo é local e ignorado pelo Git. Os eventos devem manter apenas metadados operacionais sanitizados: tokens, cookies, cabeçalhos `Authorization`, corpo de transcrição e payload completo de chat são mascarados ou omitidos.
+Jobs de transcrição gravam eventos estruturados em `data/logs/execution_audit.jsonl` para permitir auditoria de fila, etapas e resultado sem misturar ruído de polling do Telegram. O arquivo é local e ignorado pelo Git. Os eventos devem manter apenas metadados operacionais sanitizados: tokens, cookies, cabeçalhos `Authorization`, corpos de API, prompts, corpo de transcrição e payload completo de chat são mascarados ou omitidos.
+
+`/healthcheck`, `/lasterror`, mensagens de falha no Telegram e logs operacionais sanitizam segredos comuns antes de expor diagnósticos, incluindo tokens configurados, cookies, cabeçalhos `Authorization`, corpos de API, prompts e transcrições ecoadas por exceções. Ainda assim, eles podem revelar metadados privados: `user_id`, paths locais preservados para recovery, nomes de arquivos, nomes de modelos, status de jobs e trechos técnicos de exceções. Compartilhe saídas completas apenas em canais privados de confiança. Para pedir ajuda pública, remova paths, IDs, títulos de vídeos e qualquer contexto que identifique o conteúdo transcrito.
+
+`/search <texto>` também é dado privado: a consulta e seus resultados ficam
+restritos aos jobs concluídos do usuário autorizado. Trechos retornados são
+sanitizados e compactos; consultas, corpo integral de transcrições/resumos,
+paths, tokens e resultados não devem ser gravados em logs operacionais. O índice
+FTS5, quando existir, é dado derivado local e deve permanecer sob as mesmas
+regras de retenção e backup do SQLite e dos artefatos privados.
 
 ## Arquivo de exemplo
 
@@ -143,6 +153,25 @@ uv run python scripts/security/bootstrap_precommit.py
 ```
 
 O arquivo `config/pre-commit-config.yaml` é uma cópia de recuperação para recriar `.pre-commit-config.yaml` quando dotfiles forem omitidos acidentalmente.
+
+## Backups e restore
+
+Backups de produção privada são sensíveis. Eles podem conter banco SQLite, transcrições privadas, áudio, logs, caminhos locais, `.env`, arquivo de ambiente systemd e cookies. Use o procedimento em [`11-operator-runbook.md`](./11-operator-runbook.md#4-backup) e aplique no mínimo:
+
+```bash
+chmod -R go-rwx ~/yt-transcriber-backups
+```
+
+Recomendações:
+
+- guarde backups em volume criptografado ou destino com controle de acesso;
+- defina retenção curta para mídia e logs. Não apague snapshots de segmentos
+  indiscriminadamente: eles sustentam histórico, exportações e `/rename`.
+  Quando for descartá-los, faça isso junto com a transcrição e o registro do
+  job, após confirmar que não precisa mais do histórico;
+- nunca anexe backups a issues, chats públicos ou pull requests;
+- ao restaurar, pare o serviço antes de sobrescrever `data/`, `jobs.db`, `models/` ou arquivos de ambiente;
+- trate `operational_errors.jsonl` e `execution_audit.jsonl` como dados privados mesmo sendo sanitizados.
 
 ## Instalação do pre-commit
 

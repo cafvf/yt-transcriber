@@ -14,7 +14,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
 
 from yt_transcriber_bot.domain.entities.transcript import TranscriptSegment
 from yt_transcriber_bot.infrastructure.persistence.filesystem.transcript_snapshot import (
@@ -54,6 +54,20 @@ class TextTokenizer(Protocol):
     def count(self, text: str) -> int: ...
 
     def split(self, text: str, max_tokens: int) -> list[str]: ...
+
+
+class _TokenizerCodec(Protocol):
+    def encode(
+        self, text: str, *, add_special_tokens: bool = False
+    ) -> list[int] | tuple[int, ...]: ...
+
+    def decode(
+        self,
+        token_ids: list[int],
+        *,
+        skip_special_tokens: bool = True,
+        clean_up_tokenization_spaces: bool = False,
+    ) -> str: ...
 
 
 @dataclass(frozen=True)
@@ -102,6 +116,7 @@ class TranscriptSummaryService:
         disable_thinking: bool = True,
         tokenizer_backend: str = "auto",
         tokenizer_model: str = "",
+        tokenizer_trust_remote_code: bool = False,
         tokenizer: TextTokenizer | None = None,
         deduplicate_transcript: bool = True,
         merge_same_speaker_gap_s: float = 2.0,
@@ -120,10 +135,12 @@ class TranscriptSummaryService:
         self._disable_thinking = disable_thinking
         self._tokenizer_backend = tokenizer_backend.strip().lower() or "auto"
         self._tokenizer_model = tokenizer_model.strip() or chat_client.model
+        self._tokenizer_trust_remote_code = tokenizer_trust_remote_code
         self._tokenizer = tokenizer or _make_tokenizer(
             backend=self._tokenizer_backend,
             model=self._tokenizer_model,
             chars_per_token=self._chars_per_token,
+            trust_remote_code=self._tokenizer_trust_remote_code,
         )
         self._deduplicate_transcript = deduplicate_transcript
         self._merge_same_speaker_gap_s = max(0.0, merge_same_speaker_gap_s)
@@ -194,9 +211,9 @@ class TranscriptSummaryService:
                     retry_chunks = self._split_chunk_after_timeout(chunks[0])
                     if len(retry_chunks) <= 1:
                         raise
-                    partials: list[str] = []
+                    retry_partials: list[str] = []
                     for sub_index, retry_chunk in enumerate(retry_chunks, 1):
-                        partials.extend(
+                        retry_partials.extend(
                             self._summarize_chunk_adaptively(
                                 snap=snap,
                                 chunk=retry_chunk,
@@ -207,7 +224,7 @@ class TranscriptSummaryService:
                                 on_progress=on_progress,
                             )
                         )
-                    effective_chunks = len(partials)
+                    effective_chunks = len(retry_partials)
                     _emit_summary_progress(
                         on_progress,
                         kind="synthesis_started",
@@ -216,7 +233,7 @@ class TranscriptSummaryService:
                         message="Subdivisões resumidas. Gerando síntese final.",
                     )
                     summary_body = self._synthesize_partials_adaptively(
-                        snap, partials, self._timeout_split_retries, on_progress
+                        snap, retry_partials, self._timeout_split_retries, on_progress
                     )
                     _emit_summary_progress(
                         on_progress,
@@ -269,12 +286,13 @@ class TranscriptSummaryService:
             raise
         except Exception as exc:  # pragma: no cover - camada defensiva
             raise SummaryError(f"Falha inesperada na sumarização: {exc}") from exc
+        cleaned_summary_body = _clean_summary_markdown(summary_body)
         output_path = self._output_path(slug, output_base_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(
             _wrap_summary_markdown(
                 snap,
-                summary_body,
+                cleaned_summary_body,
                 model=self._chat_client.model,
                 chunks=effective_chunks,
                 tokenizer_description=self._tokenizer.description,
@@ -608,6 +626,30 @@ def _clean_text(text: str) -> str:
     return normalize_artifact_text(text)
 
 
+def _clean_summary_markdown(text: str) -> str:
+    """Repara mojibake/unicode preservando a estrutura Markdown.
+
+    Não usa ``normalize_artifact_text`` no documento inteiro porque essa função
+    colapsa whitespace e destruiria quebras de linha, listas e títulos.
+    """
+
+    cleaned_lines: list[str] = []
+    in_fence = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            cleaned_lines.append(line.rstrip())
+            continue
+        if in_fence or not stripped:
+            cleaned_lines.append(line.rstrip())
+            continue
+        leading = line[: len(line) - len(line.lstrip())]
+        trailing = line[len(line.rstrip()) :]
+        cleaned_lines.append(f"{leading}{normalize_artifact_text(stripped)}{trailing}")
+    return "\n".join(cleaned_lines).strip()
+
+
 _PROMPT_TOKEN_RESERVE = 900
 
 
@@ -634,7 +676,7 @@ class _EstimatedTokenizer:
 
 
 class _HuggingFaceTokenizer:
-    def __init__(self, *, model: str, tokenizer: object) -> None:
+    def __init__(self, *, model: str, tokenizer: _TokenizerCodec) -> None:
         self._model = model
         self._tokenizer = tokenizer
 
@@ -664,12 +706,12 @@ class _HuggingFaceTokenizer:
         return parts
 
     def _encode(self, text: str) -> list[int]:
-        encoded = self._tokenizer.encode(text, add_special_tokens=False)  # type: ignore[attr-defined]
+        encoded = self._tokenizer.encode(text, add_special_tokens=False)
         return list(encoded)
 
     def _decode(self, token_ids: list[int]) -> str:
         return str(
-            self._tokenizer.decode(  # type: ignore[attr-defined]
+            self._tokenizer.decode(
                 token_ids,
                 skip_special_tokens=True,
                 clean_up_tokenization_spaces=False,
@@ -677,7 +719,9 @@ class _HuggingFaceTokenizer:
         )
 
 
-def _make_tokenizer(*, backend: str, model: str, chars_per_token: float) -> TextTokenizer:
+def _make_tokenizer(
+    *, backend: str, model: str, chars_per_token: float, trust_remote_code: bool = False
+) -> TextTokenizer:
     backend = backend.strip().lower() or "auto"
     if backend not in {"auto", "hf", "huggingface", "estimate", "estimated"}:
         raise SummaryError(
@@ -688,12 +732,13 @@ def _make_tokenizer(*, backend: str, model: str, chars_per_token: float) -> Text
         return _EstimatedTokenizer(chars_per_token=chars_per_token)
 
     try:
-        from transformers import AutoTokenizer  # type: ignore[import-not-found]
+        from transformers import AutoTokenizer
 
-        tokenizer = AutoTokenizer.from_pretrained(
+        from_pretrained = cast(Callable[..., _TokenizerCodec], AutoTokenizer.from_pretrained)
+        tokenizer = from_pretrained(
             model,
             local_files_only=True,
-            trust_remote_code=True,
+            trust_remote_code=trust_remote_code,
         )
         return _HuggingFaceTokenizer(model=model, tokenizer=tokenizer)
     except Exception as exc:
@@ -900,9 +945,14 @@ def _wrap_summary_markdown(
 ) -> str:
     m = snap.metadata
     generated_at = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
+    source_line = (
+        f"**URL**: {m.canonical_url()}\n"
+        if m.source_label == "YouTube"
+        else f"**Origem**: {m.source_label}\n"
+    )
     return (
         f"# Resumo — {m.title}\n\n"
-        f"**URL**: {m.canonical_url()}\n"
+        f"{source_line}"
         f"**Canal**: {m.channel}\n"
         f"**Duração**: {m.duration.to_hms()}\n"
         f"**Idioma da transcrição**: {snap.transcript.language.code}\n"

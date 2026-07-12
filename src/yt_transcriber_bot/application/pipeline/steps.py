@@ -41,6 +41,7 @@ from yt_transcriber_bot.domain.entities.transcript import (
     Transcript,
     TranscriptSegment,
 )
+from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
 from yt_transcriber_bot.domain.specifications.concrete import (
     DurationWithinLimit,
     LanguageAllowed,
@@ -110,6 +111,7 @@ class FetchMetadataStep(PipelineStep):
     def execute(self, ctx: PipelineContext) -> None:
         ctx.job.transition_to(JobStatus.DOWNLOADING)
         ctx.started_at = datetime.now(UTC)
+        assert ctx.job.video_id is not None
         meta = self._dl.fetch_metadata(ctx.job.video_id)
         ctx.metadata = meta
 
@@ -176,6 +178,7 @@ class TryYouTubeSubtitlesStep(PipelineStep):
         self._settings = settings
 
     def execute(self, ctx: PipelineContext) -> None:
+        assert ctx.job.video_id is not None
         if not self._settings.prefer_youtube_subtitles:
             ctx.add_diagnostic("Legendas do YouTube desabilitadas pela config.")
             return
@@ -447,6 +450,7 @@ class DownloadAudioStep(PipelineStep):
 
     def execute(self, ctx: PipelineContext) -> None:
         self._downloads_dir.mkdir(parents=True, exist_ok=True)
+        assert ctx.job.video_id is not None
         try:
             result = self._dl.download_audio(
                 ctx.job.video_id,
@@ -459,6 +463,33 @@ class DownloadAudioStep(PipelineStep):
             ) from exc
         ctx.raw_audio_path = result.audio_path
         ctx.audio_track_was_dubbed = result.used_alternate_track
+
+
+class UseTelegramAudioStep(PipelineStep):
+    """Usa o arquivo privado já baixado do Telegram como entrada do pipeline."""
+
+    @property
+    def name(self) -> str:
+        return "use_telegram_audio"
+
+    def execute(self, ctx: PipelineContext) -> None:
+        if not ctx.job.source_url:
+            raise PipelineRejectionError("Arquivo de áudio Telegram indisponível.")
+        path = Path(ctx.job.source_url)
+        if not path.is_file():
+            raise PipelineRejectionError("Arquivo de áudio Telegram não encontrado localmente.")
+        ctx.job.transition_to(JobStatus.DOWNLOADING)
+        ctx.started_at = datetime.now(UTC)
+        ctx.raw_audio_path = path
+        ctx.metadata = VideoMetadata(
+            video_id=None,
+            title=ctx.job.source_title or "Áudio do Telegram",
+            channel="Telegram",
+            duration=Duration.from_seconds(ctx.job.source_duration_seconds or 0),
+            upload_date=None,
+            original_language=None,
+            source_label="Telegram (mídia privada)",
+        )
 
 
 # ----------------------------------------------------------------------
@@ -494,6 +525,7 @@ class ConvertAudioStep(PipelineStep):
         if ctx.metadata is not None:
             slug = str(Slug.from_title(ctx.metadata.title))
         else:
+            assert ctx.job.video_id is not None
             slug = ctx.job.video_id.value
         dest = self._processed_dir / f"{slug}.ogg"
         ctx.converted_audio_path = self._conv.convert_to_opus_mono(

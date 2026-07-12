@@ -20,6 +20,7 @@ from yt_transcriber_bot.application.ports.transcription_engine import (
 )
 from yt_transcriber_bot.application.ports.youtube_downloader import YouTubeDownloader
 from yt_transcriber_bot.application.services.healthcheck import HealthCheckService
+from yt_transcriber_bot.application.services.history_search import HistorySearchService
 from yt_transcriber_bot.application.services.last_error import LastErrorService
 from yt_transcriber_bot.application.services.rename_speakers import (
     RenameSpeakersService,
@@ -34,6 +35,9 @@ from yt_transcriber_bot.infrastructure.audio.ffmpeg_converter import (
 )
 from yt_transcriber_bot.infrastructure.diarization.composite_engine import (
     CompositeDiarizationEngine,
+)
+from yt_transcriber_bot.infrastructure.exporting.plain_text_exporter import (
+    PlainTextTranscriptExportService,
 )
 from yt_transcriber_bot.infrastructure.exporting.transcript_exporter import (
     TranscriptExportService,
@@ -52,6 +56,7 @@ from yt_transcriber_bot.infrastructure.persistence.filesystem.transcript_snapsho
 from yt_transcriber_bot.infrastructure.persistence.sqlalchemy.job_repository import (
     SqlAlchemyJobRepository,
 )
+from yt_transcriber_bot.infrastructure.persistence.sqlite_health import SqliteHealthProbe
 from yt_transcriber_bot.infrastructure.rendering.markdown_renderer import (
     MarkdownTranscriptRenderer,
 )
@@ -81,9 +86,11 @@ class Composition:
     use_case: TranscribeVideoUseCase
     rename_service: RenameSpeakersService
     export_service: TranscriptExportService
+    plain_text_export_service: PlainTextTranscriptExportService
     summary_service: TranscriptSummaryService | None
     video_subtitle_export_service: VideoSoftSubtitleExportService
     healthcheck_service: HealthCheckService
+    history_search_service: HistorySearchService
     lasterror_service: LastErrorService
     retention_policy: RetentionPolicy
     audit_logger: ExecutionAuditLogger
@@ -205,6 +212,7 @@ def build(settings: AppSettings) -> Composition:
     # Serviços auxiliares
     rename_service = RenameSpeakersService(snapshots, renderer)
     export_service = TranscriptExportService(snapshots)
+    plain_text_export_service = PlainTextTranscriptExportService(snapshots)
     summary_service: TranscriptSummaryService | None
     if settings.summary_backend == "disabled":
         summary_service = None
@@ -234,6 +242,7 @@ def build(settings: AppSettings) -> Composition:
             disable_thinking=settings.summary_disable_thinking,
             tokenizer_backend=settings.summary_tokenizer_backend,
             tokenizer_model=settings.summary_tokenizer_model,
+            tokenizer_trust_remote_code=settings.summary_tokenizer_trust_remote_code,
             deduplicate_transcript=settings.summary_deduplicate_transcript,
             merge_same_speaker_gap_s=settings.summary_merge_same_speaker_gap_s,
             min_overlap_words=settings.summary_min_overlap_words,
@@ -250,7 +259,8 @@ def build(settings: AppSettings) -> Composition:
             max_size_bytes=settings.max_video_subtitles_size_mb * 1024 * 1024,
         ),
     )
-    healthcheck_service = HealthCheckService(settings=settings)
+    healthcheck_service = HealthCheckService(settings=settings, sqlite_probe=SqliteHealthProbe())
+    history_search_service = HistorySearchService(repository)
     lasterror_service = LastErrorService(repository=repository, settings=settings)
     audit_logger = ExecutionAuditLogger(settings.logs_dir() / "execution_audit.jsonl")
     retention_policy = RetentionPolicy(
@@ -266,9 +276,11 @@ def build(settings: AppSettings) -> Composition:
         use_case=use_case,
         rename_service=rename_service,
         export_service=export_service,
+        plain_text_export_service=plain_text_export_service,
         summary_service=summary_service,
         video_subtitle_export_service=video_subtitle_export_service,
         healthcheck_service=healthcheck_service,
+        history_search_service=history_search_service,
         lasterror_service=lasterror_service,
         retention_policy=retention_policy,
         audit_logger=audit_logger,

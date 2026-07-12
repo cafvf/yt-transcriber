@@ -130,7 +130,7 @@ class ProgressReporter:
         try:
             await self._editor(text)
         except Exception as exc:
-            logger.warning("Falha editando mensagem de progresso: %s", exc)
+            logger.warning("Falha editando mensagem de progresso: %s", type(exc).__name__)
             return
         self._state.last_emitted_text = text
         self._state.last_emitted_at = now

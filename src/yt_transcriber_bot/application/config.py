@@ -181,6 +181,7 @@ class AppSettings(BaseSettings):
     telegram_max_queue_size: int = Field(
         default=5, ge=1, le=50, description="Limite total de jobs em execução + pendentes"
     )
+    telegram_max_media_size_mb: int = Field(default=20, ge=1, le=50)
 
     # ===== Observabilidade operacional =====
     healthcheck_lmstudio_timeout_s: float = Field(
@@ -285,6 +286,13 @@ class AppSettings(BaseSettings):
     summary_tokenizer_model: str = Field(
         default="",
         description="Modelo Hugging Face local para tokenização; vazio usa SUMMARY_MODEL",
+    )
+    summary_tokenizer_trust_remote_code: bool = Field(
+        default=False,
+        description=(
+            "Permite trust_remote_code no AutoTokenizer local. "
+            "Padrão seguro: false; habilite apenas para tokenizers confiáveis."
+        ),
     )
     summary_deduplicate_transcript: bool = Field(
         default=True,
