@@ -50,9 +50,11 @@ somente jobs concluídos do usuário autorizado e usa FTS5 quando disponível, c
 fallback limitado e determinístico quando não estiver. Exportações e resumo são
 derivados de snapshots: não reprocessam a mídia.
 
-A retenção é FIFO sobre jobs concluídos. Ela remove staging, áudio convertido e
-log associado a jobs antigos; preserva Markdown e snapshots de segmentos para
-histórico e renomeação. Backup e descarte de dados devem considerar esse fato.
+A retenção é FIFO sobre jobs concluídos. Cada áudio convertido recebe um nome
+derivado do `job_id`, portanto dois uploads com o mesmo nome não compartilham
+artefato. Ela remove staging, áudio convertido e log associado a jobs antigos;
+preserva Markdown e snapshots de segmentos para histórico e renomeação. Backup
+e descarte de dados devem considerar esse fato.
 
 ## Reinício e falhas
 

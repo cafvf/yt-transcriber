@@ -527,7 +527,7 @@ class ConvertAudioStep(PipelineStep):
         else:
             assert ctx.job.video_id is not None
             slug = ctx.job.video_id.value
-        dest = self._processed_dir / f"{slug}.ogg"
+        dest = self._processed_dir / f"{slug}-{ctx.job.job_id}.ogg"
         ctx.converted_audio_path = self._conv.convert_to_opus_mono(
             ctx.raw_audio_path,
             dest,

@@ -162,6 +162,11 @@ Backups de produção privada são sensíveis. Eles podem conter banco SQLite, t
 chmod -R go-rwx ~/yt-transcriber-backups
 ```
 
+Os helpers operacionais criam diretórios de sessão/backup com modo `0700` e
+arquivos copiados, SQLite e tarballs com modo `0600`. Confirme os modos depois
+de copiar o backup para outro host ou volume: permissões do destino podem ser
+mais permissivas.
+
 Recomendações:
 
 - guarde backups em volume criptografado ou destino com controle de acesso;

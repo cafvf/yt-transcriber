@@ -78,6 +78,25 @@ def _run(command: Sequence[str], *, cwd: Path | None = None, check: bool = False
     return result
 
 
+def _run_mutating(command: Sequence[str], *, cwd: Path | None = None) -> CommandResult:
+    result = _run(command, cwd=cwd, check=False)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Falha ao executar comando mutável: {' '.join(result.command)} "
+            f"(rc={result.returncode}): {result.stderr or result.stdout or '<empty>'}"
+        )
+    return result
+
+
+def _make_private_dir(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    path.chmod(0o700)
+
+
+def _make_private_file(path: Path) -> None:
+    path.chmod(0o600)
+
+
 def _format_command(result: CommandResult) -> str:
     joined = " ".join(result.command)
     stdout = result.stdout or "<empty>"
@@ -97,34 +116,38 @@ def _write_snippet(
     body: str,
     occurred_at: datetime | None = None,
 ) -> Path:
-    output_dir.mkdir(parents=True, exist_ok=True)
+    _make_private_dir(output_dir)
     stem = f"{section}-{_timestamp(occurred_at)}.md"
     path = output_dir / stem
     path.write_text(body, encoding="utf-8")
+    _make_private_file(path)
     return path
 
 
 def _copy_if_exists(source: Path, dest: Path) -> bool:
     if not source.exists():
         return False
-    dest.parent.mkdir(parents=True, exist_ok=True)
+    _make_private_dir(dest.parent)
     shutil.copy2(source, dest)
+    _make_private_file(dest)
     return True
 
 
 def _tar_dir(source_dir: Path, target_tgz: Path) -> bool:
     if not source_dir.exists():
         return False
-    target_tgz.parent.mkdir(parents=True, exist_ok=True)
+    _make_private_dir(target_tgz.parent)
     with tarfile.open(target_tgz, "w:gz") as tar:
         tar.add(source_dir, arcname=source_dir.name)
+    _make_private_file(target_tgz)
     return True
 
 
 def _sqlite_backup(source: Path, target: Path) -> None:
-    target.parent.mkdir(parents=True, exist_ok=True)
+    _make_private_dir(target.parent)
     with sqlite3.connect(source) as src, sqlite3.connect(target) as dst:
         src.backup(dst)
+    _make_private_file(target)
 
 
 def _git_head(app_dir: Path) -> str:
@@ -138,39 +161,45 @@ def run_backup(args: argparse.Namespace) -> Path:
     runtime_dir = (app_dir / args.runtime_dir).resolve()
     models_dir = (app_dir / args.models_dir).resolve()
     output_root = args.output_dir.resolve()
+    _make_private_dir(output_root)
     backup_dir = output_root / f"backup-{_timestamp(occurred_at)}"
-    backup_dir.mkdir(parents=True, exist_ok=True)
+    _make_private_dir(backup_dir)
 
     command_results: list[CommandResult] = []
-    if args.stop_service:
-        command_results.append(
-            _run(["sudo", "systemctl", "stop", args.service], cwd=app_dir, check=False)
-        )
-
-    db_backup = backup_dir / "jobs.db"
-    _sqlite_backup(db_path, db_backup)
-    runtime_tgz = backup_dir / "runtime-data.tgz"
-    runtime_copied = _tar_dir(runtime_dir, runtime_tgz)
-    models_tgz = backup_dir / "models.tgz"
-    models_copied = _tar_dir(models_dir, models_tgz)
-    systemd_env_backup = backup_dir / "systemd-env"
-    systemd_env_copied = _copy_if_exists(args.systemd_env, systemd_env_backup)
-    dotenv_backup = backup_dir / "dotenv"
-    dotenv_copied = _copy_if_exists(app_dir / ".env", dotenv_backup)
-    git_revision = _git_head(app_dir)
-    (backup_dir / "git-revision.txt").write_text(git_revision + "\n", encoding="utf-8")
-
-    if args.start_service:
-        command_results.append(
-            _run(["sudo", "systemctl", "start", args.service], cwd=app_dir, check=False)
-        )
-        command_results.append(
-            _run(
-                ["sudo", "systemctl", "status", args.service, "--no-pager"],
-                cwd=app_dir,
-                check=False,
+    service_stopped = False
+    try:
+        if args.stop_service:
+            command_results.append(
+                _run_mutating(["sudo", "systemctl", "stop", args.service], cwd=app_dir)
             )
-        )
+            service_stopped = True
+
+        db_backup = backup_dir / "jobs.db"
+        _sqlite_backup(db_path, db_backup)
+        runtime_tgz = backup_dir / "runtime-data.tgz"
+        runtime_copied = _tar_dir(runtime_dir, runtime_tgz)
+        models_tgz = backup_dir / "models.tgz"
+        models_copied = _tar_dir(models_dir, models_tgz)
+        systemd_env_backup = backup_dir / "systemd-env"
+        systemd_env_copied = _copy_if_exists(args.systemd_env, systemd_env_backup)
+        dotenv_backup = backup_dir / "dotenv"
+        dotenv_copied = _copy_if_exists(app_dir / ".env", dotenv_backup)
+        git_revision = _git_head(app_dir)
+        revision_path = backup_dir / "git-revision.txt"
+        revision_path.write_text(git_revision + "\n", encoding="utf-8")
+        _make_private_file(revision_path)
+
+        if args.start_service and service_stopped:
+            command_results.append(
+                _run_mutating(["sudo", "systemctl", "start", args.service], cwd=app_dir)
+            )
+            service_stopped = False
+            command_results.append(
+                _run(["sudo", "systemctl", "status", args.service, "--no-pager"], cwd=app_dir)
+            )
+    finally:
+        if service_stopped:
+            _run_mutating(["sudo", "systemctl", "start", args.service], cwd=app_dir)
 
     body = "\n".join(
         [
@@ -212,24 +241,32 @@ def run_systemd_smoke(args: argparse.Namespace) -> Path:
     app_dir = args.app_dir.resolve()
     output_root = args.output_dir.resolve()
 
-    commands = [
-        ["sudo", "systemctl", "status", args.service, "--no-pager"],
-        ["sudo", "systemctl", "stop", args.service],
-        ["sudo", "systemctl", "status", args.service, "--no-pager"],
-        ["sudo", "systemctl", "start", args.service],
-        ["sudo", "systemctl", "status", args.service, "--no-pager"],
-        ["sudo", "systemctl", "restart", args.service],
-        ["sudo", "systemctl", "status", args.service, "--no-pager"],
-        [
-            "journalctl",
-            "-u",
-            args.service,
-            "-n",
-            str(args.journal_lines),
-            "--no-pager",
-        ],
-    ]
-    results = [_run(command, cwd=app_dir, check=False) for command in commands]
+    results = [_run(["sudo", "systemctl", "status", args.service, "--no-pager"], cwd=app_dir)]
+    restore_service = False
+    try:
+        results.append(_run_mutating(["sudo", "systemctl", "stop", args.service], cwd=app_dir))
+        restore_service = True
+        results.append(
+            _run(["sudo", "systemctl", "status", args.service, "--no-pager"], cwd=app_dir)
+        )
+        results.append(_run_mutating(["sudo", "systemctl", "start", args.service], cwd=app_dir))
+        results.append(
+            _run(["sudo", "systemctl", "status", args.service, "--no-pager"], cwd=app_dir)
+        )
+        results.append(_run_mutating(["sudo", "systemctl", "restart", args.service], cwd=app_dir))
+        restore_service = False
+        results.append(
+            _run(["sudo", "systemctl", "status", args.service, "--no-pager"], cwd=app_dir)
+        )
+        results.append(
+            _run(
+                ["journalctl", "-u", args.service, "-n", str(args.journal_lines), "--no-pager"],
+                cwd=app_dir,
+            )
+        )
+    finally:
+        if restore_service:
+            results.append(_run_mutating(["sudo", "systemctl", "start", args.service], cwd=app_dir))
 
     body = "\n".join(
         [

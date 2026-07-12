@@ -61,7 +61,7 @@ renomes; Markdown é o artefato humano principal.
 ```text
 data/jobs.db                 estados, histórico e busca
 data/downloads/<job-id>/     staging privado Telegram/YouTube
-data/processed/              áudio convertido
+data/processed/              áudio convertido, com nome único por job
 data/transcripts/            Markdown
 data/segments/               snapshot para edição/exportação
 data/summaries/              resumos

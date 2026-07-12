@@ -66,6 +66,15 @@ Helpers locais atualmente disponíveis:
 - `uv run python scripts/ops/phase4_phase8_rehearsal.py inspect-restart-recovery`
   captura jobs/JSONL úteis para o ensaio de restart recovery.
 
+Os helpers são mutáveis: podem parar/iniciar o serviço e trocar a revisão Git
+durante um ensaio de rollback. O caminho principal falha logo após uma operação
+crítica malsucedida. Na recuperação, cada compensação é tentada de forma
+independente — inclusive o `systemctl start` final — e falhas secundárias são
+anexadas ao erro principal. Execute-os somente em host/staging autorizado,
+leia o relatório gerado e nunca trate a geração do arquivo como prova de êxito.
+Os diretórios de sessão e backup são criados com `0700`; cópias, bancos e
+tarballs recebem `0600`.
+
 Evidência mínima por ensaio:
 
 | Ensaio | Deve comprovar |

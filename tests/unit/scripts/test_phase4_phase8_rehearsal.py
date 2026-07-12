@@ -5,9 +5,12 @@ from __future__ import annotations
 import importlib.util
 import json
 import sqlite3
+import stat
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+
+import pytest
 
 SCRIPT_PATH = Path("scripts/ops/phase4_phase8_rehearsal.py")
 
@@ -94,6 +97,70 @@ def test_run_backup_creates_artifacts_and_evidence_snippet(tmp_path: Path, monke
     assert (backup_dir / "systemd-env").exists()
     assert (backup_dir / "dotenv").exists()
     assert (backup_dir / "git-revision.txt").read_text(encoding="utf-8").strip() == "abc123"
+    assert stat.S_IMODE(backup_dir.stat().st_mode) == 0o700
+    for artifact in backup_dir.iterdir():
+        assert stat.S_IMODE(artifact.stat().st_mode) == 0o600
+    assert stat.S_IMODE(snippet_path.stat().st_mode) == 0o600
+
+
+def test_run_backup_restarts_service_when_backup_fails_after_stop(
+    tmp_path: Path, monkeypatch
+) -> None:
+    script = _load_script()
+    commands: list[tuple[str, ...]] = []
+
+    def fake_run(command, **_kwargs):
+        commands.append(tuple(command))
+        return script.CommandResult(tuple(command), 0, "", "")
+
+    monkeypatch.setattr(script, "_run", fake_run)
+    monkeypatch.setattr(
+        script, "_sqlite_backup", lambda *_args: (_ for _ in ()).throw(OSError("disk"))
+    )
+    args = SimpleNamespace(
+        app_dir=tmp_path,
+        db_path=Path("data/jobs.db"),
+        runtime_dir=Path("data"),
+        models_dir=Path("models"),
+        systemd_env=tmp_path / "systemd-env",
+        service="yt-transcriber-bot",
+        output_dir=tmp_path / "evidence",
+        stop_service=True,
+        start_service=False,
+    )
+
+    with pytest.raises(OSError, match="disk"):
+        script.run_backup(args)
+
+    assert commands == [
+        ("sudo", "systemctl", "stop", "yt-transcriber-bot"),
+        ("sudo", "systemctl", "start", "yt-transcriber-bot"),
+    ]
+
+
+def test_systemd_smoke_fails_fast_after_mutating_command_error(tmp_path: Path, monkeypatch) -> None:
+    script = _load_script()
+    commands: list[tuple[str, ...]] = []
+
+    def fake_run(command, **_kwargs):
+        commands.append(tuple(command))
+        return script.CommandResult(tuple(command), 1, "", "permission denied")
+
+    monkeypatch.setattr(script, "_run", fake_run)
+    args = SimpleNamespace(
+        app_dir=tmp_path,
+        service="yt-transcriber-bot",
+        output_dir=tmp_path / "evidence",
+        journal_lines=10,
+    )
+
+    with pytest.raises(RuntimeError, match="Falha ao executar comando mutável"):
+        script.run_systemd_smoke(args)
+
+    assert commands == [
+        ("sudo", "systemctl", "status", "yt-transcriber-bot", "--no-pager"),
+        ("sudo", "systemctl", "stop", "yt-transcriber-bot"),
+    ]
 
 
 def test_run_inspect_delivery_failed_reports_jobs_and_errors(tmp_path: Path) -> None:

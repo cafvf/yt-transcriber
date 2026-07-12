@@ -50,6 +50,34 @@ def _run(command: list[str], *, cwd: Path | None = None) -> subprocess.Completed
     )
 
 
+def _run_mutating(
+    command: list[str], *, cwd: Path | None = None
+) -> subprocess.CompletedProcess[str]:
+    completed = _run(command, cwd=cwd)
+    _raise_for_mutating_failure(command, completed)
+    return completed
+
+
+def _raise_for_mutating_failure(
+    command: list[str], completed: subprocess.CompletedProcess[str]
+) -> None:
+    if completed.returncode == 0:
+        return
+    raise RuntimeError(
+        f"Falha ao executar comando mutável: {' '.join(command)} "
+        f"(rc={completed.returncode}): {completed.stderr.strip() or completed.stdout.strip() or '<empty>'}"
+    )
+
+
+def _make_private_dir(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    path.chmod(0o700)
+
+
+def _make_private_file(path: Path) -> None:
+    path.chmod(0o600)
+
+
 def _run_python_script(script: Path, args: list[str], *, cwd: Path | None = None) -> Path:
     completed = _run([sys.executable, str(script), *args], cwd=cwd)
     if completed.returncode != 0:
@@ -84,7 +112,32 @@ def _copy_into_session(source: Path, session_dir: Path) -> Path:
     if source.resolve() == target.resolve():
         return target
     shutil.copy2(source, target)
+    _make_private_file(target)
     return target
+
+
+def _restart_recovery_commands(
+    service: str,
+) -> list[tuple[list[str], subprocess.CompletedProcess[str]]]:
+    commands: list[tuple[list[str], subprocess.CompletedProcess[str]]] = []
+    service_stopped = False
+    try:
+        stop = ["sudo", "systemctl", "stop", service]
+        commands.append((stop, _run_mutating(stop)))
+        service_stopped = True
+        start = ["sudo", "systemctl", "start", service]
+        commands.append((start, _run_mutating(start)))
+        service_stopped = False
+        for command in (
+            ["sudo", "systemctl", "status", service, "--no-pager"],
+            ["journalctl", "-u", service, "-n", "120", "--no-pager"],
+        ):
+            commands.append((command, _run(command)))
+    finally:
+        if service_stopped:
+            start = ["sudo", "systemctl", "start", service]
+            commands.append((start, _run_mutating(start)))
+    return commands
 
 
 def _append_section(report: Path, heading: str, lines: list[str]) -> None:
@@ -141,21 +194,9 @@ def _rollback_section(report: Path, *, session_dir: Path, service: str) -> None:
         )
         return
 
-    commands = [
-        ["sudo", "systemctl", "stop", service],
-        ["git", "checkout", rollback_rev],
-        ["uv", "sync", "--locked"],
-        ["sudo", "systemctl", "start", service],
-        ["sudo", "systemctl", "status", service, "--no-pager"],
-        ["journalctl", "-u", service, "-n", "120", "--no-pager"],
-        ["sudo", "systemctl", "stop", service],
-        ["git", "checkout", current_rev],
-        ["uv", "sync", "--locked"],
-        ["sudo", "systemctl", "start", service],
-        ["sudo", "systemctl", "status", service, "--no-pager"],
-    ]
     command_blocks: list[str] = []
-    for command in commands:
+
+    def run_and_record(command: list[str], *, mutating: bool) -> None:
         completed = _run(command)
         joined = " ".join(command)
         command_blocks.extend(
@@ -176,8 +217,62 @@ def _rollback_section(report: Path, *, session_dir: Path, service: str) -> None:
                 "",
             ]
         )
+        if mutating:
+            _raise_for_mutating_failure(command, completed)
+
+    if not current_rev:
+        current_rev = _run_mutating(["git", "rev-parse", "HEAD"]).stdout.strip()
+        if not current_rev:
+            raise RuntimeError("git rev-parse HEAD não retornou uma revision para recuperação.")
+
+    primary_error: RuntimeError | None = None
+    try:
+        run_and_record(["sudo", "systemctl", "stop", service], mutating=True)
+        run_and_record(["git", "checkout", rollback_rev], mutating=True)
+        run_and_record(["uv", "sync", "--locked"], mutating=True)
+        run_and_record(["sudo", "systemctl", "start", service], mutating=True)
+        run_and_record(["sudo", "systemctl", "status", service, "--no-pager"], mutating=False)
+        run_and_record(["journalctl", "-u", service, "-n", "120", "--no-pager"], mutating=False)
+    except RuntimeError as error:
+        primary_error = error
+
+    recovery_errors: list[RuntimeError | OSError] = []
+    try:
+        for command, mutating in (
+            (["sudo", "systemctl", "stop", service], True),
+            (["git", "checkout", current_rev], True),
+            (["uv", "sync", "--locked"], True),
+        ):
+            try:
+                run_and_record(command, mutating=mutating)
+            except (RuntimeError, OSError) as error:
+                recovery_errors.append(error)
+    finally:
+        try:
+            run_and_record(["sudo", "systemctl", "start", service], mutating=True)
+        except (RuntimeError, OSError) as error:
+            recovery_errors.append(error)
+    try:
+        run_and_record(["sudo", "systemctl", "status", service, "--no-pager"], mutating=False)
+    except OSError as error:
+        recovery_errors.append(error)
+
     snippet = session_dir / f"rollback-smoke-{_stamp()}.md"
     snippet.write_text("\n".join(command_blocks), encoding="utf-8")
+    _make_private_file(snippet)
+    if primary_error is not None:
+        if recovery_errors:
+            primary_error.add_note(
+                "Falhas durante a recuperação (serviço reiniciado em best effort):\n"
+                + "\n".join(f"- {error}" for error in recovery_errors)
+            )
+        raise primary_error
+    if recovery_errors:
+        raise RuntimeError(
+            "Falhas durante a recuperação de rollback:\n"
+            + "\n".join(f"- {error}" for error in recovery_errors)
+        ) from recovery_errors[0]
+
     _append_section(
         report,
         "Rollback smoke",
@@ -193,11 +288,12 @@ def _rollback_section(report: Path, *, session_dir: Path, service: str) -> None:
 def run_full_rehearsal(args: argparse.Namespace) -> Path:
     started_at = _utc_now()
     session_dir = args.output_dir.resolve() / f"phase4-phase8-session-{_stamp(started_at)}"
-    session_dir.mkdir(parents=True, exist_ok=True)
+    _make_private_dir(session_dir)
 
     template_path = _run_python_script(CREATE_TEMPLATE_SCRIPT, ["--output-dir", str(session_dir)])
     report = session_dir / "phase4-phase8-full-rehearsal.md"
     shutil.copy2(template_path, report)
+    _make_private_file(report)
     _append_section(
         report,
         "Session metadata",
@@ -292,15 +388,8 @@ def run_full_rehearsal(args: argparse.Namespace) -> Path:
             "Restart recovery pre-interruption notes",
             ["```text", interruption_notes or "<not provided>", "```"],
         )
-        restart_commands = [
-            ["sudo", "systemctl", "stop", args.service],
-            ["sudo", "systemctl", "start", args.service],
-            ["sudo", "systemctl", "status", args.service, "--no-pager"],
-            ["journalctl", "-u", args.service, "-n", "120", "--no-pager"],
-        ]
         command_blocks: list[str] = []
-        for command in restart_commands:
-            completed = _run(command)
+        for command, completed in _restart_recovery_commands(args.service):
             joined = " ".join(command)
             command_blocks.extend(
                 [
@@ -322,6 +411,7 @@ def run_full_rehearsal(args: argparse.Namespace) -> Path:
             )
         restart_cmd_snippet = session_dir / f"restart-recovery-smoke-{_stamp()}.md"
         restart_cmd_snippet.write_text("\n".join(command_blocks), encoding="utf-8")
+        _make_private_file(restart_cmd_snippet)
         restart_inspect = _run_python_script(
             REHEARSAL_SCRIPT,
             ["inspect-restart-recovery", "--output-dir", str(session_dir)],

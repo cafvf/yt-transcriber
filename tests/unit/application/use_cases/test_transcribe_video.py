@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 from datetime import date
+from pathlib import Path
 
 from tests.unit.application.conftest import (
     FakeAudioConverter,
@@ -34,6 +35,7 @@ from yt_transcriber_bot.application.ports.youtube_downloader import (
     SubtitleTrack,
     VideoUnavailableError,
 )
+from yt_transcriber_bot.application.services.retention_policy import RetentionPolicy
 from yt_transcriber_bot.application.use_cases.transcribe_video import (
     TranscribeVideoDependencies,
     TranscribeVideoResult,
@@ -43,6 +45,7 @@ from yt_transcriber_bot.domain.entities.job import Job, JobStatus
 from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
 from yt_transcriber_bot.domain.value_objects.duration import Duration
 from yt_transcriber_bot.domain.value_objects.language import Language
+from yt_transcriber_bot.domain.value_objects.media_source import MediaSource
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
 from yt_transcriber_bot.infrastructure.persistence.filesystem.transcript_snapshot import (
     TranscriptSnapshotRepository,
@@ -152,6 +155,61 @@ class TestHappyPath:
         result = uc.execute(_job())
         assert result.md_path is not None
         assert "meu-video-especial" in result.md_path.name
+
+    def test_telegram_jobs_with_same_title_keep_distinct_audio_for_retention(
+        self,
+        settings: AppSettings,
+        fake_repo: FakeJobRepository,
+        fake_downloader: FakeYouTubeDownloader,
+        fake_converter: FakeAudioConverter,
+        fake_gpu_cpu: FakeGpuDetector,
+        fake_transcription: FakeTranscriptionEngine,
+        fake_diarization: FakeDiarizationEngine,
+    ) -> None:
+        uc = _make_uc(
+            settings,
+            fake_repo=fake_repo,
+            fake_downloader=fake_downloader,
+            fake_converter=fake_converter,
+            fake_gpu_cpu=fake_gpu_cpu,
+            fake_transcription=fake_transcription,
+            fake_diarization=fake_diarization,
+        )
+        source_one = settings.base_dir / "downloads" / "telegram-one.m4a"
+        source_two = settings.base_dir / "downloads" / "telegram-two.m4a"
+        source_one.parent.mkdir(parents=True, exist_ok=True)
+        source_one.write_bytes(b"first")
+        source_two.write_bytes(b"second")
+        first = Job.new(
+            None,
+            42,
+            media_source=MediaSource.telegram_audio("file-one"),
+            source_url=str(source_one),
+            source_title="Mesmo título",
+        )
+        second = Job.new(
+            None,
+            42,
+            media_source=MediaSource.telegram_audio("file-two"),
+            source_url=str(source_two),
+            source_title="Mesmo título",
+        )
+
+        first_result = uc.execute(first)
+        second_result = uc.execute(second)
+
+        assert first_result.audio_path is not None
+        assert second_result.audio_path is not None
+        assert first_result.audio_path != second_result.audio_path
+        assert first_result.audio_path.exists()
+        assert second_result.audio_path.exists()
+
+        first.transition_to(JobStatus.COMPLETED)
+        second.transition_to(JobStatus.COMPLETED)
+        RetentionPolicy(fake_repo, max_volatile_jobs=1).apply()
+
+        assert not Path(first.audio_path or "").exists()
+        assert Path(second.audio_path or "").exists()
 
     def test_progress_callback_called_per_step(
         self,

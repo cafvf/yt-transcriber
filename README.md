@@ -63,9 +63,10 @@ Envie uma URL do YouTube ou um arquivo de áudio. Para fixar idioma, use
 | Vídeo com legenda | `/video_subs [n]` (somente YouTube) |
 | Diagnosticar | `/healthcheck`, `/lasterror`, `/clearcache` |
 
-`n` é o índice mostrado por `/list`. `/last` reenvia o Markdown salvo; não
-reenvia o áudio. `/redo <link>` reprocessa imediatamente e não pede confirmação inline: confirmação
-visual e comparação de configuração ainda não existem.
+`n` é o índice mostrado por `/list`. `/last` reenvia apenas o Markdown salvo;
+não reenvia o áudio. `/redo <link>` reprocessa imediatamente e não pede
+confirmação inline; confirmação visual e comparação de configuração ainda não
+existem.
 
 O bot atende somente `TELEGRAM_ALLOWED_USER_ID`. Arquivos aceitos devem ser
 áudio reconhecível, usar extensão suportada (`mp3`, `m4a`, `ogg`, `opus`, `wav`,
@@ -90,9 +91,10 @@ aparece em `/lasterror`.
 Aceita links do YouTube, áudio, mensagens de voz e documentos de áudio.
 
 Mídia Telegram é tratada como privada: não recebe URL ou ID sintético do
-YouTube. A política de retenção remove mídia bruta, conversões e logs associados
-a jobs antigos, mas preserva Markdown e snapshots de segmentos para histórico e
-renomeação de falantes.
+YouTube. Cada conversão usa um caminho vinculado ao `job_id`, evitando colisão
+entre arquivos com o mesmo nome. A política de retenção remove mídia bruta,
+conversões e logs associados a jobs antigos, mas preserva Markdown e snapshots
+de segmentos para histórico e renomeação de falantes.
 
 ## Configuração essencial
 
@@ -130,8 +132,10 @@ transcrição continua funcionando e apenas `/summary` fica indisponível.
 
 `/translate` e busca semântica continuam planejados; não são comandos atuais.
 
-`docs/05-plano-de-execucao.md`, `docs/gate-reports/`, `docs/patches/` e
-`ops-evidence/` são histórico e evidência; não substituem os guias acima.
+`docs/05-plano-de-execucao.md`, `docs/gate-reports/` e `docs/patches/` são
+histórico e evidência; não substituem os guias acima. Evidências operacionais
+geradas em `ops-evidence/` são locais, contêm dados sensíveis e são ignoradas
+pelo Git.
 
 ## Verificação local
 
