@@ -1,0 +1,28 @@
+# Implementation Phases
+
+Status: **Active execution view**
+Source: approved/frozen `005-tasks` v1.0.0
+
+These phases are an operational grouping only. They do not change task
+ownership, task dependencies, requirement ownership, or PLAN exit gates.
+
+| Phase | Purpose | Approved task range |
+|---|---|---|
+| F0 | Executable baseline and frozen-interface characterization | `TASK-P01-000` |
+| F1 | Security guardrails | `TASK-P01-001..008` |
+| F2 | Domain truth and canonical data consistency | `TASK-P02-001..013` |
+| F3 | Hexagonal boundaries and provider seams | `TASK-P03-001..014` |
+| F4 | Application/Telegram workflow decomposition | `TASK-P04-001..014` |
+| F5 | Architecture reliability and convergence | `TASK-P04-015..017` |
+| F6 | Functional/NFR reconnection and acceptance | `TASK-P05-001..017` |
+| F7 | Operations and production-readiness evidence | `TASK-P06-001..011` |
+
+## Gate rule
+
+A phase closes only when its owned tasks have the evidence required by
+`005-tasks`, relevant quality/security gates have been rerun, and any
+environment-gated evidence is explicitly recorded rather than assumed.
+
+F4 and F5 deliberately split PLAN-004: F4 performs workflow-by-workflow
+migration; F5 verifies reliability, maintainability, reversibility and the
+PLAN-004 exit gate after the migration is complete.
