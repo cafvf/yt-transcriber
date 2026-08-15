@@ -84,6 +84,10 @@ class TestTranscriptSegment:
         with pytest.raises(ValueError, match="end_seconds"):
             TranscriptSegment(start_seconds=5, end_seconds=2, speaker_label="A", text="x")
 
+    def test_zero_duration_raises(self) -> None:
+        with pytest.raises(ValueError, match="end_seconds"):
+            TranscriptSegment(start_seconds=2, end_seconds=2, speaker_label="A", text="x")
+
     def test_empty_text_raises(self) -> None:
         with pytest.raises(ValueError, match="text"):
             TranscriptSegment(start_seconds=0, end_seconds=1, speaker_label="A", text="")
@@ -160,15 +164,10 @@ class TestTranscript:
         assert totals["S0"].seconds == 15
         assert totals["S1"].seconds == 15
 
-    def test_speaker_speaking_time_ignores_zero_duration_segments(self) -> None:
-        segments = (
-            _seg(0, 0, "UNKNOWN"),
-            _seg(0, 3, "S0"),
-        )
-        t = Transcript(segments=segments, language=Language.en())
-        totals = t.speaker_speaking_time()
-        assert "UNKNOWN" not in totals
-        assert totals["S0"].seconds == 3
+    def test_language_facts_can_be_unknown_without_fabricated_confidence(self) -> None:
+        t = Transcript(segments=(_seg(0, 3, "S0"),), language=None)
+        assert t.language is None
+        assert t.language_confidence is None
 
     def test_turn_duration_property(self) -> None:
         t = Transcript(segments=(_seg(10, 25, "S0"),), language=Language.en())
@@ -205,8 +204,8 @@ class TestJob:
     def test_transition_updates_status_and_timestamp(self) -> None:
         job = Job.new(VideoId(value="dQw4w9WgXcQ"), user_id=1)
         before = job.updated_at
-        job.transition_to(JobStatus.DOWNLOADING)
-        assert job.status is JobStatus.DOWNLOADING
+        job.transition_to(JobStatus.ACQUIRING)
+        assert job.status is JobStatus.ACQUIRING
         assert job.updated_at >= before
 
     def test_transition_to_failed_records_error(self) -> None:
@@ -217,18 +216,36 @@ class TestJob:
 
     def test_transition_after_completed_blocked(self) -> None:
         job = Job.new(VideoId(value="dQw4w9WgXcQ"), user_id=1)
-        job.transition_to(JobStatus.COMPLETED)
-        with pytest.raises(ValueError, match="terminal"):
+        for status in (
+            JobStatus.ACQUIRING,
+            JobStatus.CONVERTING,
+            JobStatus.TRANSCRIBING,
+            JobStatus.DIARIZING,
+            JobStatus.RENDERING,
+            JobStatus.DELIVERING,
+            JobStatus.COMPLETED,
+        ):
+            job.transition_to(status)
+        with pytest.raises(ValueError, match="transição inválida"):
             job.transition_to(JobStatus.PENDING)
 
     def test_completed_job_cannot_reopen_for_delivery_failure(self) -> None:
         job = Job.new(VideoId(value="dQw4w9WgXcQ"), user_id=1)
         job.md_path = "/tmp/transcript.md"
-        job.transition_to(JobStatus.COMPLETED)
+        for status in (
+            JobStatus.ACQUIRING,
+            JobStatus.CONVERTING,
+            JobStatus.TRANSCRIBING,
+            JobStatus.DIARIZING,
+            JobStatus.RENDERING,
+            JobStatus.DELIVERING,
+            JobStatus.COMPLETED,
+        ):
+            job.transition_to(status)
 
-        with pytest.raises(ValueError, match="terminal"):
+        with pytest.raises(ValueError, match="transição inválida"):
             job.transition_to(JobStatus.DELIVERING)
-        with pytest.raises(ValueError, match="terminal"):
+        with pytest.raises(ValueError, match="transição inválida"):
             job.transition_to(JobStatus.DELIVERY_FAILED, error="falha na entrega")
 
         assert job.status is JobStatus.COMPLETED
@@ -240,7 +257,15 @@ class TestJob:
         job = Job.new(VideoId(value="dQw4w9WgXcQ"), user_id=1)
         job.md_path = "/tmp/transcript.md"
 
-        job.transition_to(JobStatus.DELIVERING)
+        for status in (
+            JobStatus.ACQUIRING,
+            JobStatus.CONVERTING,
+            JobStatus.TRANSCRIBING,
+            JobStatus.DIARIZING,
+            JobStatus.RENDERING,
+            JobStatus.DELIVERING,
+        ):
+            job.transition_to(status)
         job.transition_to(JobStatus.DELIVERY_FAILED, error="falha na entrega")
 
         assert job.status is JobStatus.DELIVERY_FAILED
@@ -250,9 +275,25 @@ class TestJob:
 
     def test_transition_idempotent_on_same_terminal(self) -> None:
         job = Job.new(VideoId(value="dQw4w9WgXcQ"), user_id=1)
-        job.transition_to(JobStatus.COMPLETED)
+        for status in (
+            JobStatus.ACQUIRING,
+            JobStatus.CONVERTING,
+            JobStatus.TRANSCRIBING,
+            JobStatus.DIARIZING,
+            JobStatus.RENDERING,
+            JobStatus.DELIVERING,
+            JobStatus.COMPLETED,
+        ):
+            job.transition_to(status)
+        before = job.updated_at
         # mesmo terminal → não levanta
         job.transition_to(JobStatus.COMPLETED)
+        assert job.updated_at == before
+
+    def test_illegal_state_jump_is_rejected(self) -> None:
+        job = Job.new(VideoId(value="dQw4w9WgXcQ"), user_id=1)
+        with pytest.raises(ValueError, match="pending para transcribing"):
+            job.transition_to(JobStatus.TRANSCRIBING)
 
     def test_apply_rename_records_mapping(self) -> None:
         job = Job.new(VideoId(value="dQw4w9WgXcQ"), user_id=1)

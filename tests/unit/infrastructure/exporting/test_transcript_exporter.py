@@ -132,17 +132,14 @@ def test_export_missing_snapshot_raises_file_not_found(tmp_path: Path) -> None:
         service.export(slug="missing", output_base_path=tmp_path / "missing.md", format="json")
 
 
-def test_export_filters_zero_duration_segments_and_normalizes_entities(tmp_path: Path) -> None:
+def test_export_normalizes_entities(tmp_path: Path) -> None:
     repo = TranscriptSnapshotRepository(tmp_path / "segments")
     repo.save(
         "video",
         TranscriptSnapshot(
             metadata=_snapshot().metadata,
             transcript=Transcript(
-                segments=(
-                    TranscriptSegment(0.0, 0.0, "Ghost", "UNKNOWN"),
-                    TranscriptSegment(0.0, 1.25, "Ol&aacute;&nbsp;mundo", "SPEAKER_00"),
-                ),
+                segments=(TranscriptSegment(0.0, 1.25, "Ol&aacute;&nbsp;mundo", "SPEAKER_00"),),
                 language=Language("pt"),
                 language_confidence=0.95,
                 source="youtube_manual",
@@ -154,7 +151,6 @@ def test_export_filters_zero_duration_segments_and_normalizes_entities(tmp_path:
 
     srt = service.export(slug="video", output_base_path=tmp_path / "video.md", format="srt")
     srt_text = srt.path.read_text()
-    assert "UNKNOWN" not in srt_text
     assert "Olá mundo" in srt_text
     assert "&nbsp;" not in srt_text
 

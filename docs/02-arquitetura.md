@@ -51,12 +51,20 @@ SQLite contém a tabela de jobs e documentos derivados para busca. A tabela
 `requested_at`, `updated_at`, `error_message`, `source_url`, `source_type`,
 `canonical_reference`, `source_title`, `source_duration_seconds`,
 `requested_chat_id`, `requested_language`, `artifact_policy`,
-`config_signature`, `speaker_renames_json`, `md_path`, `audio_path` e
-`log_path`. Um job guarda
-fonte, estado, idioma solicitado, chat, política de artefato e paths locais
-necessários para recuperação. Ainda não há tabelas separadas `speakers` ou `queue`.
-Snapshots JSON versionados guardam segmentos e
-renomes; Markdown é o artefato humano principal.
+`config_signature`, `canonical_transcript_ref`, `speaker_renames_json`,
+`md_path`, `audio_path` e `log_path`.
+
+No domínio, `Job` guarda identidade canônica de mídia, estado, idioma
+solicitado e referências de artefatos. `requested_chat_id` e `source_url`
+permanecem colunas físicas de compatibilidade, mas são hidratadas como contexto
+de aquisição/entrega da aplicação; não fazem parte do agregado `Job`.
+
+Novas transições usam o estado semântico `acquiring`; o literal persistido
+legado `downloading` continua legível como `acquiring` e não é regravado.
+`canonical_transcript_ref` liga explicitamente o job ao snapshot estruturado
+canônico. Snapshots novos usam schema v2; snapshots v1 permanecem legíveis.
+Markdown continua sendo a representação canônica humana.
+Ainda não há tabelas separadas `speakers` ou `queue`.
 
 ```text
 data/jobs.db                 estados, histórico e busca

@@ -58,9 +58,7 @@ class HistoryCollaboration:
         if self._title_source is None:
             return {}
         slugs = tuple(
-            slug
-            for slug in (self.slug_from_md_path(job.md_path) for job in jobs)
-            if slug is not None
+            slug for slug in (self.snapshot_ref_for_job(job) for job in jobs) if slug is not None
         )
         if not slugs:
             return {}
@@ -75,7 +73,7 @@ class HistoryCollaboration:
         return titles
 
     def format_job(self, job: Job, prefetched_titles: dict[str, str] | None = None) -> str:
-        slug = self.slug_from_md_path(job.md_path)
+        slug = self.snapshot_ref_for_job(job)
         title: str | None = None
         if slug is not None and prefetched_titles is not None:
             title = prefetched_titles.get(slug)
@@ -97,6 +95,16 @@ class HistoryCollaboration:
     @staticmethod
     def slug_from_md_path(md_path: str | None) -> str | None:
         return Path(md_path).stem if md_path is not None else None
+
+    @staticmethod
+    def snapshot_ref_for_job(job: Job) -> str | None:
+        """Retorna apenas a associação estruturada durável.
+
+        Jobs históricos recebem essa referência durante a migração SQLite; não
+        reconstruímos silenciosamente uma referência ausente a partir do Markdown.
+        """
+
+        return job.canonical_transcript_ref
 
 
 def parse_history_index(text: str) -> int:

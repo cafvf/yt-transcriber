@@ -377,9 +377,19 @@ def _make_completed_job(
 ) -> Job:
     job = Job.new(VideoId(video_id), user_id)
     object.__setattr__(job, "requested_at", requested_at)
-    job.transition_to(JobStatus.COMPLETED)
+    for status in (
+        JobStatus.ACQUIRING,
+        JobStatus.CONVERTING,
+        JobStatus.TRANSCRIBING,
+        JobStatus.DIARIZING,
+        JobStatus.RENDERING,
+        JobStatus.DELIVERING,
+        JobStatus.COMPLETED,
+    ):
+        job.transition_to(status)
     object.__setattr__(job, "updated_at", requested_at)
     job.md_path = str(md_path)
+    job.canonical_transcript_ref = md_path.stem
     return job
 
 
@@ -1304,10 +1314,19 @@ async def test_summary_accepts_telegram_media_without_video_id(
         None,
         user_id=42,
         media_source=MediaSource.telegram_audio("private-file-id"),
-        source_url=str(tmp_path / "private.ogg"),
     )
     job.md_path = str(md)
-    job.transition_to(JobStatus.COMPLETED)
+    job.canonical_transcript_ref = "telegram-summary"
+    for status in (
+        JobStatus.ACQUIRING,
+        JobStatus.CONVERTING,
+        JobStatus.TRANSCRIBING,
+        JobStatus.DIARIZING,
+        JobStatus.RENDERING,
+        JobStatus.DELIVERING,
+        JobStatus.COMPLETED,
+    ):
+        job.transition_to(status)
     repo.save(job)
     _populate_snapshot(snapshots, "telegram-summary")
 
@@ -1617,10 +1636,18 @@ async def test_video_subs_rejects_telegram_media_without_synthetic_video_id(
         None,
         user_id=42,
         media_source=MediaSource.telegram_audio("private-file-id"),
-        source_url=str(tmp_path / "private.ogg"),
     )
     job.md_path = str(tmp_path / "telegram.md")
-    job.transition_to(JobStatus.COMPLETED)
+    for status in (
+        JobStatus.ACQUIRING,
+        JobStatus.CONVERTING,
+        JobStatus.TRANSCRIBING,
+        JobStatus.DIARIZING,
+        JobStatus.RENDERING,
+        JobStatus.DELIVERING,
+        JobStatus.COMPLETED,
+    ):
+        job.transition_to(status)
     repo.save(job)
 
     await adapter.handle_command_video_subs(chat_id=1, user_id=42, text="/video_subs")

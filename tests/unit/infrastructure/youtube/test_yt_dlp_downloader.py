@@ -118,9 +118,11 @@ class TestFetchMetadata:
         assert meta.channel == "BackupChannel"
 
     def test_handles_missing_upload_date(self) -> None:
-        info = {"title": "x", "uploader": "y", "duration": 10}
+        info = {"title": "x", "uploader": "y"}
         meta = _make(info).fetch_metadata(VideoId(value="dQw4w9WgXcQ"))
         assert meta.upload_date is None
+        assert meta.duration is None
+        assert meta.original_language is None
 
     def test_missing_title_raises(self) -> None:
         info = {"title": "", "uploader": "x", "duration": 1}
@@ -245,10 +247,10 @@ class TestAutoDubDetection:
         meta = _make(info).fetch_metadata(VideoId(value="dQw4w9WgXcQ"))
         assert meta.has_alternate_audio_tracks is False
 
-    def test_falls_back_to_en_when_no_language(self) -> None:
+    def test_keeps_language_unknown_when_no_evidence(self) -> None:
         info = {"title": "x", "uploader": "y", "duration": 10}
         meta = _make(info).fetch_metadata(VideoId(value="dQw4w9WgXcQ"))
-        assert meta.original_language == Language.en()
+        assert meta.original_language is None
 
     def test_uses_top_level_language_when_formats_unmarked(self) -> None:
         info = {

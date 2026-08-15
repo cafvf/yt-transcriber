@@ -1,17 +1,18 @@
-"""Geração de assinatura da configuração e diff humano-legível.
-
-A assinatura captura apenas os parâmetros que afetam o resultado final da
-transcrição, para que a comparação não dispare reprocessamento por mudanças
-irrelevantes (ex.: nível de log, intervalo de progresso).
-"""
+"""Único mecanismo canônico de fingerprint de processamento."""
 
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from yt_transcriber_bot.application.config import AppSettings
+if TYPE_CHECKING:
+    from yt_transcriber_bot.application.config import AppSettings
 
+PROCESSING_FINGERPRINT_VERSION = 1
+
+# Apenas parâmetros de configuração que podem alterar o resultado/evidência.
 SIGNIFICANT_FIELDS: tuple[str, ...] = (
     "whisper_model",
     "whisper_model_pt",
@@ -25,6 +26,14 @@ SIGNIFICANT_FIELDS: tuple[str, ...] = (
     "prefer_youtube_subtitles",
 )
 
+_FIXED_PROCESSING_POLICY: dict[str, str | int] = {
+    "fingerprint_version": PROCESSING_FINGERPRINT_VERSION,
+    "asr_backend": "whisperx",
+    "diarization_policy": "whisperx_then_pyannote",
+    "transcript_normalization": "normalize_artifact_text:v1",
+    "snapshot_schema": 2,
+}
+
 
 @dataclass(frozen=True)
 class ConfigChange:
@@ -33,27 +42,49 @@ class ConfigChange:
     new_value: str
 
 
-def compute_config_signature(settings: AppSettings) -> str:
-    """Devolve um hash determinístico dos campos significativos."""
-    pairs: list[str] = []
+def processing_fingerprint_payload(
+    settings: AppSettings,
+    *,
+    requested_language: str | None = None,
+    source_type: str | None = None,
+) -> dict[str, object]:
+    payload: dict[str, object] = dict(_FIXED_PROCESSING_POLICY)
+    payload["requested_language"] = (requested_language or "").strip().lower() or None
+    payload["source_type"] = (source_type or "").strip().lower() or None
     for field in SIGNIFICANT_FIELDS:
-        if hasattr(settings, field):
-            pairs.append(f"{field}={getattr(settings, field)}")
-    raw = ";".join(pairs).encode("utf-8")
+        value = getattr(settings, field)
+        payload[field] = list(value) if isinstance(value, tuple) else value
+    return payload
+
+
+def compute_processing_fingerprint(
+    settings: AppSettings,
+    *,
+    requested_language: str | None = None,
+    source_type: str | None = None,
+) -> str:
+    raw = json.dumps(
+        processing_fingerprint_payload(
+            settings, requested_language=requested_language, source_type=source_type
+        ),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()[:16]
 
 
+def compute_config_signature(settings: AppSettings) -> str:
+    """Nome de compatibilidade; delega ao único fingerprint canônico."""
+
+    return compute_processing_fingerprint(settings)
+
+
 def describe_config(settings: AppSettings) -> dict[str, str]:
-    """Expande a config significativa em um dict ``str → str`` para diff."""
-    return {
-        field: str(getattr(settings, field))
-        for field in SIGNIFICANT_FIELDS
-        if hasattr(settings, field)
-    }
+    return {field: str(getattr(settings, field)) for field in SIGNIFICANT_FIELDS}
 
 
 def diff_configs(old: dict[str, str], new: dict[str, str]) -> tuple[ConfigChange, ...]:
-    """Computa as mudanças entre duas descrições de config."""
     changes: list[ConfigChange] = []
     for field in SIGNIFICANT_FIELDS:
         old_v = old.get(field, "<n/a>")

@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy import text
 
+from yt_transcriber_bot.application.job_request_context import JobRequestContext
 from yt_transcriber_bot.domain.entities.job import Job, JobStatus
 from yt_transcriber_bot.domain.value_objects.media_source import MediaSource
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
@@ -31,11 +32,22 @@ def _make_job(user_id: int = 1, video: str = "dQw4w9WgXcQ") -> Job:
     return Job.new(
         VideoId(value=video),
         user_id=user_id,
-        source_url=f"https://youtu.be/{video}",
-        requested_chat_id=1000 + user_id,
         requested_language="pt",
         artifact_policy="audio+markdown",
     )
+
+
+def _complete(job: Job) -> None:
+    for status in (
+        JobStatus.ACQUIRING,
+        JobStatus.CONVERTING,
+        JobStatus.TRANSCRIBING,
+        JobStatus.DIARIZING,
+        JobStatus.RENDERING,
+        JobStatus.DELIVERING,
+        JobStatus.COMPLETED,
+    ):
+        job.transition_to(status)
 
 
 class TestRoundtrip:
@@ -54,11 +66,14 @@ class TestRoundtrip:
     def test_save_is_upsert(self, repo: SqlAlchemyJobRepository) -> None:
         job = _make_job()
         repo.save(job)
-        job.transition_to(JobStatus.DOWNLOADING)
-        repo.save(job)
+        with repo._engine.begin() as connection:
+            connection.execute(
+                text("UPDATE jobs SET status = 'downloading' WHERE job_id = :job_id"),
+                {"job_id": job.job_id},
+            )
         loaded = repo.get_by_id(job.job_id)
         assert loaded is not None
-        assert loaded.status is JobStatus.DOWNLOADING
+        assert loaded.status is JobStatus.ACQUIRING
 
     def test_persists_speaker_renames(self, repo: SqlAlchemyJobRepository) -> None:
         job = _make_job()
@@ -77,12 +92,14 @@ class TestRoundtrip:
         job.md_path = "/tmp/x.md"
         job.audio_path = "/tmp/x.ogg"
         job.log_path = "/tmp/x.log"
+        job.canonical_transcript_ref = "x"
         repo.save(job)
         loaded = repo.get_by_id(job.job_id)
         assert loaded is not None
         assert loaded.md_path == "/tmp/x.md"
         assert loaded.audio_path == "/tmp/x.ogg"
         assert loaded.log_path == "/tmp/x.log"
+        assert loaded.canonical_transcript_ref == "x"
 
     def test_persists_error_message(self, repo: SqlAlchemyJobRepository) -> None:
         job = _make_job()
@@ -95,12 +112,19 @@ class TestRoundtrip:
     def test_persists_recovery_request_payload(self, repo: SqlAlchemyJobRepository) -> None:
         job = _make_job()
         repo.save(job)
+        repo.save_request_context(
+            JobRequestContext(
+                job_id=job.job_id,
+                delivery_chat_id=1001,
+                source_locator="https://youtu.be/dQw4w9WgXcQ",
+            )
+        )
         loaded = repo.get_by_id(job.job_id)
+        context = repo.get_request_context(job.job_id)
         assert loaded is not None
-        assert loaded.source_url == "https://youtu.be/dQw4w9WgXcQ"
-        assert loaded.requested_chat_id == 1001
         assert loaded.requested_language == "pt"
         assert loaded.artifact_policy == "audio+markdown"
+        assert context == JobRequestContext(job.job_id, 1001, "https://youtu.be/dQw4w9WgXcQ")
 
     def test_persists_default_youtube_media_source(self, repo: SqlAlchemyJobRepository) -> None:
         job = _make_job()
@@ -121,7 +145,6 @@ class TestRoundtrip:
             None,
             user_id=1,
             media_source=MediaSource.telegram_audio("private-file-id"),
-            source_url="/private/staging/audio.ogg",
             source_title="Mensagem de voz",
         )
 
@@ -161,11 +184,11 @@ class TestQueriesByVideoId:
 class TestQueriesPerUser:
     def test_get_latest_completed_for_user(self, repo: SqlAlchemyJobRepository) -> None:
         a = _make_job(user_id=1)
-        a.transition_to(JobStatus.COMPLETED)
+        _complete(a)
         repo.save(a)
         time.sleep(0.01)
         b = _make_job(user_id=1)
-        b.transition_to(JobStatus.COMPLETED)
+        _complete(b)
         repo.save(b)
         latest = repo.get_latest_completed_for_user(1)
         assert latest is not None
@@ -173,7 +196,7 @@ class TestQueriesPerUser:
 
     def test_get_latest_completed_skips_other_users(self, repo: SqlAlchemyJobRepository) -> None:
         other = _make_job(user_id=999)
-        other.transition_to(JobStatus.COMPLETED)
+        _complete(other)
         repo.save(other)
         assert repo.get_latest_completed_for_user(1) is None
 
@@ -207,11 +230,11 @@ class TestQueriesPerUser:
 class TestRetentionQuery:
     def test_list_completed_oldest_first(self, repo: SqlAlchemyJobRepository) -> None:
         a = _make_job(user_id=1)
-        a.transition_to(JobStatus.COMPLETED)
+        _complete(a)
         repo.save(a)
         time.sleep(0.01)
         b = _make_job(user_id=1)
-        b.transition_to(JobStatus.COMPLETED)
+        _complete(b)
         repo.save(b)
         rows = repo.list_completed_oldest_first()
         assert [j.job_id for j in rows] == [a.job_id, b.job_id]
@@ -239,7 +262,15 @@ class TestRecoveryQueries:
         repo.save(pending)
         time.sleep(0.01)
         delivering = _make_job(video="aaaaaaaaaaa")
-        delivering.transition_to(JobStatus.DELIVERING)
+        for status in (
+            JobStatus.ACQUIRING,
+            JobStatus.CONVERTING,
+            JobStatus.TRANSCRIBING,
+            JobStatus.DIARIZING,
+            JobStatus.RENDERING,
+            JobStatus.DELIVERING,
+        ):
+            delivering.transition_to(status)
         repo.save(delivering)
         time.sleep(0.01)
         failed = _make_job(video="bbbbbbbbbbb")
@@ -277,13 +308,14 @@ def test_migrates_existing_sqlite_database_with_phase2_columns(tmp_path: Path) -
     repo = SqlAlchemyJobRepository.from_url(f"sqlite:///{db_path}")
     job = _make_job()
     repo.save(job)
+    repo.save_request_context(JobRequestContext(job.job_id, 1001, "https://youtu.be/dQw4w9WgXcQ"))
     loaded = repo.get_by_id(job.job_id)
+    context = repo.get_request_context(job.job_id)
 
     assert loaded is not None
-    assert loaded.source_url == "https://youtu.be/dQw4w9WgXcQ"
-    assert loaded.requested_chat_id == 1001
     assert loaded.requested_language == "pt"
     assert loaded.artifact_policy == "audio+markdown"
+    assert context == JobRequestContext(job.job_id, 1001, "https://youtu.be/dQw4w9WgXcQ")
 
 
 def test_migrates_legacy_jobs_to_youtube_media_source(tmp_path: Path) -> None:
@@ -337,6 +369,58 @@ def test_migrates_legacy_jobs_to_youtube_media_source(tmp_path: Path) -> None:
     assert loaded.media_source.canonical_reference == (
         "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
     )
+
+
+def test_migration_backfills_explicit_snapshot_reference_for_legacy_markdown(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "legacy-canonical-ref.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE jobs (
+            job_id TEXT PRIMARY KEY,
+            video_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            requested_by_user_id INTEGER NOT NULL,
+            requested_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            error_message TEXT,
+            config_signature TEXT NOT NULL DEFAULT '',
+            speaker_renames_json TEXT NOT NULL DEFAULT '{}',
+            md_path TEXT,
+            audio_path TEXT,
+            log_path TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO jobs (
+            job_id, video_id, status, requested_by_user_id, requested_at, updated_at,
+            config_signature, speaker_renames_json, md_path
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "legacy-canonical",
+            "dQw4w9WgXcQ",
+            "completed",
+            42,
+            "2026-01-01T00:00:00+00:00",
+            "2026-01-01T00:00:00+00:00",
+            "",
+            "{}",
+            "/private/transcripts/legacy-title.md",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    repo = SqlAlchemyJobRepository.from_url(f"sqlite:///{db_path}")
+    loaded = repo.get_by_id("legacy-canonical")
+
+    assert loaded is not None
+    assert loaded.canonical_transcript_ref == "legacy-title"
 
 
 def test_nullable_video_id_migration_rebuilds_indexed_legacy_sqlite_table(tmp_path: Path) -> None:

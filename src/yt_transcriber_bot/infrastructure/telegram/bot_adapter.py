@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Protocol
 
 from yt_transcriber_bot.application.config import AppSettings
+from yt_transcriber_bot.application.job_request_context import JobRequestContext
 from yt_transcriber_bot.application.ports.incoming_media import (
     AudioDurationInspector,
     IncomingMedia,
@@ -32,6 +33,9 @@ from yt_transcriber_bot.application.ports.incoming_media import (
     IncomingMediaKind,
 )
 from yt_transcriber_bot.application.ports.job_repository import JobRepository
+from yt_transcriber_bot.application.services.config_signature import (
+    compute_processing_fingerprint,
+)
 from yt_transcriber_bot.application.services.healthcheck import HealthCheckService
 from yt_transcriber_bot.application.services.history_search import HistorySearchService
 from yt_transcriber_bot.application.services.last_error import LastErrorService
@@ -301,6 +305,7 @@ class TelegramBotAdapter:
             StartupRecoveryService(repository) if repository is not None else None
         )
         self._startup_recovery_done = False
+        self._request_context_sidecar: dict[str, JobRequestContext] = {}
 
     # ------------------------------------------------------------------
     # Ciclo de vida
@@ -382,8 +387,9 @@ class TelegramBotAdapter:
         job = Job.new(
             None,
             user_id,
-            self._settings.transcription_signature(),
-            requested_chat_id=chat_id,
+            compute_processing_fingerprint(
+                self._settings, source_type=MediaSourceType.TELEGRAM_AUDIO.value
+            ),
             artifact_policy="audio+markdown",
             media_source=MediaSource.telegram_audio(media.file_id),
         )
@@ -397,6 +403,8 @@ class TelegramBotAdapter:
                 duration_seconds = await asyncio.to_thread(
                     self._duration_inspector.duration_seconds, path
                 )
+            if duration_seconds is None or duration_seconds <= 0:
+                raise ValueError("Não foi possível validar a duração positiva do áudio.")
             if duration_seconds > self._settings.max_video_duration_min * 60:
                 raise ValueError(
                     f"Áudio excede o limite de {self._settings.max_video_duration_min} min."
@@ -405,13 +413,24 @@ class TelegramBotAdapter:
             _remove_staged_media(staging_dir)
             await self._send_text(chat_id, "Não foi possível validar o áudio recebido.")
             return
-        job.source_url = str(path)
         job.source_title = Path(media.file_name or "Áudio do Telegram").stem
         job.source_duration_seconds = duration_seconds
         try:
             self._save_job_if_possible(job)
+            self._save_request_context_if_possible(
+                JobRequestContext(
+                    job_id=job.job_id,
+                    delivery_chat_id=chat_id,
+                    source_locator=str(path),
+                )
+            )
         except Exception as exc:
             _remove_staged_media(staging_dir)
+            if self._repository is not None:
+                delete_job = getattr(self._repository, "delete", None)
+                if callable(delete_job):
+                    with suppress(Exception):
+                        delete_job(job.job_id)
             logger.error(
                 "Falha ao persistir job de mídia Telegram antes do enqueue: %s",
                 type(exc).__name__,
@@ -1016,7 +1035,7 @@ class TelegramBotAdapter:
         selected = await self._select_completed_job(chat_id=chat_id, user_id=user_id, index=index)
         if selected is None:
             return
-        slug = self._slug_from_md_path(selected.md_path)
+        slug = self._snapshot_ref_for_job(selected)
         if slug is None:
             await self._send_text(chat_id, "Não consegui localizar o snapshot dessa transcrição.")
             return
@@ -1114,7 +1133,7 @@ class TelegramBotAdapter:
         selected = await self._select_completed_job(chat_id=chat_id, user_id=user_id, index=index)
         if selected is None:
             return
-        slug = self._slug_from_md_path(selected.md_path)
+        slug = self._snapshot_ref_for_job(selected)
         if slug is None:
             await self._send_text(chat_id, "Não consegui localizar o snapshot dessa transcrição.")
             return
@@ -1249,7 +1268,7 @@ class TelegramBotAdapter:
         selected = await self._select_completed_job(chat_id=chat_id, user_id=user_id, index=index)
         if selected is None:
             return
-        slug = self._slug_from_md_path(selected.md_path)
+        slug = self._snapshot_ref_for_job(selected)
         if slug is None:
             await self._send_text(chat_id, "Não consegui localizar o snapshot dessa transcrição.")
             return
@@ -1300,7 +1319,7 @@ class TelegramBotAdapter:
         selected = await self._select_completed_job(chat_id=chat_id, user_id=user_id, index=index)
         if selected is None:
             return
-        slug = self._slug_from_md_path(selected.md_path)
+        slug = self._snapshot_ref_for_job(selected)
         if slug is None:
             await self._send_text(chat_id, "Não consegui localizar o snapshot dessa transcrição.")
             return
@@ -1364,7 +1383,7 @@ class TelegramBotAdapter:
                 "Vídeo legendado está disponível apenas para transcrições do YouTube.",
             )
             return
-        slug = self._slug_from_md_path(selected.md_path)
+        slug = self._snapshot_ref_for_job(selected)
         if slug is None:
             await self._send_text(chat_id, "Não consegui localizar o snapshot dessa transcrição.")
             return
@@ -1593,6 +1612,10 @@ class TelegramBotAdapter:
     def _slug_from_md_path(md_path: str | None) -> str | None:
         return HistoryCollaboration.slug_from_md_path(md_path)
 
+    @staticmethod
+    def _snapshot_ref_for_job(job: Job) -> str | None:
+        return job.canonical_transcript_ref
+
     # ------------------------------------------------------------------
     # Worker — executa o use case e envia entregáveis
     # ------------------------------------------------------------------
@@ -1634,7 +1657,7 @@ class TelegramBotAdapter:
             asyncio.run_coroutine_threadsafe(progress.fixed_progress(fraction), loop)
 
         job = self._load_or_create_job(payload)
-        job.transition_to(JobStatus.DOWNLOADING)
+        job.transition_to(JobStatus.ACQUIRING)
         self._save_job_if_possible(job)
         self._audit(
             "job_started",
@@ -1664,6 +1687,7 @@ class TelegramBotAdapter:
                     audit=audit_cb,
                     cancel_event=payload.cancel_event,
                     requested_language=payload.requested_language,
+                    source_locator=payload.url,
                 ),
             )
         except Exception as exc:
@@ -1763,15 +1787,40 @@ class TelegramBotAdapter:
             return
         self._repository.save(job)
 
-    @staticmethod
-    def _cleanup_telegram_source(job: Job) -> None:
+    def _save_request_context_if_possible(self, context: JobRequestContext) -> None:
+        if self._repository is not None:
+            save_context = getattr(self._repository, "save_request_context", None)
+            if callable(save_context):
+                save_context(context)
+                return
+        self._request_context_sidecar[context.job_id] = context
+
+    def _request_context_for(self, job: Job) -> JobRequestContext | None:
+        if self._repository is not None:
+            get_context = getattr(self._repository, "get_request_context", None)
+            if callable(get_context):
+                persisted = get_context(job.job_id)
+                if isinstance(persisted, JobRequestContext):
+                    return persisted
+        return self._request_context_sidecar.get(job.job_id)
+
+    def _cleanup_telegram_source(self, job: Job) -> None:
+        request_context = self._request_context_for(job)
         if (
             job.media_source is None
             or job.media_source.source_type is not MediaSourceType.TELEGRAM_AUDIO
-            or not job.source_url
+            or request_context is None
+            or not request_context.source_locator
         ):
             return
-        _remove_staged_media(Path(job.source_url).parent)
+        _remove_staged_media(Path(request_context.source_locator).parent)
+        self._save_request_context_if_possible(
+            JobRequestContext(
+                job_id=job.job_id,
+                delivery_chat_id=request_context.delivery_chat_id,
+                source_locator=None,
+            )
+        )
 
     def _create_persisted_job(
         self,
@@ -1785,32 +1834,65 @@ class TelegramBotAdapter:
         job = Job.new(
             video_id=video_id,
             user_id=user_id,
-            config_signature=self._settings.transcription_signature(),
-            source_url=url,
-            requested_chat_id=chat_id,
+            config_signature=compute_processing_fingerprint(
+                self._settings,
+                requested_language=requested_language,
+                source_type=MediaSourceType.YOUTUBE.value,
+            ),
             requested_language=requested_language,
             artifact_policy="audio+markdown",
         )
         self._save_job_if_possible(job)
+        self._save_request_context_if_possible(
+            JobRequestContext(job_id=job.job_id, delivery_chat_id=chat_id, source_locator=url)
+        )
         return job
 
     def _load_or_create_job(self, payload: JobPayload) -> Job:
         if payload.job_id is not None and self._repository is not None:
             existing = self._repository.get_by_id(payload.job_id)
             if existing is not None:
+                if self._request_context_for(existing) is None:
+                    self._save_request_context_if_possible(
+                        JobRequestContext(
+                            job_id=existing.job_id,
+                            delivery_chat_id=payload.chat_id,
+                            source_locator=payload.url,
+                        )
+                    )
                 return existing
-        return Job.new(
-            video_id=payload.video_id,
+        media_source = payload.media_source
+        if media_source is None and payload.media is not None:
+            media_source = MediaSource.telegram_audio(payload.media.file_id)
+
+        source_type = (
+            media_source.source_type if media_source is not None else MediaSourceType.YOUTUBE
+        )
+        video_id = payload.video_id if source_type is MediaSourceType.YOUTUBE else None
+
+        job = Job.new(
+            video_id=video_id,
             user_id=payload.user_id,
-            config_signature=self._settings.transcription_signature(),
-            source_url=payload.url,
-            requested_chat_id=payload.chat_id,
+            config_signature=compute_processing_fingerprint(
+                self._settings,
+                requested_language=payload.requested_language,
+                source_type=source_type.value,
+            ),
             requested_language=payload.requested_language,
             artifact_policy="audio+markdown",
-            media_source=payload.media_source,
+            media_source=media_source,
             source_title=payload.source_title,
             source_duration_seconds=payload.source_duration_seconds,
         )
+        self._save_job_if_possible(job)
+        self._save_request_context_if_possible(
+            JobRequestContext(
+                job_id=job.job_id,
+                delivery_chat_id=payload.chat_id,
+                source_locator=payload.url,
+            )
+        )
+        return job
 
     async def _recover_startup_jobs(self) -> None:
         if self._startup_recovery_service is None:
@@ -1826,27 +1908,34 @@ class TelegramBotAdapter:
             await self._requeue_recovered_job(job)
 
     async def _notify_recovery_failure(self, job: Job) -> None:
-        if job.requested_chat_id is None:
+        request_context = self._request_context_for(job)
+        if request_context is None or request_context.delivery_chat_id is None:
             return
         await self._send_text(
-            job.requested_chat_id,
+            request_context.delivery_chat_id,
             "⚠️ O bot reiniciou e interrompeu um job em andamento. "
             "Ele foi marcado como falho para evitar estado preso. "
             "Reenvie o vídeo ou use /redo e consulte /lasterror se precisar de detalhes.",
         )
 
     async def _notify_recovery_delivery_failure(self, job: Job) -> None:
-        if job.requested_chat_id is None:
+        request_context = self._request_context_for(job)
+        if request_context is None or request_context.delivery_chat_id is None:
             return
         await self._send_text(
-            job.requested_chat_id,
+            request_context.delivery_chat_id,
             "⚠️ O bot reiniciou durante a entrega dos artefatos. "
             "O job foi marcado como delivery_failed; consulte /lasterror "
             "para recuperar os caminhos locais quando disponíveis.",
         )
 
     async def _requeue_recovered_job(self, job: Job) -> None:
-        if job.requested_chat_id is None or not job.source_url:
+        request_context = self._request_context_for(job)
+        if (
+            request_context is None
+            or request_context.delivery_chat_id is None
+            or not request_context.source_locator
+        ):
             return
         lang_line = (
             f"\n🌐 Idioma informado: {job.requested_language}"
@@ -1854,15 +1943,15 @@ class TelegramBotAdapter:
             else "\n🌐 Idioma: automático"
         )
         message_id = await self._send_text(
-            job.requested_chat_id,
+            request_context.delivery_chat_id,
             f"🔄 Bot reiniciado. Retomando job pendente: "
-            f"{'Áudio privado do Telegram' if job.media_source and job.media_source.source_type is MediaSourceType.TELEGRAM_AUDIO else job.source_url}{lang_line}",
+            f"{'Áudio privado do Telegram' if job.media_source and job.media_source.source_type is MediaSourceType.TELEGRAM_AUDIO else request_context.source_locator}{lang_line}",
         )
         payload = JobPayload(
             job_id=job.job_id,
-            chat_id=job.requested_chat_id,
+            chat_id=request_context.delivery_chat_id,
             user_id=job.requested_by_user_id,
-            url=job.source_url,
+            url=request_context.source_locator,
             video_id=job.video_id,
             progress_message_id=message_id,
             requested_language=job.requested_language,
@@ -1881,44 +1970,22 @@ class TelegramBotAdapter:
         )
         if item.enqueued_position > 1:
             await self._send_text(
-                job.requested_chat_id,
+                request_context.delivery_chat_id,
                 f"⏳ Posição na fila após recovery: {item.enqueued_position}.",
             )
 
     def _mark_job_delivering(self, job: Job) -> None:
-        try:
-            job.transition_to(JobStatus.DELIVERING)
-        except ValueError as exc:
-            logger.warning(
-                "Não consegui marcar job %s como delivering: %s",
-                job.job_id,
-                sanitize_text(str(exc), self._settings),
-            )
+        job.transition_to(JobStatus.DELIVERING)
         self._save_job_if_possible(job)
 
     def _mark_job_completed_after_delivery(self, job: Job) -> None:
-        try:
-            job.transition_to(JobStatus.COMPLETED)
-        except ValueError as exc:
-            logger.warning(
-                "Não consegui concluir entrega do job %s: %s",
-                job.job_id,
-                sanitize_text(str(exc), self._settings),
-            )
+        job.transition_to(JobStatus.COMPLETED)
         self._save_job_if_possible(job)
 
     async def _mark_delivery_failed(self, payload: JobPayload, job: Job) -> None:
         self._cleanup_telegram_source(job)
         message = "Falha na entrega dos artefatos pelo Telegram; arquivos preservados localmente."
-        try:
-            job.transition_to(JobStatus.DELIVERY_FAILED, error=message)
-        except ValueError as exc:
-            logger.warning(
-                "Não consegui marcar falha de entrega do job %s: %s",
-                job.job_id,
-                sanitize_text(str(exc), self._settings),
-            )
-            job.error_message = message
+        job.transition_to(JobStatus.DELIVERY_FAILED, error=message)
         self._save_job_if_possible(job)
         context: dict[str, object] = {
             "job_id": job.job_id,
@@ -2164,6 +2231,7 @@ def _format_language_status(result: object) -> str:
         return "🌐 Idioma: não determinado"
     labels = {
         "user": "informado pelo usuário",
+        "requested": "informado pelo usuário",
         "metadata": "inferido dos metadados",
         "asr": "detectado pelo ASR",
         "youtube_manual": "legenda manual do YouTube",

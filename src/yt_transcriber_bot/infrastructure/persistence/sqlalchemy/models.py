@@ -10,12 +10,10 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 class Base(DeclarativeBase):
-    """Base declarativa do SQLAlchemy."""
+    pass
 
 
 class JobModel(Base):
-    """Tabela ``jobs``: 1:1 com a entidade ``Job``."""
-
     __tablename__ = "jobs"
 
     job_id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -28,14 +26,18 @@ class JobModel(Base):
     config_signature: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     source_type: Mapped[str] = mapped_column(String(32), nullable=False, default="youtube")
     canonical_reference: Mapped[str] = mapped_column(Text, nullable=False)
+    # Compatibilidade física: ``source_url`` guarda o locator opaco da
+    # requisição, não a identidade canônica da mídia.
     source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_title: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Contexto de entrega da aplicação; deliberadamente não é campo de Job.
     requested_chat_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     requested_language: Mapped[str | None] = mapped_column(String(16), nullable=True)
     artifact_policy: Mapped[str] = mapped_column(
         String(32), nullable=False, default="audio+markdown"
     )
+    canonical_transcript_ref: Mapped[str | None] = mapped_column(Text, nullable=True)
     speaker_renames_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     md_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     audio_path: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -54,8 +56,6 @@ class JobModel(Base):
 
 
 class SearchDocumentModel(Base):
-    """Documento derivado, portátil, usado pelo fallback sem FTS5."""
-
     __tablename__ = "job_search_documents"
 
     job_id: Mapped[str] = mapped_column(String(36), primary_key=True)

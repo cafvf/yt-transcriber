@@ -157,6 +157,7 @@ def test_sqlite_schema_docs_match_current_models_and_mark_future_tables() -> Non
         "requested_language",
         "artifact_policy",
         "config_signature",
+        "canonical_transcript_ref",
         "speaker_renames_json",
         "md_path",
         "audio_path",

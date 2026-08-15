@@ -1,12 +1,8 @@
-"""Implementação de ``TranscriptionEngine`` baseada em WhisperX/faster-whisper.
-
-A integração real com ``whisperx`` é abstraída via uma interface
-``WhisperXBackend``, permitindo que a lógica de validação, mapeamento de
-erros e seleção de idioma seja testada sem rodar modelos.
-"""
+"""Implementação de ``TranscriptionEngine`` baseada em WhisperX/faster-whisper."""
 
 from __future__ import annotations
 
+import re
 import threading
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -27,14 +23,12 @@ from yt_transcriber_bot.application.ports.transcription_engine import (
 )
 from yt_transcriber_bot.domain.value_objects.compute_type import ComputeType
 from yt_transcriber_bot.domain.value_objects.device import Device
-from yt_transcriber_bot.domain.value_objects.language import Language
+from yt_transcriber_bot.domain.value_objects.language import Language, LanguageSource
 from yt_transcriber_bot.domain.value_objects.model_name import ModelName
 
 
 @dataclass(frozen=True)
 class _RawTranscription:
-    """Saída crua antes do alinhamento."""
-
     segments: tuple[dict[str, Any], ...]
     language: str
     language_probability: float
@@ -42,14 +36,10 @@ class _RawTranscription:
 
 @dataclass(frozen=True)
 class _AlignedTranscription:
-    """Saída do passo de alinhamento (timestamps mais precisos por palavra)."""
-
     segments: tuple[dict[str, Any], ...]
 
 
 class WhisperXBackend(Protocol):
-    """Interface mínima do backend WhisperX que precisamos."""
-
     def transcribe(
         self,
         audio_path: Path,
@@ -73,8 +63,6 @@ class WhisperXBackend(Protocol):
 
 
 class WhisperXTranscriptionEngine(TranscriptionEngine):
-    """Adapter sobre ``whisperx`` operado via ``WhisperXBackend``."""
-
     def __init__(self, backend: WhisperXBackend) -> None:
         self._backend = backend
 
@@ -96,10 +84,13 @@ class WhisperXTranscriptionEngine(TranscriptionEngine):
         if not allowed_languages:
             raise TranscriptionError("allowed_languages nao pode ser vazio")
 
+        hint = _normalize_language_code(language_hint) if language_hint else None
+        if language_hint and hint not in allowed_languages:
+            raise TranscriptionError(f"idioma solicitado não permitido: {language_hint}")
+
         if progress:
             progress(0.10, "Preparando transcrição WhisperX...")
             progress(0.25, "Carregando modelo e áudio...")
-
         try:
             raw = self._backend.transcribe(
                 audio_path,
@@ -107,7 +98,7 @@ class WhisperXTranscriptionEngine(TranscriptionEngine):
                 compute_type=str(compute_type),
                 model=model.name,
                 allowed_languages=allowed_languages,
-                language_hint=language_hint,
+                language_hint=hint,
                 cancel_event=cancel_event,
             )
         except Exception as exc:
@@ -117,7 +108,6 @@ class WhisperXTranscriptionEngine(TranscriptionEngine):
         if progress:
             progress(0.50, "Transcrição bruta concluída.")
             progress(0.75, "Alinhando timestamps...")
-
         try:
             aligned = self._backend.align(
                 raw,
@@ -132,25 +122,37 @@ class WhisperXTranscriptionEngine(TranscriptionEngine):
         if progress:
             progress(0.90, "Alinhamento concluído.")
 
-        # Restringe idiomas detectados ao subconjunto permitido (pt/en).
-        # Se o usuário informou idioma manualmente, tratamos isso como override
-        # explícito para reduzir instabilidade em ASR multilíngue.
-        chosen_lang = self._enforce_allowed(language_hint or raw.language, allowed_languages)
+        observed_code = _normalize_language_code(raw.language)
+        observed_language = Language(observed_code) if observed_code else None
+        observed_confidence = _normalize_confidence(raw.language_probability)
 
-        segments = tuple(_to_domain_segments(aligned.segments))
+        if hint is not None:
+            effective_language = Language(hint)
+            confidence = None
+            source = LanguageSource.REQUESTED
+        else:
+            if observed_code is None:
+                raise TranscriptionError(
+                    f"WhisperX não retornou idioma observável válido: {raw.language!r}"
+                )
+            if observed_code not in allowed_languages:
+                raise TranscriptionError(
+                    "Idioma observado pelo ASR não suportado nesta versão: "
+                    f"{observed_code}. Permitidos: {', '.join(allowed_languages)}"
+                )
+            effective_language = Language(observed_code)
+            confidence = observed_confidence
+            source = LanguageSource.ASR
+
         return TranscriptionResult(
-            segments=segments,
-            detected_language=Language(code=chosen_lang),
-            language_confidence=float(raw.language_probability),
+            segments=tuple(_to_domain_segments(aligned.segments)),
+            detected_language=effective_language,
+            language_confidence=confidence,
+            language_source=source,
+            requested_language=Language(hint) if hint else None,
+            observed_language=observed_language,
+            observed_language_confidence=observed_confidence,
         )
-
-    @staticmethod
-    def _enforce_allowed(detected: str, allowed: tuple[str, ...]) -> str:
-        """Se o idioma detectado nao esta na allowlist, escolhemos o primeiro permitido."""
-        detected_norm = detected.split("-")[0].lower()
-        if detected_norm in allowed:
-            return detected_norm
-        return allowed[0]
 
     @staticmethod
     def _map_exception(exc: Exception) -> Exception:
@@ -164,9 +166,24 @@ class WhisperXTranscriptionEngine(TranscriptionEngine):
         return TranscriptionError(str(exc))
 
 
-def _to_domain_segments(
-    raw_segments: Iterable[dict[str, Any]],
-) -> Iterable[TranscribedSegment]:
+def _normalize_language_code(value: str | None) -> str | None:
+    if not value:
+        return None
+    base = value.strip().lower().split("-", 1)[0]
+    return base if re.fullmatch(r"[a-z]{2}", base) else None
+
+
+def _normalize_confidence(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        return None
+    try:
+        confidence = float(value)
+    except ValueError:
+        return None
+    return confidence if 0.0 <= confidence <= 1.0 else None
+
+
+def _to_domain_segments(raw_segments: Iterable[dict[str, Any]]) -> Iterable[TranscribedSegment]:
     for seg in raw_segments:
         try:
             start = float(seg.get("start"))  # type: ignore[arg-type]

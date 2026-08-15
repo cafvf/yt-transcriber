@@ -92,7 +92,7 @@ class TestHeader:
 
     def test_includes_language_with_confidence(self) -> None:
         md = MarkdownTranscriptRenderer().render(_meta(), _transcript_two_speakers(), _ctx())
-        assert "**Idioma detectado**: pt (confiança: 98.0%)" in md
+        assert "**Idioma da transcrição**: pt (confiança: 98.0%)" in md
 
     def test_includes_models(self) -> None:
         md = MarkdownTranscriptRenderer().render(_meta(), _transcript_two_speakers(), _ctx())
@@ -248,15 +248,9 @@ class TestTurns:
         md = MarkdownTranscriptRenderer().render(_meta(), t, _ctx())
         assert "Nenhum turno de fala disponível" in md
 
-    def test_normalizes_html_entities_and_skips_zero_duration_legacy_segments(self) -> None:
+    def test_normalizes_html_entities(self) -> None:
         t = Transcript(
             segments=(
-                TranscriptSegment(
-                    start_seconds=0.0,
-                    end_seconds=0.0,
-                    text="Ghost",
-                    speaker_label="UNKNOWN",
-                ),
                 TranscriptSegment(
                     start_seconds=0.0,
                     end_seconds=2.0,
@@ -269,8 +263,6 @@ class TestTurns:
             source="youtube_manual",
         )
         md = MarkdownTranscriptRenderer().render(_meta(), t, _ctx())
-        assert "UNKNOWN" not in md
-        assert "00:00:00 (0.0%)" not in md
         assert "Olá mundo 'teste'" in md
         assert "&nbsp;" not in md
 

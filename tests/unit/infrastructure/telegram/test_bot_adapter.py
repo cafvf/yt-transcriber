@@ -13,6 +13,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from yt_transcriber_bot.application.config import AppSettings
+from yt_transcriber_bot.application.job_request_context import JobRequestContext
 from yt_transcriber_bot.application.use_cases.transcribe_video import (
     TranscribeVideoResult,
 )
@@ -114,7 +115,25 @@ class FakeUseCase:
         if self.raise_exc is not None:
             raise self.raise_exc
         assert self.result is not None
-        return self.result
+        if self.result.canceled or self.result.failure_reason is not None:
+            return self.result
+        job.md_path = str(self.result.md_path) if self.result.md_path is not None else None
+        job.audio_path = str(self.result.audio_path) if self.result.audio_path is not None else None
+        job.canonical_transcript_ref = job.job_id
+        for status in (
+            JobStatus.CONVERTING,
+            JobStatus.TRANSCRIBING,
+            JobStatus.DIARIZING,
+            JobStatus.RENDERING,
+            JobStatus.DELIVERING,
+        ):
+            job.transition_to(status)
+        return TranscribeVideoResult(
+            job=job,
+            md_path=self.result.md_path,
+            audio_path=self.result.audio_path,
+            diagnostics=self.result.diagnostics,
+        )
 
 
 class CapturingUseCase:
@@ -142,7 +161,15 @@ class CapturingUseCase:
                 time.sleep(0.01)
         job.md_path = str(self.md_path) if self.md_path is not None else None
         job.audio_path = str(self.audio_path) if self.audio_path is not None else None
-        job.transition_to(JobStatus.DELIVERING)
+        job.canonical_transcript_ref = job.job_id
+        for status in (
+            JobStatus.CONVERTING,
+            JobStatus.TRANSCRIBING,
+            JobStatus.DIARIZING,
+            JobStatus.RENDERING,
+            JobStatus.DELIVERING,
+        ):
+            job.transition_to(status)
         return TranscribeVideoResult(
             job=job,
             md_path=self.md_path,
@@ -154,6 +181,7 @@ class CapturingUseCase:
 class FakeRepo:
     def __init__(self) -> None:
         self.jobs: list[Job] = []
+        self.contexts: dict[str, JobRequestContext] = {}
 
     def save(self, job: Job) -> None:
         for index, existing in enumerate(self.jobs):
@@ -189,6 +217,12 @@ class FakeRepo:
 
     def delete(self, job_id: str) -> None:
         self.jobs = [job for job in self.jobs if job.job_id != job_id]
+
+    def save_request_context(self, context: JobRequestContext) -> None:
+        self.contexts[context.job_id] = context
+
+    def get_request_context(self, job_id: str) -> JobRequestContext | None:
+        return self.contexts.get(job_id)
 
 
 class FakeLastErrorService:
@@ -346,7 +380,17 @@ async def test_summary_llm_error_does_not_send_backend_body_to_telegram(
     md.write_text("# transcript", encoding="utf-8")
     job = Job.new(VideoId("dQw4w9WgXcQ"), 42)
     job.md_path = str(md)
-    job.transition_to(JobStatus.COMPLETED)
+    job.canonical_transcript_ref = "video"
+    for status in (
+        JobStatus.ACQUIRING,
+        JobStatus.CONVERTING,
+        JobStatus.TRANSCRIBING,
+        JobStatus.DIARIZING,
+        JobStatus.RENDERING,
+        JobStatus.DELIVERING,
+        JobStatus.COMPLETED,
+    ):
+        job.transition_to(status)
     repo = FakeRepo()
     repo.save(job)
     lasterror = FakeLastErrorService()
@@ -418,7 +462,7 @@ async def test_pipeline_exception_does_not_expose_arbitrary_text_in_audit_or_tel
         repository=repo,  # type: ignore[arg-type]
         audit_logger=audit,  # type: ignore[arg-type]
     )
-    job = Job.new(VideoId("dQw4w9WgXcQ"), 42, requested_chat_id=10)
+    job = Job.new(VideoId("dQw4w9WgXcQ"), 42)
     repo.save(job)
 
     await adapter._process_job(
@@ -439,7 +483,7 @@ async def test_pipeline_exception_marks_persisted_downloading_job_failed(
     settings: AppSettings, client: FakeBotClient
 ) -> None:
     repo = FakeRepo()
-    job = Job.new(VideoId("dQw4w9WgXcQ"), 42, requested_chat_id=10)
+    job = Job.new(VideoId("dQw4w9WgXcQ"), 42)
     repo.save(job)
     adapter = TelegramBotAdapter(
         settings=settings,
@@ -473,7 +517,15 @@ def test_terminal_persistence_failure_is_not_silently_suppressed(
         repository=FailingSaveRepo(),  # type: ignore[arg-type]
     )
     job = Job.new(VideoId("dQw4w9WgXcQ"), 42)
-    job.transition_to(JobStatus.DELIVERING)
+    for status in (
+        JobStatus.ACQUIRING,
+        JobStatus.CONVERTING,
+        JobStatus.TRANSCRIBING,
+        JobStatus.DIARIZING,
+        JobStatus.RENDERING,
+        JobStatus.DELIVERING,
+    ):
+        job.transition_to(status)
 
     with pytest.raises(OSError, match="database password"):
         adapter._mark_job_completed_after_delivery(job)
@@ -491,7 +543,7 @@ async def test_job_is_persisted_as_active_before_pipeline_execution(
         use_case=use_case,
         repository=repo,  # type: ignore[arg-type]
     )
-    job = Job.new(VideoId("dQw4w9WgXcQ"), 42, requested_chat_id=10)
+    job = Job.new(VideoId("dQw4w9WgXcQ"), 42)
     repo.save(job)
 
     await adapter._process_job(
@@ -503,7 +555,7 @@ async def test_job_is_persisted_as_active_before_pipeline_execution(
         )
     )
 
-    assert use_case.observed_status is JobStatus.DOWNLOADING
+    assert use_case.observed_status is JobStatus.ACQUIRING
 
 
 # --------------------------------------------------------------------
@@ -740,11 +792,14 @@ async def test_recovery_requeues_telegram_media_without_exposing_staging_path(
         None,
         user_id=42,
         media_source=MediaSource.telegram_audio("private-file-id"),
-        source_url="/private/staging/private-file-id.ogg",
         source_title="Mensagem de voz",
         source_duration_seconds=37,
         requested_language="pt",
-        requested_chat_id=10,
+    )
+    adapter._save_request_context_if_possible(
+        JobRequestContext(
+            job.job_id, delivery_chat_id=10, source_locator="/private/staging/private-file-id.ogg"
+        )
     )
 
     await adapter._requeue_recovered_job(job)
@@ -776,11 +831,10 @@ async def test_start_recovers_pending_job_from_sqlite_file(
         VideoId("dQw4w9WgXcQ"),
         user_id=42,
         config_signature="sig",
-        source_url="https://youtu.be/dQw4w9WgXcQ",
-        requested_chat_id=10,
         requested_language="pt",
     )
     repo.save(pending)
+    repo.save_request_context(JobRequestContext(pending.job_id, 10, "https://youtu.be/dQw4w9WgXcQ"))
     use_case = CapturingUseCase(md_path=tmp_path / "recovered.md")
     adapter = TelegramBotAdapter(
         settings=settings,
@@ -809,21 +863,34 @@ async def test_start_marks_interrupted_jobs_from_sqlite_file_and_notifies(
         VideoId("dQw4w9WgXcQ"),
         user_id=42,
         config_signature="sig",
-        source_url="https://youtu.be/dQw4w9WgXcQ",
-        requested_chat_id=10,
     )
-    active.transition_to(JobStatus.TRANSCRIBING)
+    for status in (
+        JobStatus.ACQUIRING,
+        JobStatus.CONVERTING,
+        JobStatus.TRANSCRIBING,
+    ):
+        active.transition_to(status)
     repo.save(active)
+    repo.save_request_context(JobRequestContext(active.job_id, 10, "https://youtu.be/dQw4w9WgXcQ"))
     delivering = Job.new(
         VideoId("aaaaaaaaaaa"),
         user_id=42,
         config_signature="sig",
-        source_url="https://youtu.be/aaaaaaaaaaa",
-        requested_chat_id=10,
     )
-    delivering.transition_to(JobStatus.DELIVERING)
+    for status in (
+        JobStatus.ACQUIRING,
+        JobStatus.CONVERTING,
+        JobStatus.TRANSCRIBING,
+        JobStatus.DIARIZING,
+        JobStatus.RENDERING,
+        JobStatus.DELIVERING,
+    ):
+        delivering.transition_to(status)
     delivering.md_path = "/tmp/out.md"
     repo.save(delivering)
+    repo.save_request_context(
+        JobRequestContext(delivering.job_id, 10, "https://youtu.be/aaaaaaaaaaa")
+    )
     adapter = TelegramBotAdapter(
         settings=settings,
         client=client,
@@ -854,10 +921,9 @@ async def test_startup_recovery_runs_only_once_per_adapter_instance(
         VideoId("dQw4w9WgXcQ"),
         user_id=42,
         config_signature="sig",
-        source_url="https://youtu.be/dQw4w9WgXcQ",
-        requested_chat_id=10,
     )
     repo.save(pending)
+    repo.save_request_context(JobRequestContext(pending.job_id, 10, "https://youtu.be/dQw4w9WgXcQ"))
     use_case = CapturingUseCase(md_path=tmp_path / "recovered.md")
     adapter = TelegramBotAdapter(
         settings=settings,

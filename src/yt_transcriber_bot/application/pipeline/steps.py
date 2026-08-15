@@ -11,7 +11,7 @@ from __future__ import annotations
 import itertools
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -52,8 +52,9 @@ from yt_transcriber_bot.domain.value_objects.compute_type import (
 )
 from yt_transcriber_bot.domain.value_objects.device import Device
 from yt_transcriber_bot.domain.value_objects.duration import Duration
-from yt_transcriber_bot.domain.value_objects.language import Language
+from yt_transcriber_bot.domain.value_objects.language import Language, LanguageSource
 from yt_transcriber_bot.domain.value_objects.model_name import ModelName
+from yt_transcriber_bot.domain.value_objects.provenance import ProcessingProvenance
 from yt_transcriber_bot.domain.value_objects.slug import Slug
 from yt_transcriber_bot.infrastructure.text.normalization import (
     normalize_artifact_text,
@@ -66,7 +67,6 @@ if TYPE_CHECKING:
     from yt_transcriber_bot.infrastructure.persistence.filesystem.transcript_snapshot import (
         TranscriptSnapshotRepository,
     )
-    from yt_transcriber_bot.infrastructure.rendering.markdown_renderer import RenderContext
 
 logger = logging.getLogger(__name__)
 
@@ -109,12 +109,16 @@ class FetchMetadataStep(PipelineStep):
         self._settings = settings
 
     def execute(self, ctx: PipelineContext) -> None:
-        ctx.job.transition_to(JobStatus.DOWNLOADING)
+        ctx.job.transition_to(JobStatus.ACQUIRING)
         ctx.started_at = datetime.now(UTC)
         assert ctx.job.video_id is not None
         meta = self._dl.fetch_metadata(ctx.job.video_id)
         ctx.metadata = meta
 
+        if meta.duration is None:
+            raise PipelineRejectionError(
+                "Não foi possível estabelecer a duração da mídia antes do processamento caro."
+            )
         max_seconds = int(self._settings.max_video_duration_min) * 60
         if not DurationWithinLimit(Duration(seconds=max_seconds)).is_satisfied_by(meta.duration):
             raise VideoTooLongError(
@@ -131,7 +135,7 @@ class FetchMetadataStep(PipelineStep):
                     f"{sorted(self._settings.allowed_languages)}"
                 )
             ctx.transcription_language = requested.code
-            ctx.language_source = "user"
+            ctx.language_source = LanguageSource.REQUESTED.value
             if meta.original_language is not None and meta.original_language.code != requested.code:
                 ctx.add_diagnostic(
                     f"Idioma dos metadados: {meta.original_language.code}; "
@@ -148,7 +152,7 @@ class FetchMetadataStep(PipelineStep):
             # Usado para escolher legendas e modelo, mas a transcrição por áudio
             # continua livre para detectar o idioma no WhisperX.
             ctx.transcription_language = meta.original_language.code
-            ctx.language_source = "metadata"
+            ctx.language_source = LanguageSource.METADATA.value
             ctx.add_diagnostic(f"Idioma inferido dos metadados: {meta.original_language.code}.")
         else:
             ctx.add_diagnostic("Idioma original indeterminado; deixando o WhisperX detectar.")
@@ -251,7 +255,7 @@ class TryYouTubeSubtitlesStep(PipelineStep):
             for start, end, text in normalized_segments
         )
         ctx.transcription_language = target_language
-        ctx.transcription_confidence = 1.0
+        ctx.transcription_confidence = None
         ctx.youtube_subtitle_used = True
         subtitle_kind = "auto" if chosen.is_auto_generated else "manual"
         source = "youtube_auto" if chosen.is_auto_generated else "youtube_manual"
@@ -269,8 +273,22 @@ class TryYouTubeSubtitlesStep(PipelineStep):
                 if segment.text.strip() and segment.end_seconds > segment.start_seconds
             ),
             language=Language(code=target_language),
-            language_confidence=1.0,
+            language_confidence=None,
             source=source,
+            requested_language=(
+                Language(ctx.requested_language) if ctx.requested_language else None
+            ),
+            observed_language=None,
+            observed_language_confidence=None,
+            language_source=(
+                LanguageSource.YOUTUBE_AUTO
+                if chosen.is_auto_generated
+                else LanguageSource.YOUTUBE_MANUAL
+            ),
+        )
+        ctx.processing_provenance = ProcessingProvenance(
+            processing_path="youtube_subtitle",
+            language_source=ctx.language_source,
         )
         ctx.add_diagnostic(
             f"Usando legendas do YouTube ({ctx.youtube_subtitle_kind}, idioma={target_language})."
@@ -473,23 +491,29 @@ class UseTelegramAudioStep(PipelineStep):
         return "use_telegram_audio"
 
     def execute(self, ctx: PipelineContext) -> None:
-        if not ctx.job.source_url:
+        source_locator = ctx.source_locator
+        if not source_locator:
             raise PipelineRejectionError("Arquivo de áudio Telegram indisponível.")
-        path = Path(ctx.job.source_url)
+        path = Path(source_locator)
         if not path.is_file():
             raise PipelineRejectionError("Arquivo de áudio Telegram não encontrado localmente.")
-        ctx.job.transition_to(JobStatus.DOWNLOADING)
+        if ctx.job.source_duration_seconds is None or ctx.job.source_duration_seconds <= 0:
+            raise PipelineRejectionError(
+                "Não foi possível estabelecer a duração do áudio Telegram antes do ASR."
+            )
+        ctx.job.transition_to(JobStatus.ACQUIRING)
         ctx.started_at = datetime.now(UTC)
         ctx.raw_audio_path = path
         ctx.metadata = VideoMetadata(
             video_id=None,
             title=ctx.job.source_title or "Áudio do Telegram",
             channel="Telegram",
-            duration=Duration.from_seconds(ctx.job.source_duration_seconds or 0),
+            duration=Duration.from_seconds(ctx.job.source_duration_seconds),
             upload_date=None,
             original_language=None,
             source_label="Telegram (mídia privada)",
         )
+        ctx.processing_provenance = replace(ctx.processing_provenance, processing_path="audio_asr")
 
 
 # ----------------------------------------------------------------------
@@ -613,6 +637,7 @@ class TranscribeStep(PipelineStep):
             raise RuntimeError("TranscribeStep sem runtime_plan")
 
         plan = ctx.runtime_plan
+        fallback_used = False
         try:
             result = self._engine.transcribe(
                 ctx.converted_audio_path,
@@ -629,6 +654,7 @@ class TranscribeStep(PipelineStep):
             smaller = ModelName.smaller_alternative(plan.model)
             if smaller is None:
                 raise
+            fallback_used = True
             new_plan = RuntimePlan(
                 device=Device.cpu(),
                 compute_type=ComputeType(kind=ComputeKind.INT8),
@@ -648,18 +674,38 @@ class TranscribeStep(PipelineStep):
             )
 
         ctx.transcribed_segments = result.segments
-        ctx.transcription_language = result.detected_language.code
+        ctx.transcription_language = (
+            result.detected_language.code if result.detected_language else None
+        )
         ctx.transcription_confidence = result.language_confidence
-        ctx.language_source = "user" if ctx.requested_language else "asr"
+        ctx.observed_language = result.observed_language.code if result.observed_language else None
+        ctx.observed_language_confidence = result.observed_language_confidence
+        ctx.language_source = result.language_source.value
+        actual_plan = ctx.runtime_plan
+        assert actual_plan is not None
+        ctx.processing_provenance = replace(
+            ctx.processing_provenance,
+            processing_path="audio_asr",
+            transcription_backend="whisperx",
+            transcription_model=actual_plan.model.name,
+            device=str(actual_plan.device),
+            compute_type=str(actual_plan.compute_type),
+            asr_fallback_used=fallback_used,
+            language_source=ctx.language_source,
+        )
         if ctx.requested_language:
             ctx.add_diagnostic(
-                f"Idioma informado pelo usuário: {ctx.requested_language}; "
-                f"saída ASR normalizada como {result.detected_language.code}."
+                f"Idioma solicitado: {ctx.requested_language}; "
+                "confiança do idioma efetivo não inferida a partir da detecção do ASR."
             )
         else:
+            confidence = (
+                f" (confiança={result.language_confidence:.2f})"
+                if result.language_confidence is not None
+                else ""
+            )
             ctx.add_diagnostic(
-                f"Idioma detectado pelo ASR: {result.detected_language.code} "
-                f"(confiança={result.language_confidence:.2f})."
+                f"Idioma observado pelo ASR: {ctx.transcription_language}{confidence}."
             )
 
 
@@ -680,10 +726,12 @@ class DiarizeStep(PipelineStep):
         engine: DiarizationEngine,
         settings: AppSettings,
         progress: TranscriptionStepProgress | None = None,
+        diarization_model_name: str = "pyannote/speaker-diarization-community-1",
     ) -> None:
         self._engine = engine
         self._settings = settings
         self._progress = progress or TranscriptionStepProgress()
+        self._diarization_model_name = diarization_model_name
 
     def should_run(self, ctx: PipelineContext) -> bool:
         return not ctx.youtube_subtitle_used
@@ -732,14 +780,27 @@ class DiarizeStep(PipelineStep):
         if self._progress.on_progress:
             self._progress.on_progress(0.90, "Diarização concluída.")
 
+        ctx.processing_provenance = replace(
+            ctx.processing_provenance,
+            diarization_backend="composite",
+            diarization_model=self._diarization_model_name,
+        )
         source = "whisperx"
         if ctx.youtube_subtitle_used:
             source = "youtube_manual" if ctx.youtube_subtitle_kind == "manual" else "youtube_auto"
         ctx.transcript = Transcript(
             segments=tuple(segments),
-            language=Language(code=ctx.transcription_language or "pt"),
-            language_confidence=ctx.transcription_confidence or 0.0,
+            language=(
+                Language(code=ctx.transcription_language) if ctx.transcription_language else None
+            ),
+            language_confidence=ctx.transcription_confidence,
             source=source,
+            requested_language=(
+                Language(ctx.requested_language) if ctx.requested_language else None
+            ),
+            observed_language=(Language(ctx.observed_language) if ctx.observed_language else None),
+            observed_language_confidence=ctx.observed_language_confidence,
+            language_source=LanguageSource(ctx.language_source or "unknown"),
         )
 
 
@@ -762,12 +823,14 @@ class RenderMarkdownStep(PipelineStep):
         settings: AppSettings,
         diarization_model_name: str = "pyannote/speaker-diarization-community-1",
         snapshot_repository: TranscriptSnapshotRepository | None = None,
+        processing_fingerprint: str = "",
     ) -> None:
         self._renderer = renderer
         self._transcripts_dir = transcripts_dir
         self._settings = settings
         self._diar_model_name = diarization_model_name
         self._snapshot_repository = snapshot_repository
+        self._processing_fingerprint = processing_fingerprint
 
     def execute(self, ctx: PipelineContext) -> None:
         ctx.job.transition_to(JobStatus.RENDERING)
@@ -811,44 +874,36 @@ class RenderMarkdownStep(PipelineStep):
             raise PipelineRejectionError(
                 "A legenda do YouTube permaneceu corrompida após renderização."
             )
-        dest.write_text(rendered, encoding="utf-8")
-        self._save_snapshot_if_available(
-            slug=dest.stem,
-            metadata=ctx.metadata,
-            transcript=ctx.transcript,
-            render_context=render_context,
-            ctx=ctx,
+        if self._snapshot_repository is None:
+            raise RuntimeError("Repositório de snapshot canônico não configurado")
+
+        from yt_transcriber_bot.infrastructure.persistence.filesystem.transcript_snapshot import (
+            TranscriptSnapshot,
         )
+
+        reference = ctx.job.job_id
+        self._snapshot_repository.save(
+            reference,
+            TranscriptSnapshot(
+                metadata=ctx.metadata,
+                transcript=ctx.transcript,
+                context=render_context,
+                processing_fingerprint=self._processing_fingerprint,
+                processing_provenance=ctx.processing_provenance,
+            ),
+        )
+        tmp = dest.with_name(f".{dest.name}.{ctx.job.job_id}.tmp")
+        try:
+            tmp.write_text(rendered, encoding="utf-8")
+            tmp.replace(dest)
+        except Exception:
+            tmp.unlink(missing_ok=True)
+            self._snapshot_repository.delete(reference)
+            raise
+
         ctx.final_md_path = dest
+        ctx.job.canonical_transcript_ref = reference
         ctx.job.md_path = str(dest)
         if ctx.converted_audio_path is not None:
             ctx.job.audio_path = str(ctx.converted_audio_path)
         ctx.finished_at = datetime.now(UTC)
-
-    def _save_snapshot_if_available(
-        self,
-        *,
-        slug: str,
-        metadata: VideoMetadata,
-        transcript: Transcript,
-        render_context: RenderContext,
-        ctx: PipelineContext,
-    ) -> None:
-        if self._snapshot_repository is None:
-            return
-        try:
-            from yt_transcriber_bot.infrastructure.persistence.filesystem.transcript_snapshot import (
-                TranscriptSnapshot,
-            )
-
-            self._snapshot_repository.save(
-                slug,
-                TranscriptSnapshot(
-                    metadata=metadata,
-                    transcript=transcript,
-                    context=render_context,
-                ),
-            )
-        except Exception as exc:
-            logger.warning("Falha ao persistir snapshot da transcrição: %s", exc)
-            ctx.add_diagnostic(f"Falha ao persistir snapshot da transcrição: {exc}")

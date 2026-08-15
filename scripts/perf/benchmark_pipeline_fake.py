@@ -192,7 +192,16 @@ def _history_title_listing_legacy(
 def _make_completed_job(*, video_id: str, slug: str, requested_at: datetime) -> Job:
     job = Job.new(VideoId(video_id), 42)
     object.__setattr__(job, "requested_at", requested_at)
-    job.transition_to(JobStatus.COMPLETED)
+    for status in (
+        JobStatus.ACQUIRING,
+        JobStatus.CONVERTING,
+        JobStatus.TRANSCRIBING,
+        JobStatus.DIARIZING,
+        JobStatus.RENDERING,
+        JobStatus.DELIVERING,
+        JobStatus.COMPLETED,
+    ):
+        job.transition_to(status)
     object.__setattr__(job, "updated_at", requested_at)
     job.md_path = f"/tmp/{slug}.md"
     return job

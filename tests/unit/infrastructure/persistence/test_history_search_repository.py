@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy import text
 
+from yt_transcriber_bot.application.job_request_context import JobRequestContext
 from yt_transcriber_bot.domain.entities.job import Job, JobStatus
 from yt_transcriber_bot.domain.value_objects.media_source import MediaSource
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
@@ -15,6 +16,19 @@ from yt_transcriber_bot.infrastructure.persistence.sqlalchemy.job_repository imp
 )
 
 pytestmark = pytest.mark.integration
+
+
+def _complete(job: Job) -> None:
+    for status in (
+        JobStatus.ACQUIRING,
+        JobStatus.CONVERTING,
+        JobStatus.TRANSCRIBING,
+        JobStatus.DIARIZING,
+        JobStatus.RENDERING,
+        JobStatus.DELIVERING,
+        JobStatus.COMPLETED,
+    ):
+        job.transition_to(status)
 
 
 def _completed_job(tmp_path: Path, *, user_id: int, video_id: str, body: str) -> Job:
@@ -28,11 +42,10 @@ def _completed_job(tmp_path: Path, *, user_id: int, video_id: str, body: str) ->
     job = Job.new(
         VideoId(video_id),
         user_id=user_id,
-        source_url=f"https://youtu.be/{video_id}",
         requested_language="pt",
     )
     job.md_path = str(path)
-    job.transition_to(JobStatus.COMPLETED)
+    _complete(job)
     return job
 
 
@@ -97,11 +110,13 @@ def test_telegram_search_index_omits_private_staging_path(tmp_path: Path) -> Non
         None,
         user_id=7,
         media_source=MediaSource.telegram_audio("private-file-id"),
-        source_url="/private/staging/secret-audio.ogg",
     )
     job.md_path = str(path)
-    job.transition_to(JobStatus.COMPLETED)
+    _complete(job)
     repo.save(job)
+    repo.save_request_context(
+        JobRequestContext(job.job_id, source_locator="/private/staging/secret-audio.ogg")
+    )
 
     assert repo.search_completed_for_user(user_id=7, query="secret-audio", limit=10) == []
     hits = repo.search_completed_for_user(user_id=7, query="Telegram", limit=10)

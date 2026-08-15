@@ -12,6 +12,7 @@ from sqlalchemy import Engine, Table, asc, create_engine, delete, desc, inspect,
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
+from yt_transcriber_bot.application.job_request_context import JobRequestContext
 from yt_transcriber_bot.application.ports.history_search import (
     HistorySearchHit,
     HistorySearchRepository,
@@ -48,12 +49,11 @@ def _to_model(job: Job, model: JobModel | None = None) -> JobModel:
     model.config_signature = job.config_signature
     model.source_type = media_source.source_type.value
     model.canonical_reference = media_source.canonical_reference
-    model.source_url = job.source_url
     model.source_title = job.source_title
     model.source_duration_seconds = job.source_duration_seconds
-    model.requested_chat_id = job.requested_chat_id
     model.requested_language = job.requested_language
     model.artifact_policy = job.artifact_policy
+    model.canonical_transcript_ref = job.canonical_transcript_ref
     model.set_renames(job.speaker_renames)
     model.md_path = job.md_path
     model.audio_path = job.audio_path
@@ -77,7 +77,7 @@ def _to_entity(model: JobModel) -> Job:
     return Job(
         job_id=model.job_id,
         video_id=video_id,
-        status=JobStatus(model.status),
+        status=JobStatus.from_persisted(model.status),
         requested_by_user_id=model.requested_by_user_id,
         requested_at=_ensure_aware(model.requested_at),
         updated_at=_ensure_aware(model.updated_at),
@@ -88,13 +88,12 @@ def _to_entity(model: JobModel) -> Job:
             canonical_reference=model.canonical_reference
             or (video_id.canonical_url() if video_id is not None else "telegram:legacy"),
         ),
-        source_url=model.source_url,
         source_title=model.source_title,
         source_duration_seconds=model.source_duration_seconds,
-        requested_chat_id=model.requested_chat_id,
         requested_language=model.requested_language,
         artifact_policy=model.artifact_policy,
         speaker_renames=model.renames_dict(),
+        canonical_transcript_ref=model.canonical_transcript_ref,
         md_path=model.md_path,
         audio_path=model.audio_path,
         log_path=model.log_path,
@@ -127,6 +126,25 @@ class SqlAlchemyJobRepository(JobRepository, HistorySearchRepository):
             session.add(model)
         if job.status is JobStatus.COMPLETED:
             self.refresh_search_index(job.job_id)
+
+    def save_request_context(self, context: JobRequestContext) -> None:
+        with self._session() as session, session.begin():
+            model = session.get(JobModel, context.job_id)
+            if model is None:
+                raise KeyError(f"job inexistente para request context: {context.job_id}")
+            model.requested_chat_id = context.delivery_chat_id
+            model.source_url = context.source_locator
+
+    def get_request_context(self, job_id: str) -> JobRequestContext | None:
+        with self._session() as session:
+            model = session.get(JobModel, job_id)
+            if model is None:
+                return None
+            return JobRequestContext(
+                job_id=job_id,
+                delivery_chat_id=model.requested_chat_id,
+                source_locator=model.source_url,
+            )
 
     def get_by_id(self, job_id: str) -> Job | None:
         with self._session() as session:
@@ -182,10 +200,13 @@ class SqlAlchemyJobRepository(JobRepository, HistorySearchRepository):
     def list_by_statuses_oldest_first(self, statuses: set[JobStatus]) -> list[Job]:
         if not statuses:
             return []
+        persisted_statuses = {status.value for status in statuses}
+        if JobStatus.ACQUIRING in statuses:
+            persisted_statuses.add("downloading")
         with self._session() as session:
             stmt = (
                 select(JobModel)
-                .where(JobModel.status.in_([status.value for status in statuses]))
+                .where(JobModel.status.in_(sorted(persisted_statuses)))
                 .order_by(asc(JobModel.requested_at))
             )
             models: Iterable[JobModel] = session.execute(stmt).scalars().all()
@@ -486,6 +507,7 @@ def _migrate_jobs_table(engine: Engine) -> None:
         "requested_chat_id": "INTEGER",
         "requested_language": "VARCHAR(16)",
         "artifact_policy": "VARCHAR(32) NOT NULL DEFAULT 'audio+markdown'",
+        "canonical_transcript_ref": "TEXT",
     }
     with engine.begin() as connection:
         for column_name, ddl in additive_columns.items():
@@ -505,6 +527,23 @@ def _migrate_jobs_table(engine: Engine) -> None:
                 "WHERE canonical_reference IS NULL OR canonical_reference = ''"
             )
         )
+        legacy_rows = connection.execute(
+            text(
+                "SELECT job_id, md_path FROM jobs "
+                "WHERE (canonical_transcript_ref IS NULL OR canonical_transcript_ref = '') "
+                "AND md_path IS NOT NULL AND md_path != ''"
+            )
+        ).mappings()
+        for row in legacy_rows:
+            legacy_ref = Path(str(row["md_path"])).stem
+            if legacy_ref:
+                connection.execute(
+                    text(
+                        "UPDATE jobs SET canonical_transcript_ref = :reference "
+                        "WHERE job_id = :job_id"
+                    ),
+                    {"reference": legacy_ref, "job_id": row["job_id"]},
+                )
     _make_video_id_nullable_if_needed(engine)
 
 

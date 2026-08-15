@@ -1,4 +1,4 @@
-"""Testes do TranscriptSnapshotRepository."""
+"""Testes do TranscriptSnapshotRepository v2 e compatibilidade v1."""
 
 from __future__ import annotations
 
@@ -8,21 +8,18 @@ from pathlib import Path
 
 import pytest
 
-from yt_transcriber_bot.domain.entities.transcript import (
-    Transcript,
-    TranscriptSegment,
-)
+from yt_transcriber_bot.domain.entities.transcript import Transcript, TranscriptSegment
 from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
 from yt_transcriber_bot.domain.value_objects.duration import Duration
-from yt_transcriber_bot.domain.value_objects.language import Language
+from yt_transcriber_bot.domain.value_objects.language import Language, LanguageSource
+from yt_transcriber_bot.domain.value_objects.provenance import ProcessingProvenance
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
 from yt_transcriber_bot.infrastructure.persistence.filesystem.transcript_snapshot import (
+    SCHEMA_VERSION,
     TranscriptSnapshot,
     TranscriptSnapshotRepository,
 )
-from yt_transcriber_bot.infrastructure.rendering.markdown_renderer import (
-    RenderContext,
-)
+from yt_transcriber_bot.infrastructure.rendering.markdown_renderer import RenderContext
 
 
 def _make_snapshot() -> TranscriptSnapshot:
@@ -44,6 +41,9 @@ def _make_snapshot() -> TranscriptSnapshot:
         language=Language("en"),
         language_confidence=0.97,
         source="whisperx",
+        observed_language=Language("en"),
+        observed_language_confidence=0.97,
+        language_source=LanguageSource.ASR,
     )
     context = RenderContext(
         rendered_at=datetime(2026, 5, 1, 12, 0, tzinfo=UTC),
@@ -51,26 +51,38 @@ def _make_snapshot() -> TranscriptSnapshot:
         diarization_model="pyannote/speaker-diarization-3.1",
         transcription_source="whisperx",
     )
-    return TranscriptSnapshot(metadata=metadata, transcript=transcript, context=context)
+    return TranscriptSnapshot(
+        metadata=metadata,
+        transcript=transcript,
+        context=context,
+        processing_fingerprint="fingerprint-v1",
+        processing_provenance=ProcessingProvenance(
+            processing_path="audio_asr",
+            transcription_backend="whisperx",
+            transcription_model="small",
+            device="cpu",
+            compute_type="int8",
+            asr_fallback_used=False,
+            diarization_backend="composite",
+            diarization_model="pyannote/speaker-diarization-community-1",
+            language_source="asr",
+        ),
+    )
 
 
-def test_round_trip(tmp_path: Path) -> None:
+def test_round_trip_v2_preserves_canonical_facts(tmp_path: Path) -> None:
     repo = TranscriptSnapshotRepository(tmp_path)
     snap = _make_snapshot()
-    p = repo.save("hello-world", snap)
-    assert p.is_file()
+
+    path = repo.save("hello-world", snap)
+    persisted = json.loads(path.read_text(encoding="utf-8"))
     loaded = repo.load("hello-world")
+
+    assert persisted["schema_version"] == SCHEMA_VERSION == 2
+    assert loaded == snap
     assert loaded is not None
-    # Round-trip preserva campos críticos
-    assert loaded.metadata.title == snap.metadata.title
-    assert loaded.metadata.video_id == snap.metadata.video_id
-    assert loaded.metadata.original_language == snap.metadata.original_language
-    assert loaded.metadata.upload_date == snap.metadata.upload_date
-    assert loaded.transcript.language == snap.transcript.language
-    assert loaded.transcript.language_confidence == pytest.approx(0.97)
-    assert len(loaded.transcript.segments) == 2
-    assert loaded.transcript.segments[0].text == "Hello"
-    assert loaded.context.whisper_model == "small"
+    assert loaded.processing_fingerprint == "fingerprint-v1"
+    assert loaded.processing_provenance.transcription_model == "small"
 
 
 def test_youtube_snapshot_round_trip_preserves_video_identity(tmp_path: Path) -> None:
@@ -85,9 +97,7 @@ def test_youtube_snapshot_round_trip_preserves_video_identity(tmp_path: Path) ->
     assert repo.load("youtube") == snap
 
 
-def test_telegram_snapshot_does_not_persist_synthetic_youtube_identity(
-    tmp_path: Path,
-) -> None:
+def test_telegram_snapshot_does_not_persist_synthetic_youtube_identity(tmp_path: Path) -> None:
     repo = TranscriptSnapshotRepository(tmp_path)
     original = _make_snapshot()
     snap = TranscriptSnapshot(
@@ -105,19 +115,17 @@ def test_telegram_snapshot_does_not_persist_synthetic_youtube_identity(
     )
 
     path = repo.save("telegram-audio", snap)
-
     persisted = json.loads(path.read_text(encoding="utf-8"))
-    metadata = persisted["metadata"]
-    assert "video_id" not in metadata
-    assert "source_reference" not in metadata
-    assert "youtube" not in path.read_text(encoding="utf-8").lower()
+
+    assert "video_id" not in persisted["metadata"]
+    assert "source_reference" not in persisted["metadata"]
     loaded = repo.load("telegram-audio")
     assert loaded is not None
     assert loaded.metadata.video_id is None
     assert loaded.metadata.source_label == "Telegram (mídia privada)"
 
 
-def test_loads_legacy_snapshot_with_video_id(tmp_path: Path) -> None:
+def test_loads_legacy_v1_snapshot_with_unknown_provenance(tmp_path: Path) -> None:
     repo = TranscriptSnapshotRepository(tmp_path)
     legacy = {
         "schema_version": 1,
@@ -152,45 +160,57 @@ def test_loads_legacy_snapshot_with_video_id(tmp_path: Path) -> None:
     assert loaded is not None
     assert loaded.metadata.video_id == VideoId("dQw4w9WgXcQ")
     assert loaded.metadata.source_label == "YouTube"
+    assert loaded.processing_fingerprint == ""
+    assert loaded.processing_provenance == ProcessingProvenance.unknown()
+    assert loaded.transcript.language_source is LanguageSource.UNKNOWN
+
+
+def test_unknown_duration_language_and_confidence_round_trip_as_unknown(tmp_path: Path) -> None:
+    repo = TranscriptSnapshotRepository(tmp_path)
+    original = _make_snapshot()
+    snapshot = TranscriptSnapshot(
+        metadata=VideoMetadata(
+            video_id=VideoId("dQw4w9WgXcQ"),
+            title="Unknown facts",
+            channel="Channel",
+            duration=None,
+            upload_date=None,
+            original_language=None,
+        ),
+        transcript=Transcript(
+            segments=original.transcript.segments,
+            language=None,
+            language_confidence=None,
+        ),
+        context=original.context,
+    )
+
+    repo.save("unknown", snapshot)
+    loaded = repo.load("unknown")
+
+    assert loaded is not None
+    assert loaded.metadata.duration is None
+    assert loaded.metadata.original_language is None
+    assert loaded.transcript.language is None
+    assert loaded.transcript.language_confidence is None
+
+
+def test_atomic_save_leaves_no_temp_file(tmp_path: Path) -> None:
+    repo = TranscriptSnapshotRepository(tmp_path)
+    path = repo.save("atomic", _make_snapshot())
+
+    assert path.exists()
+    assert not list(tmp_path.glob("*.tmp"))
+    assert not list(tmp_path.glob(".*.tmp"))
 
 
 def test_load_missing_returns_none(tmp_path: Path) -> None:
-    repo = TranscriptSnapshotRepository(tmp_path)
-    assert repo.load("ghost") is None
+    assert TranscriptSnapshotRepository(tmp_path).load("ghost") is None
 
 
 def test_unsupported_schema_version(tmp_path: Path) -> None:
     repo = TranscriptSnapshotRepository(tmp_path)
     repo.path_for("x").parent.mkdir(parents=True, exist_ok=True)
-    repo.path_for("x").write_text('{"schema_version": 999}')
+    repo.path_for("x").write_text('{"schema_version": 999}', encoding="utf-8")
     with pytest.raises(ValueError, match="schema_version"):
         repo.load("x")
-
-
-def test_handles_optional_fields(tmp_path: Path) -> None:
-    """upload_date e original_language podem ser None."""
-    metadata = VideoMetadata(
-        video_id=VideoId("dQw4w9WgXcQ"),
-        title="No Date",
-        channel="Ch",
-        duration=Duration.from_seconds(60.0),
-        upload_date=None,
-        original_language=None,
-    )
-    transcript = Transcript(
-        segments=(TranscriptSegment(0.0, 1.0, "x", "SPEAKER_00"),),
-        language=Language("en"),
-        language_confidence=0.5,
-    )
-    context = RenderContext(
-        rendered_at=datetime(2026, 1, 1, tzinfo=UTC),
-        whisper_model="base",
-        diarization_model="m",
-        transcription_source="whisperx",
-    )
-    repo = TranscriptSnapshotRepository(tmp_path)
-    repo.save("no-date", TranscriptSnapshot(metadata, transcript, context))
-    loaded = repo.load("no-date")
-    assert loaded is not None
-    assert loaded.metadata.upload_date is None
-    assert loaded.metadata.original_language is None

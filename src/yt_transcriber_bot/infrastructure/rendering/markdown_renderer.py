@@ -84,7 +84,16 @@ class MarkdownTranscriptRenderer:
         speaker_labels = transcript.speaker_labels()
         speakers = len(speaker_labels)
         display_speakers = len({self._display_speaker(label, aliases) for label in speaker_labels})
-        confidence_pct = f"{transcript.language_confidence * 100:.1f}%"
+        duration = metadata.duration.to_hms() if metadata.duration else "desconhecida"
+        language = transcript.language.code if transcript.language else "desconhecido"
+        confidence = (
+            f"{transcript.language_confidence * 100:.1f}%"
+            if transcript.language_confidence is not None
+            else "não informada"
+        )
+        language_detail = f"{language} (confiança: {confidence})"
+        if transcript.requested_language is not None:
+            language_detail += f"; solicitado: {transcript.requested_language.code}"
         source_label = {
             "whisperx": "WhisperX",
             "youtube_manual": "Legendas manuais do YouTube",
@@ -100,13 +109,13 @@ class MarkdownTranscriptRenderer:
                 else f"**Origem**: {metadata.source_label}"
             ),
             f"**Canal**: {metadata.channel}",
-            f"**Duração**: {metadata.duration.to_hms()}",
+            f"**Duração**: {duration}",
             f"**Data do vídeo**: {upload}",
             f"**Data da transcrição**: {rendered}",
             f"**Fonte da transcrição**: {source_label}",
             f"**Modelo Whisper**: {context.whisper_model}",
             f"**Modelo de diarização**: {context.diarization_model}",
-            f"**Idioma detectado**: {transcript.language.code} (confiança: {confidence_pct})",
+            f"**Idioma da transcrição**: {language_detail}",
             f"**Falantes identificados**: {speakers}",
         ]
         if aliases and display_speakers != speakers:

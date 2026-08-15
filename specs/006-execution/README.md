@@ -32,6 +32,8 @@ Current execution state:
 
 - F0 — executable baseline: **Verified / Closed**;
 - F1 — security guardrails: **Verified / Closed**;
-- F2 — domain and data truth: **next approved execution phase**.
+- F2 — domain and data truth: **Verified / Closed**;
+- F3 — hexagonal boundaries: **next approved execution phase**.
 
-Detailed evidence is recorded in `F0-BASELINE.md` and `F1-SECURITY.md`.
+Detailed evidence is recorded in `F0-BASELINE.md`, `F1-SECURITY.md`, and
+`F2-DOMAIN-DATA.md`.

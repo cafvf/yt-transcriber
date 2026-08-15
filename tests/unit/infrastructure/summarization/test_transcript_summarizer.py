@@ -155,7 +155,7 @@ def test_summary_service_preserves_markdown_structure_while_cleaning_summary_bod
     )
 
 
-def test_summary_service_normalizes_entities_and_skips_zero_duration_segments(
+def test_summary_service_normalizes_entities_from_canonical_segments(
     tmp_path: Path,
 ) -> None:
     repo = TranscriptSnapshotRepository(tmp_path / "segments")
@@ -171,10 +171,7 @@ def test_summary_service_normalizes_entities_and_skips_zero_duration_segments(
                 original_language=Language("pt"),
             ),
             transcript=Transcript(
-                segments=(
-                    TranscriptSegment(0, 0, "Ghost", "UNKNOWN"),
-                    TranscriptSegment(0, 3, "Ol&aacute;&nbsp;mundo", "SPEAKER_00"),
-                ),
+                segments=(TranscriptSegment(0, 3, "Ol&aacute;&nbsp;mundo", "SPEAKER_00"),),
                 language=Language("pt"),
                 language_confidence=0.95,
                 source="youtube_manual",
@@ -199,8 +196,6 @@ def test_summary_service_normalizes_entities_and_skips_zero_duration_segments(
     prompt = fake.requests[0].user_prompt
     assert "Olá mundo" in prompt
     assert "&nbsp;" not in prompt
-    assert "UNKNOWN" not in prompt
-    assert "[00:00:00 — 00:00:00]" not in prompt
 
 
 def test_summary_service_uses_map_reduce_for_long_transcript(tmp_path: Path) -> None:

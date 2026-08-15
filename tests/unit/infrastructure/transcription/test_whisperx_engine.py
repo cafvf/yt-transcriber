@@ -197,9 +197,6 @@ class TestLanguageEnforcement:
             ("PT", ("pt", "en"), "pt"),
             ("pt-BR", ("pt", "en"), "pt"),
             ("en-US", ("pt", "en"), "en"),
-            ("es", ("pt", "en"), "pt"),  # fallback para o primeiro
-            ("fr", ("pt", "en"), "pt"),  # fallback
-            ("ja", ("en", "pt"), "en"),  # fallback respeita ordem
         ],
     )
     def test_enforcement(
@@ -219,6 +216,44 @@ class TestLanguageEnforcement:
             allowed_languages=allowed,
         )
         assert result.detected_language.code == expected
+
+    @pytest.mark.parametrize("detected", ["es", "fr", "ja"])
+    def test_unsupported_observed_language_is_explicit_error(
+        self, tmp_path: Path, detected: str
+    ) -> None:
+        backend = FakeBackend(raw=_ok_raw(detected), aligned=_ok_aligned())
+        engine = WhisperXTranscriptionEngine(backend=backend)
+
+        with pytest.raises(TranscriptionError, match="não suportado"):
+            engine.transcribe(
+                _make_audio(tmp_path),
+                device=Device.cpu(),
+                compute_type=ComputeType.from_string("int8"),
+                model=ModelName(name="small"),
+                allowed_languages=("pt", "en"),
+            )
+
+    def test_forced_language_is_not_reported_as_detector_confidence(self, tmp_path: Path) -> None:
+        backend = FakeBackend(raw=_ok_raw("es", 0.88), aligned=_ok_aligned())
+        engine = WhisperXTranscriptionEngine(backend=backend)
+
+        result = engine.transcribe(
+            _make_audio(tmp_path),
+            device=Device.cpu(),
+            compute_type=ComputeType.from_string("int8"),
+            model=ModelName(name="small"),
+            allowed_languages=("pt", "en"),
+            language_hint="pt",
+        )
+
+        assert result.detected_language is not None
+        assert result.detected_language.code == "pt"
+        assert result.language_confidence is None
+        assert result.requested_language is not None
+        assert result.requested_language.code == "pt"
+        assert result.observed_language is not None
+        assert result.observed_language.code == "es"
+        assert result.observed_language_confidence == pytest.approx(0.88)
 
 
 class TestErrorMapping:

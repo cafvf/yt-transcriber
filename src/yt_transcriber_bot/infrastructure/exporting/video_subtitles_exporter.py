@@ -108,6 +108,10 @@ class VideoSoftSubtitleExportService:
         snap = self._snapshots.load(slug)
         if snap is None:
             raise FileNotFoundError(f"Snapshot inexistente: {slug}")
+        if snap.metadata.duration is None:
+            raise VideoSubtitleExportError(
+                "Snapshot sem duração conhecida; não é seguro validar o limite do vídeo."
+            )
         duration_s = snap.metadata.duration.total_seconds
         if duration_s > self._limits.max_duration_seconds:
             raise VideoSubtitleTooLongError(

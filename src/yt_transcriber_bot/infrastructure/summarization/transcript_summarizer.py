@@ -433,7 +433,7 @@ class TranscriptSummaryService:
         return self._chat_client.complete(
             ChatCompletionRequest(
                 system_prompt=_system_prompt(
-                    self._output_language, snap.transcript.language.code, self._disable_thinking
+                    self._output_language, _transcript_language_code(snap), self._disable_thinking
                 ),
                 user_prompt=_single_pass_prompt(snap, transcript_text),
                 max_tokens=self._final_max_tokens,
@@ -446,7 +446,7 @@ class TranscriptSummaryService:
         return self._chat_client.complete(
             ChatCompletionRequest(
                 system_prompt=_system_prompt(
-                    self._output_language, snap.transcript.language.code, self._disable_thinking
+                    self._output_language, _transcript_language_code(snap), self._disable_thinking
                 ),
                 user_prompt=_chunk_prompt(snap, chunk, index, total),
                 max_tokens=self._partial_max_tokens,
@@ -458,7 +458,7 @@ class TranscriptSummaryService:
         return self._chat_client.complete(
             ChatCompletionRequest(
                 system_prompt=_system_prompt(
-                    self._output_language, snap.transcript.language.code, self._disable_thinking
+                    self._output_language, _transcript_language_code(snap), self._disable_thinking
                 ),
                 user_prompt=_synthesis_prompt(snap, joined),
                 max_tokens=self._final_max_tokens,
@@ -934,6 +934,12 @@ def _word_spans(text: str) -> list[tuple[str, int, int]]:
     ]
 
 
+def _transcript_language_code(snap: TranscriptSnapshot) -> str:
+    """Retorna o idioma conhecido sem fabricar um fato ausente."""
+
+    return snap.transcript.language.code if snap.transcript.language else "desconhecido"
+
+
 def _wrap_summary_markdown(
     snap: TranscriptSnapshot,
     body: str,
@@ -945,6 +951,8 @@ def _wrap_summary_markdown(
 ) -> str:
     m = snap.metadata
     generated_at = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
+    duration = m.duration.to_hms() if m.duration else "desconhecida"
+    language = _transcript_language_code(snap)
     source_line = (
         f"**URL**: {m.canonical_url()}\n"
         if m.source_label == "YouTube"
@@ -954,8 +962,8 @@ def _wrap_summary_markdown(
         f"# Resumo — {m.title}\n\n"
         f"{source_line}"
         f"**Canal**: {m.channel}\n"
-        f"**Duração**: {m.duration.to_hms()}\n"
-        f"**Idioma da transcrição**: {snap.transcript.language.code}\n"
+        f"**Duração**: {duration}\n"
+        f"**Idioma da transcrição**: {language}\n"
         f"**Fonte da transcrição**: {snap.context.transcription_source}\n"
         f"**Modelo de transcrição**: {snap.context.whisper_model}\n"
         f"**Modelo de sumarização**: {model}\n"

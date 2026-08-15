@@ -91,8 +91,8 @@ def _render_json(snap: TranscriptSnapshot, aliases: Mapping[str, str]) -> str:
     metadata = {
         "title": m.title,
         "channel": m.channel,
-        "duration_seconds": m.duration.total_seconds,
-        "duration_hms": m.duration.to_hms(),
+        "duration_seconds": m.duration.total_seconds if m.duration else None,
+        "duration_hms": m.duration.to_hms() if m.duration else None,
         "upload_date": m.upload_date.isoformat() if m.upload_date else None,
         "original_language": m.original_language.code if m.original_language else None,
         "has_alternate_audio_tracks": m.has_alternate_audio_tracks,
@@ -107,8 +107,12 @@ def _render_json(snap: TranscriptSnapshot, aliases: Mapping[str, str]) -> str:
         "format": "yt_transcriber_bot.transcript_export",
         "metadata": metadata,
         "transcript": {
-            "language": t.language.code,
+            "language": t.language.code if t.language else None,
             "language_confidence": t.language_confidence,
+            "language_source": t.language_source.value,
+            "requested_language": t.requested_language.code if t.requested_language else None,
+            "observed_language": t.observed_language.code if t.observed_language else None,
+            "observed_language_confidence": t.observed_language_confidence,
             "source": t.source,
             "speaker_aliases": dict(aliases),
             "segments": [

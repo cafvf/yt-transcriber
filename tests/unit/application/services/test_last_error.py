@@ -44,7 +44,15 @@ def _failed_job(user_id: int, when: datetime, *, error: str) -> Job:
 def _delivery_failed_job(user_id: int, when: datetime, *, error: str) -> Job:
     job = Job.new(VideoId("dQw4w9WgXcQ"), user_id)
     object.__setattr__(job, "requested_at", when)
-    job.transition_to(JobStatus.DELIVERING)
+    for status in (
+        JobStatus.ACQUIRING,
+        JobStatus.CONVERTING,
+        JobStatus.TRANSCRIBING,
+        JobStatus.DIARIZING,
+        JobStatus.RENDERING,
+        JobStatus.DELIVERING,
+    ):
+        job.transition_to(status)
     job.transition_to(JobStatus.DELIVERY_FAILED, error=error)
     object.__setattr__(job, "updated_at", when)
     return job

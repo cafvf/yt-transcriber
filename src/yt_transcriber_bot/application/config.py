@@ -6,7 +6,6 @@ Parâmetros não-sensíveis podem vir de ``.env`` ou variáveis de ambiente.
 
 from __future__ import annotations
 
-import hashlib
 import os
 from pathlib import Path
 from typing import Any
@@ -443,25 +442,13 @@ class AppSettings(BaseSettings):
         return self.base_dir / self.summaries_dir_name
 
     def transcription_signature(self) -> str:
-        """Hash que muda quando parâmetros que afetam a transcrição mudam.
+        """Nome compatível para o fingerprint canônico de processamento."""
 
-        Usado para detectar quando um vídeo cacheado foi processado com
-        configurações diferentes das atuais.
-        """
-        content = "|".join(
-            [
-                f"model={self.whisper_model}",
-                f"model_pt={self.whisper_model_pt}",
-                f"model_en={self.whisper_model_en}",
-                f"model_default={self.whisper_model_default}",
-                f"device={self.device}",
-                f"compute={self.compute_type}",
-                f"bitrate={self.audio_bitrate_kbps}",
-                f"sr={self.audio_sample_rate_hz}",
-                f"langs={','.join(sorted(self.allowed_languages))}",
-            ]
+        from yt_transcriber_bot.application.services.config_signature import (
+            compute_processing_fingerprint,
         )
-        return hashlib.sha256(content.encode()).hexdigest()[:16]
+
+        return compute_processing_fingerprint(self)
 
     def validate_runtime_secrets(self) -> list[str]:
         """Devolve a lista de erros se segredos obrigatórios estiverem ausentes."""

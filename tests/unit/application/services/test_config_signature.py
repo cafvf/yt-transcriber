@@ -1,4 +1,4 @@
-"""Testes do compute_config_signature, describe_config e diff_configs."""
+"""Testes do fingerprint canônico de processamento."""
 
 from __future__ import annotations
 
@@ -6,70 +6,97 @@ from pathlib import Path
 
 from yt_transcriber_bot.application.config import AppSettings
 from yt_transcriber_bot.application.services.config_signature import (
+    PROCESSING_FINGERPRINT_VERSION,
+    SIGNIFICANT_FIELDS,
     compute_config_signature,
+    compute_processing_fingerprint,
     describe_config,
     diff_configs,
+    processing_fingerprint_payload,
 )
 
 
-def _make_settings(tmp_path: Path, **overrides: object) -> AppSettings:
-    base = {
-        "telegram_bot_token": "x",
+def _settings(tmp_path: Path, **kwargs: object) -> AppSettings:
+    values: dict[str, object] = {
+        "telegram_bot_token": "token-for-test",
         "telegram_allowed_user_id": 42,
-        "hf_token": "x",
-        "data_dir": tmp_path / "data",
+        "hf_token": "hf_test",
+        "base_dir": tmp_path / "data",
         "models_dir": tmp_path / "models",
-        "logs_dir": tmp_path / "logs",
     }
-    base.update(overrides)
-    return AppSettings(**base)  # type: ignore[arg-type]
+    values.update(kwargs)
+    return AppSettings(**values)
 
 
-def test_signature_is_stable(tmp_path: Path) -> None:
-    a = _make_settings(tmp_path)
-    b = _make_settings(tmp_path)
-    assert compute_config_signature(a) == compute_config_signature(b)
+def test_compatibility_signature_delegates_to_single_processing_fingerprint(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    assert settings.transcription_signature() == compute_processing_fingerprint(settings)
+    assert compute_config_signature(settings) == compute_processing_fingerprint(settings)
 
 
-def test_signature_changes_when_model_changes(tmp_path: Path) -> None:
-    a = _make_settings(tmp_path, whisper_model="small")
-    b = _make_settings(tmp_path, whisper_model="medium")
-    assert compute_config_signature(a) != compute_config_signature(b)
+def test_fingerprint_is_stable_for_same_output_significant_inputs(tmp_path: Path) -> None:
+    first = _settings(tmp_path)
+    second = _settings(tmp_path)
+    assert compute_processing_fingerprint(first) == compute_processing_fingerprint(second)
 
 
-def test_signature_unchanged_for_irrelevant_fields(tmp_path: Path) -> None:
-    a = _make_settings(tmp_path, telegram_message_edit_min_interval_s=2.0)
-    b = _make_settings(tmp_path, telegram_message_edit_min_interval_s=5.0)
-    assert compute_config_signature(a) == compute_config_signature(b)
+def test_fingerprint_changes_for_asr_audio_language_and_source_policy(tmp_path: Path) -> None:
+    base = _settings(tmp_path)
+    variants = (
+        _settings(tmp_path, whisper_model="small"),
+        _settings(tmp_path, audio_bitrate_kbps=64),
+        _settings(tmp_path, allowed_languages=("en",)),
+        _settings(tmp_path, prefer_youtube_subtitles=False),
+    )
+    baseline = compute_processing_fingerprint(base)
+    assert all(compute_processing_fingerprint(item) != baseline for item in variants)
 
 
-def test_describe_returns_significant_fields(tmp_path: Path) -> None:
-    s = _make_settings(tmp_path, whisper_model="medium", device="cuda")
-    desc = describe_config(s)
-    assert desc["whisper_model"] == "medium"
-    assert desc["device"] == "cuda"
-    assert "telegram_bot_token" not in desc
+def test_fingerprint_changes_with_request_language(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    auto = compute_processing_fingerprint(settings)
+    forced = compute_processing_fingerprint(settings, requested_language="pt")
+    assert forced != auto
 
 
-def test_diff_returns_only_changed_fields(tmp_path: Path) -> None:
-    a = describe_config(_make_settings(tmp_path, whisper_model="small", device="cpu"))
-    b = describe_config(_make_settings(tmp_path, whisper_model="medium", device="cpu"))
-    changes = diff_configs(a, b)
-    assert len(changes) == 1
-    assert changes[0].field == "whisper_model"
+def test_fingerprint_changes_with_media_source_type(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    youtube = compute_processing_fingerprint(settings, source_type="youtube")
+    telegram = compute_processing_fingerprint(settings, source_type="telegram_audio")
+    assert youtube != telegram
+
+
+def test_credentials_paths_and_operational_settings_do_not_change_fingerprint(
+    tmp_path: Path,
+) -> None:
+    base = _settings(tmp_path)
+    changed = _settings(
+        tmp_path,
+        telegram_bot_token="another-token",
+        hf_token="hf_another",
+        summary_api_key="private-key",
+        base_dir=tmp_path / "another-data",
+        models_dir=tmp_path / "another-models",
+        retention_count=99,
+        telegram_message_edit_min_interval_s=5.0,
+    )
+    assert compute_processing_fingerprint(base) == compute_processing_fingerprint(changed)
+
+
+def test_payload_is_versioned_and_contains_declared_significant_fields(tmp_path: Path) -> None:
+    payload = processing_fingerprint_payload(_settings(tmp_path))
+    assert payload["fingerprint_version"] == PROCESSING_FINGERPRINT_VERSION == 1
+    for field in SIGNIFICANT_FIELDS:
+        assert field in payload
+    assert "telegram_bot_token" not in payload
+    assert "hf_token" not in payload
+    assert "base_dir" not in payload
+
+
+def test_describe_config_and_diff_keep_compatibility_api(tmp_path: Path) -> None:
+    old = describe_config(_settings(tmp_path, whisper_model="small"))
+    new = describe_config(_settings(tmp_path, whisper_model="medium"))
+    changes = diff_configs(old, new)
+    assert [change.field for change in changes] == ["whisper_model"]
     assert changes[0].old_value == "small"
     assert changes[0].new_value == "medium"
-
-
-def test_diff_empty_when_equal(tmp_path: Path) -> None:
-    a = describe_config(_make_settings(tmp_path))
-    b = describe_config(_make_settings(tmp_path))
-    assert diff_configs(a, b) == ()
-
-
-def test_diff_handles_missing_field() -> None:
-    """Se uma das versões não tiver um campo, marca <n/a>."""
-    a = {"whisper_model": "small"}
-    b = {"whisper_model": "small", "device": "cuda"}
-    changes = diff_configs(a, b)
-    assert any(c.field == "device" and c.old_value == "<n/a>" for c in changes)

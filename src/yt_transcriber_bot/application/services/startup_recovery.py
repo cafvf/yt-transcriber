@@ -1,15 +1,19 @@
-"""Startup recovery semantics for durable queue/restart behavior."""
+"""Startup recovery com contexto de entrega separado e validação source-specific."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
+from yt_transcriber_bot.application.job_request_context import JobRequestContext
 from yt_transcriber_bot.application.ports.job_repository import JobRepository
 from yt_transcriber_bot.domain.entities.job import Job, JobStatus
+from yt_transcriber_bot.domain.value_objects.media_source import MediaSourceType
+from yt_transcriber_bot.domain.value_objects.video_id import InvalidYouTubeUrlError, VideoId
 
 _INTERRUPTED_ACTIVE_STATES = frozenset(
     {
-        JobStatus.DOWNLOADING,
+        JobStatus.ACQUIRING,
         JobStatus.CONVERTING,
         JobStatus.TRANSCRIBING,
         JobStatus.DIARIZING,
@@ -26,7 +30,7 @@ class StartupRecoveryResult:
 
 
 class StartupRecoveryService:
-    """Repairs interrupted jobs and selects safe pending jobs to requeue."""
+    """Repara jobs interrompidos e seleciona pending recuperáveis."""
 
     def __init__(self, repository: JobRepository) -> None:
         self._repository = repository
@@ -37,7 +41,8 @@ class StartupRecoveryService:
         interrupted_delivery_failed: list[Job] = []
 
         for job in self._repository.list_by_statuses_oldest_first({JobStatus.PENDING}):
-            if self._has_restart_payload(job):
+            request_context = self._repository.get_request_context(job.job_id)
+            if self._has_restart_payload(job, request_context):
                 pending_to_requeue.append(job)
                 continue
             job.transition_to(
@@ -79,11 +84,31 @@ class StartupRecoveryService:
         )
 
     @staticmethod
-    def _has_restart_payload(job: Job) -> bool:
-        return bool(
-            job.source_url
-            and job.source_url.strip()
-            and job.requested_chat_id is not None
-            and job.artifact_policy
-            and job.artifact_policy.strip()
-        )
+    def _has_restart_payload(job: Job, request_context: JobRequestContext | None) -> bool:
+        if (
+            request_context is None
+            or request_context.delivery_chat_id is None
+            or not job.artifact_policy.strip()
+            or not request_context.source_locator
+            or not request_context.source_locator.strip()
+            or job.media_source is None
+        ):
+            return False
+
+        if job.media_source.source_type is MediaSourceType.YOUTUBE:
+            if job.video_id is None:
+                return False
+            try:
+                return VideoId.from_url(request_context.source_locator) == job.video_id
+            except (InvalidYouTubeUrlError, ValueError):
+                return False
+
+        if job.media_source.source_type is MediaSourceType.TELEGRAM_AUDIO:
+            if job.source_duration_seconds is None or job.source_duration_seconds <= 0:
+                return False
+            try:
+                return Path(request_context.source_locator).is_file()
+            except OSError:
+                return False
+
+        return False

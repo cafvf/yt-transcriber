@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,7 @@ from yt_transcriber_bot.domain.value_objects.video_id import VideoId
 from yt_transcriber_bot.infrastructure.exporting.transcript_exporter import TranscriptExportService
 from yt_transcriber_bot.infrastructure.exporting.video_subtitles_exporter import (
     VideoSoftSubtitleExportService,
+    VideoSubtitleExportError,
     VideoSubtitleExportLimits,
     VideoSubtitleTooLargeError,
     VideoSubtitleTooLongError,
@@ -122,6 +124,21 @@ def test_export_creates_mp4_with_selectable_subtitle_ffmpeg_command(tmp_path: Pa
 def test_export_rejects_videos_longer_than_30_minutes(tmp_path: Path) -> None:
     service, _ = _service(tmp_path, duration_s=31 * 60)
     with pytest.raises(VideoSubtitleTooLongError):
+        service.export(video_id=VideoId("dQw4w9WgXcQ"), slug="video")
+
+
+def test_export_rejects_unknown_duration_explicitly(tmp_path: Path) -> None:
+    snapshots = TranscriptSnapshotRepository(tmp_path / "segments")
+    snap = _snapshot()
+    snapshots.save("video", replace(snap, metadata=replace(snap.metadata, duration=None)))
+    service = VideoSoftSubtitleExportService(
+        snapshots=snapshots,
+        transcript_exporter=TranscriptExportService(snapshots),
+        ydl_factory=lambda params: FakeYDL(params),
+        output_dir=tmp_path / "video_exports",
+    )
+
+    with pytest.raises(VideoSubtitleExportError, match="duração conhecida"):
         service.export(video_id=VideoId("dQw4w9WgXcQ"), slug="video")
 
 

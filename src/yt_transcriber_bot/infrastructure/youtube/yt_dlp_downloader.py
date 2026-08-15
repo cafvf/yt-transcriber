@@ -234,8 +234,16 @@ class YtDlpDownloader(YouTubeDownloader):
         if not channel:
             raise YouTubeError("metadados sem canal")
 
-        duration_raw = info.get("duration") or 0
-        duration = Duration.from_seconds(int(duration_raw))
+        duration_raw = info.get("duration")
+        try:
+            duration_seconds = float(duration_raw) if duration_raw is not None else None
+        except (TypeError, ValueError):
+            duration_seconds = None
+        duration = (
+            Duration.from_seconds(duration_seconds)
+            if duration_seconds is not None and duration_seconds > 0
+            else None
+        )
 
         upload_date_raw = info.get("upload_date")
         upload_dt: date | None
@@ -259,7 +267,7 @@ class YtDlpDownloader(YouTubeDownloader):
         )
 
     @staticmethod
-    def _infer_original_language(info: dict[str, Any]) -> Language:
+    def _infer_original_language(info: dict[str, Any]) -> Language | None:
         # Prioridade 1: faixa de áudio com sufixo ``-orig`` ou flag ``original=True``.
         formats = info.get("formats") or []
         if isinstance(formats, list):
@@ -277,8 +285,8 @@ class YtDlpDownloader(YouTubeDownloader):
         if re.match(r"^[a-z]{2}$", top_lang):
             return Language(code=top_lang)
 
-        # Fallback: en.
-        return Language.en()
+        # Ausência de evidência permanece desconhecida; nunca inventar inglês.
+        return None
 
     @staticmethod
     def _collect_alternate_languages(

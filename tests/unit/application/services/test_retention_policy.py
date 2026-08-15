@@ -42,7 +42,16 @@ def _job_at(tmp_path: Path, idx: int) -> Job:
     base = datetime(2024, 1, 1, tzinfo=UTC)
     object.__setattr__(job, "requested_at", base + timedelta(hours=idx))
     object.__setattr__(job, "updated_at", base + timedelta(hours=idx))
-    job.transition_to(JobStatus.COMPLETED)
+    for status in (
+        JobStatus.ACQUIRING,
+        JobStatus.CONVERTING,
+        JobStatus.TRANSCRIBING,
+        JobStatus.DIARIZING,
+        JobStatus.RENDERING,
+        JobStatus.DELIVERING,
+        JobStatus.COMPLETED,
+    ):
+        job.transition_to(status)
     job.audio_path = str(audio)
     job.log_path = str(log)
     job.md_path = str(md)
@@ -73,9 +82,9 @@ def test_expires_oldest_when_over_limit(tmp_path: Path) -> None:
     assert len(result.expired_jobs) == 2
     assert result.expired_jobs[0] == jobs[0].job_id
     assert result.expired_jobs[1] == jobs[1].job_id
-    assert not Path(jobs[0].audio_path or "").exists()
-    assert not Path(jobs[0].log_path or "").exists()
-    assert not Path(jobs[1].audio_path or "").exists()
+    assert jobs[0].audio_path is None
+    assert jobs[0].log_path is None
+    assert jobs[1].audio_path is None
     for job in jobs[2:]:
         assert Path(job.audio_path or "").exists()
 
@@ -108,11 +117,18 @@ def test_requires_explicit_owned_root() -> None:
 
 def test_max_jobs_one(tmp_path: Path) -> None:
     jobs = [_job_at(tmp_path, i) for i in range(3)]
+    first_audio = Path(jobs[0].audio_path or "")
+    second_audio = Path(jobs[1].audio_path or "")
+    kept_audio = Path(jobs[2].audio_path or "")
+
     result = _policy(FakeRepo(jobs), tmp_path, max_jobs=1).apply()
+
     assert len(result.expired_jobs) == 2
-    assert Path(jobs[-1].audio_path or "").exists()
-    assert not Path(jobs[0].audio_path or "").exists()
-    assert not Path(jobs[1].audio_path or "").exists()
+    assert jobs[0].audio_path is None
+    assert jobs[1].audio_path is None
+    assert not first_audio.exists()
+    assert not second_audio.exists()
+    assert kept_audio.exists()
 
 
 def test_retention_refuses_persisted_path_outside_owned_root(tmp_path: Path) -> None:
@@ -127,7 +143,8 @@ def test_retention_refuses_persisted_path_outside_owned_root(tmp_path: Path) -> 
 
     assert outside.read_text(encoding="utf-8") == "keep"
     assert outside not in result.removed_files
-    assert not Path(jobs[0].audio_path or "").exists()
+    assert jobs[0].audio_path is None
+    assert jobs[0].log_path is None
 
 
 def test_retention_refuses_symlink_escape(tmp_path: Path) -> None:

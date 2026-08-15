@@ -92,13 +92,12 @@ def test_plain_text_telegram_source_omits_synthetic_youtube_identity(tmp_path: P
     assert "youtube.com" not in rendered
 
 
-def test_export_filters_invalid_segments_and_keeps_only_transcript_text(tmp_path: Path) -> None:
+def test_export_filters_blank_segments_and_keeps_only_transcript_text(tmp_path: Path) -> None:
     snapshots = TranscriptSnapshotRepository(tmp_path / "snapshots")
     snapshots.save(
         "video",
         _snapshot(
             segments=(
-                TranscriptSegment(0.0, 0.0, "Descartar por duração", "UNKNOWN"),
                 TranscriptSegment(1.0, 2.0, "   ", "UNKNOWN"),
                 TranscriptSegment(2.0, 3.0, "Texto **sem Markdown**", "SPEAKER_00"),
             )
@@ -109,7 +108,6 @@ def test_export_filters_invalid_segments_and_keeps_only_transcript_text(tmp_path
     result = service.export(slug="video", output_base_path=tmp_path / "video.md")
 
     text = result.path.read_text(encoding="utf-8")
-    assert "Descartar por duração" not in text
     assert "UNKNOWN" not in text
     assert "SPEAKER_00: Texto sem Markdown" in text
     assert "**" not in text

@@ -1,4 +1,4 @@
-"""Porta ``TranscriptionEngine`` — abstrai a transcrição via WhisperX/faster-whisper."""
+"""Porta ``TranscriptionEngine`` — contrato source-neutral de transcrição."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from pathlib import Path
 
 from yt_transcriber_bot.domain.value_objects.compute_type import ComputeType
 from yt_transcriber_bot.domain.value_objects.device import Device
-from yt_transcriber_bot.domain.value_objects.language import Language
+from yt_transcriber_bot.domain.value_objects.language import Language, LanguageSource
 from yt_transcriber_bot.domain.value_objects.model_name import ModelName
 
 
@@ -19,13 +19,11 @@ class TranscriptionError(Exception):
 
 
 class OutOfMemoryError(TranscriptionError):
-    """Erro especifico de OOM (CUDA/CPU)."""
+    """Erro específico de OOM (CUDA/CPU)."""
 
 
 @dataclass(frozen=True)
 class TranscribedSegment:
-    """Segmento bruto produzido pela transcrição (antes de diarização)."""
-
     start_seconds: float
     end_seconds: float
     text: str
@@ -33,20 +31,27 @@ class TranscribedSegment:
 
 @dataclass(frozen=True)
 class TranscriptionResult:
-    """Resultado completo da transcrição."""
+    """Resultado da transcrição sem inventar observação/confiança.
+
+    ``detected_language`` é o idioma efetivo usado pela transcrição por
+    compatibilidade de API. Quando um idioma foi forçado, ``language_confidence``
+    é ``None`` e a observação independente do backend, quando utilizável, fica
+    separada em ``observed_language``/``observed_language_confidence``.
+    """
 
     segments: tuple[TranscribedSegment, ...]
-    detected_language: Language
-    language_confidence: float
+    detected_language: Language | None
+    language_confidence: float | None
+    language_source: LanguageSource = LanguageSource.ASR
+    requested_language: Language | None = None
+    observed_language: Language | None = None
+    observed_language_confidence: float | None = None
 
 
 ProgressCallback = Callable[[float, str], None]
-"""Callback ``(percent_0_to_1, message)`` chamado durante a transcrição."""
 
 
 class TranscriptionEngine(ABC):
-    """Motor de transcrição (Whisper / faster-whisper)."""
-
     @abstractmethod
     def transcribe(
         self,

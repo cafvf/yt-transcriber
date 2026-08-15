@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import threading
 from datetime import date
-from pathlib import Path
 
 from tests.unit.application.conftest import (
     FakeAudioConverter,
@@ -75,7 +74,11 @@ def _make_uc(
     fake_transcription: FakeTranscriptionEngine,
     fake_diarization: FakeDiarizationEngine,
     snapshot_repository: TranscriptSnapshotRepository | None = None,
+    diarization_model_name: str = "pyannote/speaker-diarization-community-1",
 ) -> TranscribeVideoUseCase:
+    if snapshot_repository is None:
+        snapshot_repository = TranscriptSnapshotRepository(settings.base_dir / "segments")
+
     deps = TranscribeVideoDependencies(
         downloader=fake_downloader,
         converter=fake_converter,
@@ -86,6 +89,7 @@ def _make_uc(
         settings=settings,
         repository=fake_repo,
         snapshot_repository=snapshot_repository,
+        diarization_model_name=diarization_model_name,
     )
     return TranscribeVideoUseCase(deps=deps)
 
@@ -184,25 +188,27 @@ class TestHappyPath:
             None,
             42,
             media_source=MediaSource.telegram_audio("file-one"),
-            source_url=str(source_one),
             source_title="Mesmo título",
+            source_duration_seconds=1,
         )
         second = Job.new(
             None,
             42,
             media_source=MediaSource.telegram_audio("file-two"),
-            source_url=str(source_two),
             source_title="Mesmo título",
+            source_duration_seconds=1,
         )
 
-        first_result = uc.execute(first)
-        second_result = uc.execute(second)
+        first_result = uc.execute(first, source_locator=str(source_one))
+        second_result = uc.execute(second, source_locator=str(source_two))
 
         assert first_result.audio_path is not None
         assert second_result.audio_path is not None
         assert first_result.audio_path != second_result.audio_path
         assert first_result.audio_path.exists()
         assert second_result.audio_path.exists()
+        first_audio_path = first_result.audio_path
+        second_audio_path = second_result.audio_path
 
         first.transition_to(JobStatus.COMPLETED)
         second.transition_to(JobStatus.COMPLETED)
@@ -216,8 +222,10 @@ class TestHappyPath:
             max_volatile_jobs=1,
         ).apply()
 
-        assert not Path(first.audio_path or "").exists()
-        assert Path(second.audio_path or "").exists()
+        assert first.audio_path is None
+        assert second.audio_path is not None
+        assert not first_audio_path.exists()
+        assert second_audio_path.exists()
 
     def test_progress_callback_called_per_step(
         self,
@@ -283,15 +291,16 @@ class TestHappyPath:
         execute_events: list[tuple[str, str]] = []
         uc.execute(job, progress_step=lambda step, message: execute_events.append((step, message)))
 
+        runner_job = _job()
         runner_events: list[tuple[str, str]] = []
-        context = PipelineContext(job=job)
-        returned_context = uc.runner_for(job).run(
+        context = PipelineContext(job=runner_job)
+        returned_context = uc.runner_for(runner_job).run(
             context,
             progress=lambda step, message: runner_events.append((step, message)),
         )
 
         assert returned_context is context
-        assert context.job is job
+        assert context.job is runner_job
         assert [step for step, _ in runner_events] == [step for step, _ in execute_events]
 
     def test_collision_appends_suffix(
@@ -340,13 +349,17 @@ class TestHappyPath:
             fake_transcription=fake_transcription,
             fake_diarization=fake_diarization,
             snapshot_repository=snapshots,
+            diarization_model_name="custom/diarization-v1",
         )
         result = uc.execute(_job())
         assert result.md_path is not None
-        snap = snapshots.load(result.md_path.stem)
+        assert result.job.canonical_transcript_ref is not None
+        snap = snapshots.load(result.job.canonical_transcript_ref)
         assert snap is not None
         assert snap.metadata.title == fake_downloader.metadata.title
         assert snap.transcript.speaker_labels()
+        assert snap.context.diarization_model == "custom/diarization-v1"
+        assert snap.processing_provenance.diarization_model == "custom/diarization-v1"
 
 
 # ======================================================================
@@ -679,7 +692,8 @@ class TestYouTubeSubtitles:
         assert "João chegou." in md
         assert not text_has_unresolved_corruption(md)
 
-        snap = snapshots.load(result.md_path.stem)
+        assert result.job.canonical_transcript_ref is not None
+        snap = snapshots.load(result.job.canonical_transcript_ref)
         assert snap is not None
         assert snap.transcript.segments[0].text == "Você não tem ação."
         assert snap.transcript.segments[1].text == "João chegou."

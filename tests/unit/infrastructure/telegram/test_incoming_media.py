@@ -146,6 +146,7 @@ def test_payload_rebuild_preserves_telegram_source_without_repository(
         )
     )
     assert job.media_source == source
+    assert job.video_id is None
     assert job.source_title == "Reunião"
 
 
