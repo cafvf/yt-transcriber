@@ -262,9 +262,12 @@ def build(settings: AppSettings) -> Composition:
     healthcheck_service = HealthCheckService(settings=settings, sqlite_probe=SqliteHealthProbe())
     history_search_service = HistorySearchService(repository)
     lasterror_service = LastErrorService(repository=repository, settings=settings)
-    audit_logger = ExecutionAuditLogger(settings.logs_dir() / "execution_audit.jsonl")
+    audit_logger = ExecutionAuditLogger(
+        settings.logs_dir() / "execution_audit.jsonl", settings=settings
+    )
     retention_policy = RetentionPolicy(
         repository=repository,
+        owned_roots=(settings.downloads_dir(), settings.processed_dir(), settings.logs_dir()),
         max_volatile_jobs=settings.retention_count,
     )
 

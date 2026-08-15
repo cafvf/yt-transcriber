@@ -13,11 +13,14 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import os
 import platform
 from datetime import UTC, datetime
 from pathlib import Path
 
 DEFAULT_OUTPUT_DIR = Path("ops-evidence")
+_PRIVATE_DIR_MODE = 0o700
+_PRIVATE_FILE_MODE = 0o600
 
 
 def build_report(*, generated_at: datetime, operator: str, host: str) -> str:
@@ -156,12 +159,16 @@ def write_report(
     operator: str,
     host: str,
 ) -> Path:
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True, mode=_PRIVATE_DIR_MODE)
+    if os.name == "posix":
+        output_dir.chmod(_PRIVATE_DIR_MODE)
     output_path = output_dir / report_filename(generated_at)
     output_path.write_text(
         build_report(generated_at=generated_at, operator=operator, host=host),
         encoding="utf-8",
     )
+    if os.name == "posix":
+        output_path.chmod(_PRIVATE_FILE_MODE)
     return output_path
 
 

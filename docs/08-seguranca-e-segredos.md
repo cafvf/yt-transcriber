@@ -4,6 +4,8 @@ Este projeto manipula credenciais e dados locais sensíveis, incluindo token do 
 
 > Arquivos reais de configuração e runtime ficam na máquina local; o Git recebe apenas código, documentação e exemplos sem segredos.
 
+A superfície Telegram suportada é **single-operator e private-chat-only**. O operador configurado não deve iniciar processamento, consultas privadas, mutações, diagnósticos ou entrega de artefatos a partir de grupos, supergrupos ou canais.
+
 ## Arquivos que não devem ser versionados
 
 - `.env` e variantes locais;
@@ -11,23 +13,32 @@ Este projeto manipula credenciais e dados locais sensíveis, incluindo token do 
 - `data/`, `downloads/`, `processed/`, `transcripts/`, `logs/`, `models/`;
 - bancos `*.db`, `*.sqlite`, `*.sqlite3`;
 - logs `*.log`;
-- backups (`yt-transcriber-backups/`, tarballs, dumps SQLite, cópias de `.env`/env systemd);
+- backups (`yt-transcriber-backups/`, tarballs e dumps SQLite);
 - áudios, vídeos e legendas gerados localmente.
 
 O `.gitignore` do projeto já bloqueia esses caminhos.
 
+## Classificação de dados privados
+
+São privados por padrão, mesmo depois de sanitização:
+
+- mídia de origem e arquivos convertidos;
+- transcrições, snapshots, aliases de falantes e artefatos derivados;
+- consultas e resultados de busca, índices locais e histórico;
+- identificadores de transporte/provedor quando não forem necessários ao operador;
+- paths locais e nomes de arquivos que revelem estrutura privada;
+- logs, auditoria e registros de erro;
+- backups e evidências operacionais.
+
+Sanitizar um valor remove ou mascara material inadequado para divulgação, mas **não transforma o dado em público**. Compartilhe logs e diagnósticos completos somente em canais privados de confiança.
+
 ## Logs de auditoria locais
 
-Jobs de transcrição gravam eventos estruturados em `data/logs/execution_audit.jsonl` para permitir auditoria de fila, etapas e resultado sem misturar ruído de polling do Telegram. O arquivo é local e ignorado pelo Git. Os eventos devem manter apenas metadados operacionais sanitizados: tokens, cookies, cabeçalhos `Authorization`, corpos de API, prompts, corpo de transcrição e payload completo de chat são mascarados ou omitidos.
+Jobs de transcrição gravam eventos estruturados em `data/logs/execution_audit.jsonl` para permitir auditoria de fila, etapas e resultado sem misturar ruído de polling do Telegram. O arquivo é local e ignorado pelo Git. Os eventos mantêm apenas metadados operacionais sanitizados: tokens, cookies, cabeçalhos `Authorization`, corpos de API, prompts, corpo de transcrição e payload completo de chat são mascarados ou omitidos. Paths são tratados como privados quando uma indicação de disponibilidade é suficiente.
 
-`/healthcheck`, `/lasterror`, mensagens de falha no Telegram e logs operacionais sanitizam segredos comuns antes de expor diagnósticos, incluindo tokens configurados, cookies, cabeçalhos `Authorization`, corpos de API, prompts e transcrições ecoadas por exceções. Ainda assim, eles podem revelar metadados privados: `user_id`, paths locais preservados para recovery, nomes de arquivos, nomes de modelos, status de jobs e trechos técnicos de exceções. Compartilhe saídas completas apenas em canais privados de confiança. Para pedir ajuda pública, remova paths, IDs, títulos de vídeos e qualquer contexto que identifique o conteúdo transcrito.
+`/healthcheck`, `/lasterror`, mensagens de falha no Telegram e logs operacionais usam a mesma política central de sanitização para tokens, cookies, cabeçalhos `Authorization`, corpos de API, prompts e transcrições ecoadas por exceções. Se a própria sanitização falhar, o detalhe bruto não é devolvido: usa-se uma mensagem genérica segura.
 
-`/search <texto>` também é dado privado: a consulta e seus resultados ficam
-restritos aos jobs concluídos do usuário autorizado. Trechos retornados são
-sanitizados e compactos; consultas, corpo integral de transcrições/resumos,
-paths, tokens e resultados não devem ser gravados em logs operacionais. O índice
-FTS5, quando existir, é dado derivado local e deve permanecer sob as mesmas
-regras de retenção e backup do SQLite e dos artefatos privados.
+`/search <texto>` também é dado privado: a consulta e seus resultados ficam restritos aos jobs concluídos do usuário autorizado. Trechos retornados são sanitizados e compactos; consultas, corpo integral de transcrições/resumos, paths, tokens e resultados não devem ser gravados em logs operacionais. O índice FTS5, quando existir, é dado derivado local e deve permanecer sob as mesmas regras de retenção e backup do SQLite e dos artefatos privados.
 
 ## Arquivo de exemplo
 
@@ -38,6 +49,12 @@ cp .env.example .env
 ```
 
 Depois edite o `.env` local com seus valores reais. Nunca committe o `.env` real.
+
+Para Hugging Face, use o menor escopo prático para a capacidade aprovada — normalmente um token **read-only** quando o acesso ao modelo permitir. Para qualquer outro provedor, limite a chave ao endpoint/serviço necessário; não reutilize credenciais amplas se existir uma credencial mais restrita.
+
+`SUMMARY_TOKENIZER_TRUST_REMOTE_CODE` é uma configuração de segurança. O padrão é `false`. Só habilite código remoto para um tokenizer/modelo explicitamente confiável e após revisão deliberada; cache local não altera essa política.
+
+`uv.lock` é a autoridade reprodutível para instalações aprovadas (`uv sync --locked`). O uso de `transformers` no tokenizer de sumarização é uma capacidade opcional explícita: em `SUMMARY_TOKENIZER_BACKEND=auto`, ausência/falha de carregamento local cai para a estimativa por caracteres; em `hf`, a ausência é erro explícito. Essa relação de fallback é coberta por testes e não autoriza download ou execução de código remoto.
 
 ## Pre-commit
 
@@ -116,15 +133,17 @@ uv run python scripts/security/gitleaks_if_available.py --all
 
 Se o projeto for para GitHub, habilite também Secret Scanning e Push Protection, quando disponíveis.
 
-## Tokens já expostos
+## Credenciais expostas
 
-Se um token apareceu em log, chat, issue ou commit, considere-o comprometido. O procedimento correto é:
+Se uma credencial reutilizável apareceu em log, chat, issue, screenshot, prompt de IA ou commit fora do controle previsto, considere-a comprometida. O procedimento correto é:
 
-1. revogar o token no provedor;
-2. gerar novo token;
-3. atualizar apenas o `.env` local;
-4. garantir que logs antigos com o token não sejam commitados.
+1. **revogar ou rotacionar** a credencial no provedor;
+2. gerar nova credencial com o menor escopo prático;
+3. atualizar apenas a fonte local de runtime autorizada;
+4. eliminar cópias locais desnecessárias e impedir novo versionamento;
+5. verificar logs/artefatos compartilhados e registrar a resposta ao incidente sem reproduzir o segredo.
 
+Mascarar, apagar a mensagem ou reescrever o histórico local **não substitui** revogação/rotação.
 
 ## Correção de instalação dos hooks
 
@@ -156,26 +175,26 @@ O arquivo `config/pre-commit-config.yaml` é uma cópia de recuperação para re
 
 ## Backups e restore
 
-Backups de produção privada são sensíveis. Eles podem conter banco SQLite, transcrições privadas, áudio, logs, caminhos locais, `.env`, arquivo de ambiente systemd e cookies. Use o procedimento em [`11-operator-runbook.md`](./11-operator-runbook.md#4-backup) e aplique no mínimo:
+Backups de dados continuam privados. O **backup operacional padrão não deve carregar credenciais reutilizáveis**: exclua `.env`, arquivo de ambiente systemd, cookies de navegador/YouTube e outros segredos. Esses itens devem ser reprovisionados separadamente no host de destino.
+
+Até a reconciliação operacional completa do PLAN-006, qualquer instrução legada de runbook que copie esses arquivos para o backup padrão deve ser considerada **obsoleta e insegura**. O procedimento operacional futuro poderá documentar um pacote de recuperação de credenciais separado, mas ele não faz parte do backup padrão.
+
+O procedimento completo de backup/restore e a reconciliação do runbook pertencem ao fechamento operacional posterior; esta política de segurança já é normativa para qualquer execução intermediária.
+
+Aplique no mínimo:
 
 ```bash
 chmod -R go-rwx ~/yt-transcriber-backups
 ```
 
-Os helpers operacionais criam diretórios de sessão/backup com modo `0700` e
-arquivos copiados, SQLite e tarballs com modo `0600`. Confirme os modos depois
-de copiar o backup para outro host ou volume: permissões do destino podem ser
-mais permissivas.
+Helpers operacionais que criam evidências ou backups devem usar diretórios `0700` e arquivos `0600`. Confirme os modos depois de copiar dados para outro host ou volume, pois permissões do destino podem ser mais permissivas.
 
 Recomendações:
 
 - guarde backups em volume criptografado ou destino com controle de acesso;
-- defina retenção curta para mídia e logs. Não apague snapshots de segmentos
-  indiscriminadamente: eles sustentam histórico, exportações e `/rename`.
-  Quando for descartá-los, faça isso junto com a transcrição e o registro do
-  job, após confirmar que não precisa mais do histórico;
+- defina retenção curta para mídia e logs. Não apague snapshots de segmentos indiscriminadamente: eles sustentam histórico, exportações e `/rename`;
 - nunca anexe backups a issues, chats públicos ou pull requests;
-- ao restaurar, pare o serviço antes de sobrescrever `data/`, `jobs.db`, `models/` ou arquivos de ambiente;
+- ao restaurar, pare o serviço antes de sobrescrever dados persistentes;
 - trate `operational_errors.jsonl` e `execution_audit.jsonl` como dados privados mesmo sendo sanitizados.
 
 ## Instalação do pre-commit

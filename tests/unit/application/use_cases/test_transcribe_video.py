@@ -206,7 +206,15 @@ class TestHappyPath:
 
         first.transition_to(JobStatus.COMPLETED)
         second.transition_to(JobStatus.COMPLETED)
-        RetentionPolicy(fake_repo, max_volatile_jobs=1).apply()
+        RetentionPolicy(
+            fake_repo,
+            owned_roots=(
+                settings.downloads_dir(),
+                settings.processed_dir(),
+                settings.logs_dir(),
+            ),
+            max_volatile_jobs=1,
+        ).apply()
 
         assert not Path(first.audio_path or "").exists()
         assert Path(second.audio_path or "").exists()

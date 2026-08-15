@@ -7,9 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from yt_transcriber_bot.application.services.retention_policy import (
-    RetentionPolicy,
-)
+from yt_transcriber_bot.application.services.retention_policy import RetentionPolicy
 from yt_transcriber_bot.domain.entities.job import Job, JobStatus
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
 
@@ -24,7 +22,6 @@ class FakeRepo:
     def list_by_statuses_oldest_first(self, statuses: set[JobStatus]) -> list[Job]:
         return [job for job in self.jobs if job.status in statuses]
 
-    # restantes não são chamadas pela RetentionPolicy
     def save(self, job: Job) -> None: ...
     def get_by_id(self, job_id: str) -> Job | None: ...
     def get_latest_by_video_id(self, video_id: VideoId) -> Job | None: ...
@@ -34,16 +31,14 @@ class FakeRepo:
 
 
 def _job_at(tmp_path: Path, idx: int) -> Job:
-    """Cria job concluído com arquivos físicos no tmp_path."""
     audio = tmp_path / f"audio_{idx}.ogg"
     audio.write_bytes(b"OggS_data")
     log = tmp_path / f"job_{idx}.log"
-    log.write_text("log content")
+    log.write_text("log content", encoding="utf-8")
     md = tmp_path / f"transcript_{idx}.md"
-    md.write_text("# legacy")
+    md.write_text("# legacy", encoding="utf-8")
 
     job = Job.new(VideoId("d" + "Q" * 10), 42)
-    # Setar timestamps progressivos (idx 0 é o mais antigo)
     base = datetime(2024, 1, 1, tzinfo=UTC)
     object.__setattr__(job, "requested_at", base + timedelta(hours=idx))
     object.__setattr__(job, "updated_at", base + timedelta(hours=idx))
@@ -54,73 +49,99 @@ def _job_at(tmp_path: Path, idx: int) -> Job:
     return job
 
 
+def _policy(repo: FakeRepo, root: Path, *, max_jobs: int = 5) -> RetentionPolicy:
+    return RetentionPolicy(  # type: ignore[arg-type]
+        repo,
+        owned_roots=(root,),
+        max_volatile_jobs=max_jobs,
+    )
+
+
 def test_no_expiration_when_under_limit(tmp_path: Path) -> None:
     jobs = [_job_at(tmp_path, i) for i in range(3)]
-    repo = FakeRepo(jobs)
-    policy = RetentionPolicy(repo, max_volatile_jobs=5)  # type: ignore[arg-type]
-    result = policy.apply()
+    result = _policy(FakeRepo(jobs), tmp_path).apply()
     assert result.expired_jobs == ()
     assert result.removed_files == ()
-    # Todos os arquivos ainda existem
-    for j in jobs:
-        assert Path(j.audio_path or "").exists()
-        assert Path(j.log_path or "").exists()
+    for job in jobs:
+        assert Path(job.audio_path or "").exists()
+        assert Path(job.log_path or "").exists()
 
 
 def test_expires_oldest_when_over_limit(tmp_path: Path) -> None:
     jobs = [_job_at(tmp_path, i) for i in range(7)]
-    repo = FakeRepo(jobs)
-    policy = RetentionPolicy(repo, max_volatile_jobs=5)  # type: ignore[arg-type]
-    result = policy.apply()
-    # Os 2 mais antigos foram expirados
+    result = _policy(FakeRepo(jobs), tmp_path).apply()
     assert len(result.expired_jobs) == 2
     assert result.expired_jobs[0] == jobs[0].job_id
     assert result.expired_jobs[1] == jobs[1].job_id
-    # Audios e logs dos 2 mais antigos foram removidos
     assert not Path(jobs[0].audio_path or "").exists()
     assert not Path(jobs[0].log_path or "").exists()
     assert not Path(jobs[1].audio_path or "").exists()
-    # Os 5 mais recentes ainda existem
-    for j in jobs[2:]:
-        assert Path(j.audio_path or "").exists()
+    for job in jobs[2:]:
+        assert Path(job.audio_path or "").exists()
 
 
 def test_md_is_preserved(tmp_path: Path) -> None:
-    """MDs ficam como legado mesmo após expurgo."""
     jobs = [_job_at(tmp_path, i) for i in range(7)]
-    repo = FakeRepo(jobs)
-    policy = RetentionPolicy(repo, max_volatile_jobs=5)  # type: ignore[arg-type]
-    policy.apply()
-    # MDs de TODOS os jobs (inclusive os expirados) ainda existem
-    for j in jobs:
-        assert Path(j.md_path or "").exists()
+    _policy(FakeRepo(jobs), tmp_path).apply()
+    for job in jobs:
+        assert Path(job.md_path or "").exists()
 
 
 def test_handles_missing_files_gracefully(tmp_path: Path) -> None:
     jobs = [_job_at(tmp_path, i) for i in range(7)]
-    # Apaga manualmente o áudio do job 0 antes da política rodar
     Path(jobs[0].audio_path or "").unlink()
-    repo = FakeRepo(jobs)
-    policy = RetentionPolicy(repo, max_volatile_jobs=5)  # type: ignore[arg-type]
-    result = policy.apply()
-    # Não deve crashar; expira normalmente
+    result = _policy(FakeRepo(jobs), tmp_path).apply()
     assert len(result.expired_jobs) == 2
 
 
-def test_invalid_max_jobs() -> None:
-    repo = FakeRepo([])
+def test_invalid_max_jobs(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="max_volatile_jobs"):
-        RetentionPolicy(repo, max_volatile_jobs=0)  # type: ignore[arg-type]
+        RetentionPolicy(  # type: ignore[arg-type]
+            FakeRepo([]), owned_roots=(tmp_path,), max_volatile_jobs=0
+        )
+
+
+def test_requires_explicit_owned_root() -> None:
+    with pytest.raises(ValueError, match="owned_roots"):
+        RetentionPolicy(FakeRepo([]), owned_roots=())  # type: ignore[arg-type]
 
 
 def test_max_jobs_one(tmp_path: Path) -> None:
-    """Caso extremo: max=1 → todos exceto o último são expirados."""
     jobs = [_job_at(tmp_path, i) for i in range(3)]
-    repo = FakeRepo(jobs)
-    policy = RetentionPolicy(repo, max_volatile_jobs=1)  # type: ignore[arg-type]
-    result = policy.apply()
+    result = _policy(FakeRepo(jobs), tmp_path, max_jobs=1).apply()
     assert len(result.expired_jobs) == 2
-    # Apenas o último (idx=2) tem áudio
     assert Path(jobs[-1].audio_path or "").exists()
     assert not Path(jobs[0].audio_path or "").exists()
     assert not Path(jobs[1].audio_path or "").exists()
+
+
+def test_retention_refuses_persisted_path_outside_owned_root(tmp_path: Path) -> None:
+    owned = tmp_path / "owned"
+    owned.mkdir()
+    outside = tmp_path / "outside.log"
+    outside.write_text("keep", encoding="utf-8")
+    jobs = [_job_at(owned, i) for i in range(2)]
+    jobs[0].log_path = str(outside)
+
+    result = _policy(FakeRepo(jobs), owned, max_jobs=1).apply()
+
+    assert outside.read_text(encoding="utf-8") == "keep"
+    assert outside not in result.removed_files
+    assert not Path(jobs[0].audio_path or "").exists()
+
+
+def test_retention_refuses_symlink_escape(tmp_path: Path) -> None:
+    owned = tmp_path / "owned"
+    owned.mkdir()
+    outside = tmp_path / "outside.log"
+    outside.write_text("keep", encoding="utf-8")
+    jobs = [_job_at(owned, i) for i in range(2)]
+    link = owned / "escape.log"
+    link.symlink_to(outside)
+    jobs[0].log_path = str(link)
+
+    result = _policy(FakeRepo(jobs), owned, max_jobs=1).apply()
+
+    assert outside.read_text(encoding="utf-8") == "keep"
+    assert link.is_symlink()
+    assert link not in result.removed_files

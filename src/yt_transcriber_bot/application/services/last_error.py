@@ -11,19 +11,17 @@ from typing import Any
 
 from yt_transcriber_bot.application.config import AppSettings
 from yt_transcriber_bot.application.ports.job_repository import JobRepository
-from yt_transcriber_bot.application.services.sanitization import sanitize_text
+from yt_transcriber_bot.application.services.filesystem_safety import (
+    ensure_private_directory,
+    ensure_private_file,
+)
+from yt_transcriber_bot.application.services.sanitization import sanitize_text, sanitize_value
 from yt_transcriber_bot.domain.entities.job import Job, JobStatus
 
 
 @dataclass(frozen=True)
 class OperationalErrorRecord:
-    """Erro operacional registrado fora do ciclo principal de transcrição.
-
-    Exemplos: falha de ``/summary`` por LM Studio indisponível, snapshot expirado,
-    erro de exportação, falha de vídeo legendado ou exceção defensiva em handler.
-    Esses erros não devem necessariamente transformar a transcrição original em
-    ``failed``.
-    """
+    """Erro operacional registrado fora do ciclo principal de transcrição."""
 
     user_id: int
     operation: str
@@ -46,7 +44,7 @@ class LastErrorReport:
 
 
 class LastErrorService:
-    """Consulta e registra erros operacionais de forma sanitizada."""
+    """Consulta e registra erros operacionais de forma sanitizada e privada."""
 
     def __init__(self, *, repository: JobRepository, settings: AppSettings) -> None:
         self._repository = repository
@@ -72,9 +70,9 @@ class LastErrorService:
             operation=_clean_label(operation, fallback="unknown"),
             message=sanitize_text(message, self._settings),
             context={
-                str(k): sanitize_text(str(v), self._settings)
-                for k, v in (context or {}).items()
-                if v is not None
+                str(key): str(sanitize_value(str(key), value, self._settings))
+                for key, value in (context or {}).items()
+                if value is not None
             },
             error_type=sanitize_text(resolved_error_type, self._settings),
             stage=_clean_label(stage, fallback=""),
@@ -146,9 +144,9 @@ class LastErrorService:
         if job.error_message:
             lines.extend(["", "Erro:", sanitize_text(job.error_message, self._settings)])
         if job.md_path:
-            lines.append(f"Markdown parcial: {job.md_path}")
+            lines.append("Markdown parcial: disponível")
         if job.audio_path:
-            lines.append(f"Áudio parcial: {job.audio_path}")
+            lines.append("Áudio parcial: disponível")
         if job.log_path:
             lines.extend(
                 ["", "Trecho final do log:", _tail_log(Path(job.log_path), self._settings)]
@@ -194,7 +192,7 @@ class LastErrorService:
 
 
 def _append_operational_error(path: Path, record: OperationalErrorRecord) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_private_directory(path.parent)
     payload = {
         "user_id": record.user_id,
         "operation": record.operation,
@@ -208,6 +206,7 @@ def _append_operational_error(path: Path, record: OperationalErrorRecord) -> Non
     }
     with path.open("a", encoding="utf-8") as fp:
         fp.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+    ensure_private_file(path)
 
 
 def _load_operational_errors(path: Path) -> list[OperationalErrorRecord]:
@@ -256,11 +255,11 @@ def _record_from_payload(payload: dict[str, Any]) -> OperationalErrorRecord:
 
 def _tail_log(path: Path, settings: AppSettings) -> str:
     if not path.is_file():
-        return f"log não encontrado: {path}"
+        return "log indisponível"
     try:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError as exc:
-        return f"não consegui ler {path}: {exc}"
+        return f"não consegui ler o log ({type(exc).__name__})"
     tail = "\n".join(lines[-settings.lasterror_log_tail_lines :])
     if len(tail) > settings.lasterror_log_tail_chars:
         tail = tail[-settings.lasterror_log_tail_chars :]

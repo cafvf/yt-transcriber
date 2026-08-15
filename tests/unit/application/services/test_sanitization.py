@@ -55,7 +55,7 @@ def test_sanitize_text_redacts_known_secret_shapes_and_configured_values(tmp_pat
     assert cleaned.count("[REDACTED]") >= 6
 
 
-def test_sanitize_text_redacts_prompt_fragments_and_api_body_fields(tmp_path: Path) -> None:
+def test_sanitize_text_omits_prompt_fragments_and_api_body_fields(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     raw = (
         'payload={"messages":[{"role":"system","content":"system instructions"}],'
@@ -78,5 +78,5 @@ def test_sanitize_text_redacts_prompt_fragments_and_api_body_fields(tmp_path: Pa
     assert "echoed raw input" not in cleaned
     assert "echoed transcript" not in cleaned
     assert "raw request body" not in cleaned
-    assert '"messages":[REDACTED]' in cleaned or '"messages": [REDACTED]' in cleaned
-    assert cleaned.count("[REDACTED]") >= 4
+    assert '"messages":[OMITTED]' in cleaned or '"messages": [OMITTED]' in cleaned
+    assert cleaned.count("[OMITTED]") >= 4

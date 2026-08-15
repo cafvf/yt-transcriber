@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime
 from pathlib import Path
+
+import pytest
 
 from yt_transcriber_bot.application.config import AppSettings
 from yt_transcriber_bot.application.services.last_error import LastErrorService
@@ -78,9 +81,12 @@ def test_lasterror_selects_latest_failed_job_and_sanitizes_secrets(tmp_path: Pat
     assert "[REDACTED]" in report.message
     assert "linha2" in report.message
     assert "linha1" not in report.message
+    assert str(log) not in report.message
 
 
-def test_lasterror_reports_delivery_failed_job_with_artifact_paths(tmp_path: Path) -> None:
+def test_lasterror_reports_delivery_failed_artifact_availability_without_private_paths(
+    tmp_path: Path,
+) -> None:
     settings = _settings(tmp_path)
     job = _delivery_failed_job(
         42,
@@ -97,8 +103,10 @@ def test_lasterror_reports_delivery_failed_job_with_artifact_paths(tmp_path: Pat
     assert report.operational_error is None
     assert "Tipo: job de transcrição" in report.message
     assert "Status: delivery_failed" in report.message
-    assert f"Markdown parcial: {job.md_path}" in report.message
-    assert f"Áudio parcial: {job.audio_path}" in report.message
+    assert "Markdown parcial: disponível" in report.message
+    assert "Áudio parcial: disponível" in report.message
+    assert job.md_path not in report.message
+    assert job.audio_path not in report.message
 
 
 def test_lasterror_reports_operational_error_from_summary(tmp_path: Path) -> None:
@@ -156,9 +164,7 @@ def test_lasterror_records_error_type_stage_traceback_and_hints(tmp_path: Path) 
     assert "SUMMARY_MAX_INPUT_TOKENS" in report.message
 
 
-def test_lasterror_sanitizes_api_bodies_in_message_context_and_traceback(
-    tmp_path: Path,
-) -> None:
+def test_lasterror_sanitizes_api_bodies_in_message_context_and_traceback(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     service = LastErrorService(repository=FakeRepo([]), settings=settings)  # type: ignore[arg-type]
 
@@ -190,7 +196,24 @@ def test_lasterror_sanitizes_api_bodies_in_message_context_and_traceback(
     assert "echoed prompt body" not in combined
     assert "backend-token" not in combined
     assert "context-token" not in combined
-    assert "[REDACTED]" in combined
+    assert "[REDACTED]" in combined or "[OMITTED]" in combined
+
+
+def test_lasterror_redacts_private_path_context(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    service = LastErrorService(repository=FakeRepo([]), settings=settings)  # type: ignore[arg-type]
+    private_path = tmp_path / "downloads" / "private-audio.ogg"
+
+    service.record_operation_error(
+        user_id=42,
+        operation="clearcache",
+        message="cleanup failed",
+        context={"failed_file": private_path},
+    )
+
+    report = service.latest_for_user(42)
+    assert str(private_path) not in report.message
+    assert "[PRIVATE PATH]" in report.message
 
 
 def test_lasterror_prefers_newer_operational_error_over_older_failed_job(tmp_path: Path) -> None:
@@ -242,3 +265,15 @@ def test_lasterror_reads_legacy_operational_error_records(tmp_path: Path) -> Non
     assert report.operational_error is not None
     assert "erro legado" in report.message
     assert "Operação: summary" in report.message
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission contract")
+def test_operational_error_log_is_private(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    service = LastErrorService(repository=FakeRepo([]), settings=settings)  # type: ignore[arg-type]
+
+    service.record_operation_error(user_id=42, operation="summary", message="private failure")
+    path = settings.logs_dir() / "operational_errors.jsonl"
+
+    assert path.parent.stat().st_mode & 0o777 == 0o700
+    assert path.stat().st_mode & 0o777 == 0o600

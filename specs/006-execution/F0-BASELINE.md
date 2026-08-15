@@ -4,7 +4,7 @@ Task: `TASK-P01-000`
 Implementation date: **2026-08-15**
 Baseline revision: `5266d01b660398d0ff25c1bff01eb287114f0d7d`
 Baseline commit: `docs: establish SDD architecture baseline`
-Status: **Implemented; local verification required before F1**
+Status: **Verified / Closed**
 
 ## 1. Purpose
 
@@ -78,22 +78,22 @@ a fake PTB application instead of asserting source-code formatting. It freezes
 the current command set and alias-handler equivalence while allowing later
 internal refactoring.
 
-## 5. Local verification required before F1
+## 5. Local verification evidence
 
-After applying the F0 files, run the commands reported with this package. F0 is
-not considered locally closed until all applicable default quality/security
-checks pass and the result is reported.
-
-Expected default pytest classification remains:
+The operator reran the F0 characterization and full local gate on 2026-08-15.
+Observed results:
 
 ```text
-749 baseline-collected tests + the new F0 conformance tests,
-with the same 46 integration-marked baseline tests deselected by default.
+Targeted F0 characterization: 44 passed
+Default suite: 753 collected / 46 deselected / 707 passed
+Integration inventory: exactly 46 integration-marked tests
+Branch-aware global coverage: 79%
+Ruff lint/format: green after the F0-only lint correction
+mypy/compile/pre-commit/security scans/diff check: green
 ```
 
-The total selected count will therefore increase because F0 deliberately adds
-characterization tests; the frozen fact is the classified set of 46 baseline
-integration tests, not a permanent global test-count target.
+This closes `TASK-P01-000`. The classified set of 46 integration tests remains
+the compatibility fact; global test counts may grow as later phases add evidence.
 
 ## 6. Scope confirmation
 

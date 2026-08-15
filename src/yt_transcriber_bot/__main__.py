@@ -13,6 +13,7 @@ from pathlib import Path
 from telegram import Update
 from telegram.ext import (
     Application,
+    ApplicationHandlerStop,
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
@@ -25,7 +26,15 @@ from yt_transcriber_bot.application.ports.incoming_media import (
     IncomingMedia,
     IncomingMediaKind,
 )
+from yt_transcriber_bot.application.services.filesystem_safety import (
+    ensure_private_directory,
+    ensure_private_file,
+)
 from yt_transcriber_bot.composition_root import build
+from yt_transcriber_bot.infrastructure.telegram.audience import (
+    DeniedAudienceFilter,
+    TelegramAudiencePolicy,
+)
 from yt_transcriber_bot.infrastructure.telegram.bot_adapter import TelegramBotAdapter
 from yt_transcriber_bot.infrastructure.telegram.ffprobe_duration_inspector import (
     FfprobeAudioDurationInspector,
@@ -34,8 +43,10 @@ from yt_transcriber_bot.infrastructure.telegram.ptb_bot_client import PTBBotClie
 
 
 def _configure_logging(logs_dir: Path) -> None:
-    logs_dir.mkdir(parents=True, exist_ok=True)
-    handler_file = logging.FileHandler(logs_dir / "bot.log", encoding="utf-8")
+    ensure_private_directory(logs_dir)
+    log_path = logs_dir / "bot.log"
+    handler_file = logging.FileHandler(log_path, encoding="utf-8")
+    ensure_private_file(log_path)
     handler_console = logging.StreamHandler(sys.stdout)
     fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     handler_file.setFormatter(fmt)
@@ -131,12 +142,18 @@ async def _run() -> None:
         media_downloader=client,
         duration_inspector=FfprobeAudioDurationInspector(),
     )
+    audience = TelegramAudiencePolicy(settings.telegram_allowed_user_id)
 
     def _uid(update: Update) -> int:
         return update.effective_user.id if update.effective_user else 0
 
     def _cid(update: Update) -> int:
         return update.effective_chat.id if update.effective_chat else 0
+
+    async def on_unsupported_message(_update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """Stop unsupported message audiences before any product handler."""
+
+        raise ApplicationHandlerStop
 
     async def on_text(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         text = update.effective_message.text if update.effective_message else ""
@@ -289,11 +306,19 @@ async def _run() -> None:
         query = update.callback_query
         if query is None:
             return
+        chat_id = query.message.chat.id if query.message else _cid(update)
+        chat_type = query.message.chat.type if query.message else None
+        user_id = query.from_user.id if query.from_user else _uid(update)
+        if not audience.allows(user_id=user_id, chat_id=chat_id, chat_type=chat_type):
+            raise ApplicationHandlerStop
         await query.answer()
         data = query.data or ""
-        chat_id = query.message.chat.id if query.message else _cid(update)
-        user_id = query.from_user.id if query.from_user else _uid(update)
         await adapter.handle_callback_query(chat_id=chat_id, user_id=user_id, data=data)
+
+    # This first message handler matches only unsupported audiences. Allowed
+    # private messages fall through to the existing command/text/media handlers
+    # in the same PTB group; denied messages stop before any product work.
+    application.add_handler(MessageHandler(DeniedAudienceFilter(audience), on_unsupported_message))
 
     application.add_handler(CommandHandler("start", on_start))
     application.add_handler(CommandHandler("help", on_help))

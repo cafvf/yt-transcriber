@@ -26,5 +26,12 @@ must not be silently normalized in this directory.
 
 ## Execution phases
 
-See `PHASES.md` for the operational grouping of approved tasks and
-`F0-BASELINE.md` for the first phase evidence.
+See `PHASES.md` for the operational grouping of approved tasks.
+
+Current execution state:
+
+- F0 — executable baseline: **Verified / Closed**;
+- F1 — security guardrails: **Verified / Closed**;
+- F2 — domain and data truth: **next approved execution phase**.
+
+Detailed evidence is recorded in `F0-BASELINE.md` and `F1-SECURITY.md`.
