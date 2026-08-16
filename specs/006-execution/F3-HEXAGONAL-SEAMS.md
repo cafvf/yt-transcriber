@@ -1,6 +1,6 @@
 # F3 — Hexagonal boundaries and provider seams
 
-Status: **In progress — TASK-P03-001..012 locally verified; TASK-P03-013 next**
+Status: **In progress — TASK-P03-001..013 locally verified; TASK-P03-014 next**
 Plan: `PLAN-003`
 Base revision: `f2e265acbcc8b2a4cef601e160ae13193f49d979`
 Started: 2026-08-15
@@ -591,11 +591,74 @@ Integrated locally on `main` as:
 execution closure.
 
 
+### TASK-P03-013 — Purpose-specific application-owned ports
+
+Status: **Locally verified — REQ-ARC-012 closed**
+
+The PLAN-003 application-port boundary has converged on narrow,
+application-owned capability contracts with executable cross-cutting
+conformance.
+
+Implementation boundary:
+
+- removed the unused transport-specific `split_for_telegram()` operation from
+  the generic `AudioConverter` application port;
+- removed the corresponding dead FFmpeg segmentation/ffprobe implementation,
+  fake method and tests that protected only that unused surface;
+- retained the approved audio-conversion capability and current runtime
+  behavior;
+- added executable conformance that rejects transport/provider-specific
+  operation names in application ports;
+- added executable proof that every abstract application-port contract in the
+  explicit inventory can be implemented by a plain test double without
+  importing infrastructure;
+- retained the P03-011 guards that forbid generic storage modules and the
+  retired `FileStorage` / `LocalFileStorage` runtime symbols;
+- retained the P03-012 zero-violation dependency invariant;
+- introduced no speculative replacement capability and no new product
+  behavior.
+
+Source-specific concepts remain source-specific where they are part of an
+approved capability. `IncomingMedia.file_id` remains the opaque Telegram media
+reference used by the approved private-media flow, and YouTube subtitle track
+metadata remains inside the approved YouTube-specific acquisition capability.
+No provider credential or SDK object crosses an application port.
+
+#### P03-013 closure evidence
+
+```text
+focused gate: 57 passed / 2 deselected
+default gate: 840 passed / 35 deselected / 875 collected
+integration gate: 35 passed / 840 deselected / 875 collected
+final port conformance: 49 passed
+mypy: 111 source files / zero issues
+Ruff auto-fix + format + strict lint: 213 files / green
+security scanner: clean
+Gitleaks: 47 commits / ~3.04 MB scanned / no leaks
+compileall: green
+pre-commit security hooks: green
+split_for_telegram runtime/test scan: empty
+generic FileStorage/runtime storage scan: empty
+forbidden application -> infrastructure import scan: empty
+git diff --check: green
+```
+
+Integrated locally on `main` as:
+
+```text
+04bc56c refactor: close purpose-specific port conformance
+```
+
+`REQ-ARC-012` is closed. No frozen normative plan/task text is changed by this
+execution closure.
+
+
 ## Next task
 
-Proceed to `TASK-P03-013 — Purpose-specific application-owned ports`.
+Proceed to `TASK-P03-014 — PLAN-003 exit-gate verification`.
 
 ## Gate state
 
-F3 remains **open**. PLAN-003 exit verification belongs to `TASK-P03-014` after all
-preceding tasks close.
+F3 remains **open**. TASK-P03-014 must verify the frozen PLAN-003 exit gate on
+the integrated closure revision. It is a verification task and must route any
+failed criterion back to its owning task rather than patching behavior itself.
