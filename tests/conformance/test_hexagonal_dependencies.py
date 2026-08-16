@@ -1,9 +1,14 @@
-"""PLAN-003 dependency-direction ratchet.
+"""PLAN-003 final dependency-direction enforcement.
 
-TASK-P03-001 intentionally starts with the exact brownfield violation set.
-Any new domain/application dependency violation fails immediately. Later F3
-migration tasks delete entries as their seams replace concrete dependencies;
-TASK-P03-012 removes the manifest entirely when the set reaches zero.
+TASK-P03-012 closes REQ-ARC-001 after the preceding seam migrations reduce the
+known forbidden domain/application dependency set to zero. No legacy exception
+manifest remains.
+
+REQ-ARC-001 AC-04 is enforced separately from the import-direction invariant:
+direct stdlib I/O in application code is not silently accepted as a workaround.
+Every current hotspot must be explicitly routed to a frozen purpose-specific
+requirement/task owner, and any new ungoverned hotspot fails this default-gate
+test.
 """
 
 from __future__ import annotations
@@ -14,11 +19,55 @@ from pathlib import Path
 PROJECT_PACKAGE = "yt_transcriber_bot"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_ROOT = REPO_ROOT / "src" / PROJECT_PACKAGE
-MANIFEST = Path(__file__).with_name("f3_known_dependency_violations.txt")
+
+# AC-04 routing metadata, not a dependency-violation allowlist.
+_GOVERNED_APPLICATION_IO_HOTSPOTS = {
+    "application/config.py": "REQ-ARC-010",
+    "application/pipeline/steps.py": "REQ-ARC-012 / TASK-P03-013",
+    "application/services/filesystem_safety.py": ("REQ-SEC-007 / REQ-ARC-009 / TASK-P04-012"),
+    "application/services/healthcheck.py": "REQ-ARC-009 / TASK-P04-012",
+    "application/services/last_error.py": (
+        "REQ-DATA-006 / REQ-ARC-009 / TASK-P04-010 / TASK-P04-012"
+    ),
+    "application/services/rename_speakers.py": "REQ-ARC-012 / TASK-P03-013",
+}
+
+_DIRECT_IO_MODULE_ROOTS = {
+    "ftplib",
+    "http",
+    "os",
+    "shutil",
+    "smtplib",
+    "socket",
+    "sqlite3",
+    "subprocess",
+    "tempfile",
+    "urllib",
+}
+
+# Restricted to methods that are strong direct-filesystem signals. ``Path``
+# itself remains valid as an application/domain data type.
+_DIRECT_FILESYSTEM_METHODS = {
+    "chmod",
+    "mkdir",
+    "open",
+    "read_bytes",
+    "read_text",
+    "rmdir",
+    "symlink_to",
+    "touch",
+    "unlink",
+    "write_bytes",
+    "write_text",
+}
+
+
+def _parse(path: Path) -> ast.AST:
+    return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
 
 def _imported_modules(path: Path) -> set[str]:
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    tree = _parse(path)
     modules: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -52,33 +101,44 @@ def _layer_violations(package_root: Path = PACKAGE_ROOT) -> set[str]:
     return violations
 
 
-def _known_violations(path: Path = MANIFEST) -> set[str]:
+def _has_direct_stdlib_io(path: Path) -> bool:
+    tree = _parse(path)
+
+    for module in _imported_modules(path):
+        if module.split(".", 1)[0] in _DIRECT_IO_MODULE_ROOTS:
+            return True
+
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in _DIRECT_FILESYSTEM_METHODS
+        ):
+            return True
+
+    return False
+
+
+def _application_io_hotspots(package_root: Path = PACKAGE_ROOT) -> set[str]:
+    application_root = package_root / "application"
     return {
-        line.strip()
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
+        _relative_source(path, package_root)
+        for path in application_root.rglob("*.py")
+        if _has_direct_stdlib_io(path)
     }
 
 
-def test_dependency_violation_manifest_matches_current_brownfield_set() -> None:
-    """No new violation may enter and no fixed violation may remain hidden."""
+def test_dependency_direction_has_zero_forbidden_imports() -> None:
+    """REQ-ARC-001 AC-01/02: no domain/application forbidden dependency remains."""
 
     actual = _layer_violations()
-    known = _known_violations()
-
-    unexpected = sorted(actual - known)
-    stale = sorted(known - actual)
-
-    assert not unexpected, (
-        f"PLAN-003 dependency ratchet found new forbidden dependencies: {unexpected!r}"
-    )
-    assert not stale, (
-        f"PLAN-003 dependency ratchet manifest contains resolved dependencies: {stale!r}"
+    assert not actual, (
+        f"REQ-ARC-001 forbidden domain/application dependencies detected: {sorted(actual)!r}"
     )
 
 
 def test_dependency_scanner_detects_representative_forbidden_import(tmp_path: Path) -> None:
-    """Regression: the rule must detect a newly introduced application->infra import."""
+    """Regression: a new application->infrastructure import must be detected."""
 
     package = tmp_path / PROJECT_PACKAGE
     domain = package / "domain"
@@ -94,3 +154,40 @@ def test_dependency_scanner_detects_representative_forbidden_import(tmp_path: Pa
     assert "application/bad.py|yt_transcriber_bot.infrastructure.telegram" in _layer_violations(
         package
     )
+
+
+def test_application_direct_io_hotspots_have_frozen_boundary_owners() -> None:
+    """REQ-ARC-001 AC-04: stdlib I/O cannot become an ungoverned boundary bypass."""
+
+    actual = _application_io_hotspots()
+    governed = set(_GOVERNED_APPLICATION_IO_HOTSPOTS)
+
+    unexpected = sorted(actual - governed)
+    stale = sorted(governed - actual)
+
+    assert not unexpected, (
+        "ungoverned direct stdlib I/O appeared in application code; route it to "
+        f"the owning frozen boundary requirement/task: {unexpected!r}"
+    )
+    assert not stale, (
+        "application direct-I/O governance contains resolved/stale hotspots; "
+        f"converge the routing metadata deliberately: {stale!r}"
+    )
+
+
+def test_application_io_scanner_detects_representative_filesystem_access(
+    tmp_path: Path,
+) -> None:
+    """Regression: representative direct application filesystem I/O must be detected."""
+
+    package = tmp_path / PROJECT_PACKAGE
+    application = package / "application"
+    application.mkdir(parents=True)
+    (application / "bad_io.py").write_text(
+        "from pathlib import Path\n"
+        "def write(path: Path) -> None:\n"
+        "    path.write_text('x', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+
+    assert "application/bad_io.py" in _application_io_hotspots(package)

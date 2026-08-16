@@ -1,4 +1,0 @@
-# Temporary PLAN-003 migration manifest.
-# Format: <relative Python file>|<forbidden imported module>
-# No known violations remain after TASK-P03-009.
-# TASK-P03-012 owns removal of this temporary manifest/scaffolding.
