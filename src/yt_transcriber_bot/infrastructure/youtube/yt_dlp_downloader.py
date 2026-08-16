@@ -37,6 +37,7 @@ from yt_transcriber_bot.application.ports.youtube_downloader import (
     YouTubeDownloader,
     YouTubeError,
 )
+from yt_transcriber_bot.application.services.sanitization import sanitize_text
 from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
 from yt_transcriber_bot.domain.value_objects.duration import Duration
 from yt_transcriber_bot.domain.value_objects.language import Language
@@ -117,6 +118,7 @@ class YtDlpDownloader(YouTubeDownloader):
         subtitle_fetch_max_attempts: int = _SUBTITLE_FETCH_MAX_ATTEMPTS,
         subtitle_fetch_backoff_s: tuple[float, ...] = _SUBTITLE_FETCH_BACKOFF_S,
         sleep_fn: Callable[[float], None] = time.sleep,
+        error_sanitizer: Callable[[str], str] | None = None,
     ) -> None:
         self._ydl_factory = ydl_factory
         self._subtitle_fetcher = subtitle_fetcher
@@ -127,6 +129,7 @@ class YtDlpDownloader(YouTubeDownloader):
             delay for delay in subtitle_fetch_backoff_s if delay > 0
         )
         self._sleep_fn = sleep_fn
+        self._error_sanitizer = error_sanitizer or sanitize_text
 
     # ------------------------------------------------------------------
     # Common params
@@ -209,16 +212,17 @@ class YtDlpDownloader(YouTubeDownloader):
         raise_if_cancelled(cancel_event)
         return info
 
-    @staticmethod
-    def _map_exception(exc: Exception) -> YouTubeError:
-        msg = str(exc).lower()
+    def _map_exception(self, exc: Exception) -> YouTubeError:
+        raw = str(exc)
+        msg = raw.lower()
+        safe = self._error_sanitizer(raw)
         if "members-only" in msg or "members only" in msg or "join this channel" in msg:
-            return MembersOnlyError(str(exc))
+            return MembersOnlyError(safe)
         if "age" in msg and "restrict" in msg:
-            return AgeRestrictedError(str(exc))
+            return AgeRestrictedError(safe)
         if any(s in msg for s in ("private video", "video unavailable", "removed", "geo")):
-            return VideoUnavailableError(str(exc))
-        return YouTubeError(str(exc))
+            return VideoUnavailableError(safe)
+        return YouTubeError(safe)
 
     @staticmethod
     def _looks_like_format_unavailable(exc: Exception) -> bool:
@@ -423,7 +427,7 @@ class YtDlpDownloader(YouTubeDownloader):
                     attempt,
                     self._subtitle_fetch_max_attempts,
                     delay,
-                    exc,
+                    self._error_sanitizer(str(exc)),
                 )
                 if cancel_event is None:
                     self._sleep_fn(delay)

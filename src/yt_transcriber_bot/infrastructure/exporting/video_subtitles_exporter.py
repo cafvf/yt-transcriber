@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from yt_transcriber_bot.application.services.sanitization import sanitize_text
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
 from yt_transcriber_bot.infrastructure.exporting.transcript_exporter import (
     TranscriptExportService,
@@ -87,6 +88,7 @@ class VideoSoftSubtitleExportService:
         cookies_browser: str | None = None,
         ffmpeg_bin: str = "ffmpeg",
         command_runner: CommandRunner | None = None,
+        error_sanitizer: Callable[[str], str] | None = None,
     ) -> None:
         self._snapshots = snapshots
         self._transcript_exporter = transcript_exporter
@@ -97,6 +99,7 @@ class VideoSoftSubtitleExportService:
         self._cookies_browser = cookies_browser or None
         self._ffmpeg_bin = ffmpeg_bin
         self._command_runner = command_runner or _run_command
+        self._error_sanitizer = error_sanitizer or sanitize_text
 
     def export(
         self,
@@ -166,7 +169,9 @@ class VideoSoftSubtitleExportService:
             with self._ydl_factory(params) as ydl:
                 info = ydl.extract_info(video_id.canonical_url(), download=True)
         except Exception as exc:  # pragma: no cover - mapeamento defensivo
-            raise VideoSubtitleExportError(f"Falha ao baixar vídeo para legendagem: {exc}") from exc
+            raise VideoSubtitleExportError(
+                f"Falha ao baixar vídeo para legendagem: {self._error_sanitizer(str(exc))}"
+            ) from exc
         path = _extract_downloaded_video_path(info, work_dir, video_id)
         if path is None or not path.is_file():
             raise VideoSubtitleExportError("yt-dlp não retornou um arquivo de vídeo baixado")
@@ -200,7 +205,8 @@ class VideoSoftSubtitleExportService:
         if completed.returncode != 0:
             stderr = (completed.stderr or completed.stdout or "").strip()
             raise VideoSubtitleExportError(
-                "ffmpeg falhou ao muxar a legenda selecionável" + (f": {stderr}" if stderr else "")
+                "ffmpeg falhou ao muxar a legenda selecionável"
+                + (f": {self._error_sanitizer(stderr)}" if stderr else "")
             )
 
     def _assert_size_ok(self, path: Path, *, kind: str) -> None:

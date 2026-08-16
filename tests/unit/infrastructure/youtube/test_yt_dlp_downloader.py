@@ -954,3 +954,17 @@ Spec Driven Development Spec Driven Development ajuda a organizar contexto
         )
         result = downloader.fetch_subtitle(VideoId(value="dQw4w9WgXcQ"), track)
         assert result.segments[0][2] == "Spec Driven Development ajuda a organizar contexto"
+
+
+def test_provider_error_is_sanitized_before_leaving_youtube_adapter() -> None:
+    secret = "sk-secret12345"
+    private = "private transcript text"
+    downloader = _make(RuntimeError(f'authorization: Bearer {secret}; transcript: "{private}"'))
+    with pytest.raises(YouTubeError) as exc_info:
+        downloader.fetch_metadata(VideoId(value="dQw4w9WgXcQ"))
+
+    message = str(exc_info.value)
+    assert secret not in message
+    assert private not in message
+    assert "[REDACTED]" in message
+    assert "[OMITTED]" in message

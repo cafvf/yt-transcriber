@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -18,11 +19,15 @@ from yt_transcriber_bot.application.services.history_search import HistorySearch
 from yt_transcriber_bot.application.services.last_error import LastErrorService
 from yt_transcriber_bot.application.services.rename_speakers import RenameSpeakersService
 from yt_transcriber_bot.application.services.retention_policy import RetentionPolicy
+from yt_transcriber_bot.application.services.sanitization import sanitize_text
 from yt_transcriber_bot.application.use_cases.transcribe_video import (
     TranscribeVideoDependencies,
     TranscribeVideoUseCase,
 )
 from yt_transcriber_bot.configuration.credentials import ProviderCredentials
+from yt_transcriber_bot.configuration.external_services import (
+    TextGenerationEndpointPolicy,
+)
 from yt_transcriber_bot.infrastructure.audio.ffmpeg_converter import FfmpegAudioConverter
 from yt_transcriber_bot.infrastructure.diarization.composite_engine import (
     CompositeDiarizationEngine,
@@ -80,6 +85,13 @@ from yt_transcriber_bot.infrastructure.youtube.yt_dlp_real_factory import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _bound_error_sanitizer(settings: AppSettings) -> Callable[[str], str]:
+    def sanitize(detail: str) -> str:
+        return sanitize_text(detail, settings)
+
+    return sanitize
 
 
 @dataclass
@@ -176,9 +188,17 @@ def _make_summary_service(
     if settings.summary_backend == "disabled":
         return None
 
-    summary_client = OpenAICompatibleChatClient(
+    endpoint = TextGenerationEndpointPolicy(
         base_url=settings.summary_base_url,
         model=settings.summary_model,
+        explicitly_configured="summary_base_url" in settings.model_fields_set,
+    )
+    endpoint.require_transcript_disclosure_allowed()
+    error_sanitizer = _bound_error_sanitizer(settings)
+
+    summary_client = OpenAICompatibleChatClient(
+        base_url=endpoint.base_url,
+        model=endpoint.model,
         temperature=settings.summary_temperature,
         max_tokens=settings.summary_max_tokens,
         timeout_s=settings.summary_timeout_s,
@@ -186,6 +206,7 @@ def _make_summary_service(
         disable_thinking=settings.summary_disable_thinking,
         validate_model=settings.summary_validate_model,
         strict_model_match=settings.summary_strict_model_match,
+        error_sanitizer=error_sanitizer,
     )
     tokenizer_model = settings.summary_tokenizer_model or settings.summary_model
     tokenizer = make_text_tokenizer(
@@ -237,11 +258,13 @@ def build(
     file_storage = LocalFileStorage()
     snapshots = TranscriptSnapshotRepository(segments_dir)
 
+    error_sanitizer = _bound_error_sanitizer(settings)
     downloader: YouTubeDownloader = YtDlpDownloader(
         ydl_factory=real_ydl_factory,
         subtitle_fetcher=real_subtitle_fetcher,
         cookies_file=credentials.youtube_cookies_file or None,
         cookies_browser=credentials.youtube_cookies_browser or None,
+        error_sanitizer=error_sanitizer,
     )
     converter: AudioConverter = FfmpegAudioConverter()
 
@@ -276,6 +299,7 @@ def build(
         output_dir=settings.video_exports_dir(),
         cookies_file=credentials.youtube_cookies_file or None,
         cookies_browser=credentials.youtube_cookies_browser or None,
+        error_sanitizer=error_sanitizer,
         limits=VideoSubtitleExportLimits(
             max_duration_seconds=settings.max_video_subtitles_duration_min * 60,
             max_size_bytes=settings.max_video_subtitles_size_mb * 1024 * 1024,

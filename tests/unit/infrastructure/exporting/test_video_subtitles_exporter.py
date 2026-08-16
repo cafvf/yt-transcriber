@@ -146,3 +146,30 @@ def test_export_rejects_downloaded_video_larger_than_limit(tmp_path: Path) -> No
     service, _ = _service(tmp_path, video_payload_size=4096, max_size_bytes=2048)
     with pytest.raises(VideoSubtitleTooLargeError):
         service.export(video_id=VideoId("dQw4w9WgXcQ"), slug="video")
+
+
+def test_provider_download_error_is_sanitized_before_escape(tmp_path: Path) -> None:
+    snapshots = TranscriptSnapshotRepository(tmp_path / "segments")
+    snapshots.save("video", _snapshot())
+    secret = "sk-secret12345"
+    private = "private transcript text"
+
+    class FailingYDL(FakeYDL):
+        def extract_info(self, url: str, download: bool = True) -> dict[str, Any]:
+            raise RuntimeError(f'authorization: Bearer {secret}; transcript: "{private}"')
+
+    service = VideoSoftSubtitleExportService(
+        snapshots=snapshots,
+        transcript_exporter=TranscriptExportService(snapshots),
+        ydl_factory=lambda params: FailingYDL(params),
+        output_dir=tmp_path / "video_exports",
+    )
+
+    with pytest.raises(VideoSubtitleExportError) as exc_info:
+        service.export(video_id=VideoId("dQw4w9WgXcQ"), slug="video")
+
+    message = str(exc_info.value)
+    assert secret not in message
+    assert private not in message
+    assert "[REDACTED]" in message
+    assert "[OMITTED]" in message

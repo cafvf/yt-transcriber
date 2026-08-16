@@ -16,6 +16,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from yt_transcriber_bot.application.services.sanitization import sanitize_text
+
 
 class ChatCompletionError(RuntimeError):
     """Falha ao solicitar ou interpretar uma resposta da LLM."""
@@ -27,6 +29,7 @@ class ChatCompletionTimeoutError(ChatCompletionError):
 
 Transport = Callable[[str, Mapping[str, Any], Mapping[str, str], float], Mapping[str, Any]]
 ModelsTransport = Callable[[str, Mapping[str, str], float], Mapping[str, Any]]
+ErrorSanitizer = Callable[[str], str]
 
 
 @dataclass(frozen=True)
@@ -57,6 +60,7 @@ class OpenAICompatibleChatClient:
         disable_thinking: bool = True,
         validate_model: bool = True,
         strict_model_match: bool = True,
+        error_sanitizer: ErrorSanitizer | None = None,
         transport: Transport | None = None,
         models_transport: ModelsTransport | None = None,
     ) -> None:
@@ -69,6 +73,7 @@ class OpenAICompatibleChatClient:
         self._disable_thinking = disable_thinking
         self._validate_model = validate_model
         self._strict_model_match = strict_model_match
+        self._error_sanitizer = error_sanitizer or sanitize_text
         self._transport = transport or _urllib_transport
         self._models_transport = models_transport or _urllib_get_transport
         self._model_checked = False
@@ -116,9 +121,17 @@ class OpenAICompatibleChatClient:
             )
         except urllib.error.HTTPError as exc:
             detail = _read_http_error_body(exc)
-            hint = ""
             lowered = detail.lower()
-            if "exceeds" in lowered and "context" in lowered:
+            is_context_overflow = "exceeds" in lowered and "context" in lowered
+            safe_detail = (
+                "request exceeds the available context size"
+                if is_context_overflow
+                else "[OMITTED]"
+                if detail
+                else self._error_sanitizer(str(exc.reason))
+            )
+            hint = ""
+            if is_context_overflow:
                 hint = (
                     " Sugestão: reduza SUMMARY_MAX_INPUT_TOKENS, "
                     "SUMMARY_MAX_CHARS_PER_CHUNK ou SUMMARY_MAX_TOKENS; "
@@ -126,7 +139,7 @@ class OpenAICompatibleChatClient:
                 )
             raise ChatCompletionError(
                 "Falha HTTP ao chamar a API OpenAI-compatible. "
-                f"Status: {exc.code}. Detalhe: {detail or exc.reason}.{hint}"
+                f"Status: {exc.code}. Detalhe: {safe_detail}.{hint}"
             ) from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             if _is_timeout_error(exc):
@@ -135,12 +148,12 @@ class OpenAICompatibleChatClient:
                     "A chamada demorou mais que SUMMARY_TIMEOUT_S. "
                     "O bot pode reduzir automaticamente o chunk atual, mas considere também diminuir "
                     "SUMMARY_MAX_INPUT_TOKENS/SUMMARY_MAX_CHARS_PER_CHUNK ou aumentar SUMMARY_TIMEOUT_S. "
-                    f"Detalhe: {exc}"
+                    f"Detalhe: {self._error_sanitizer(str(exc))}"
                 ) from exc
             raise ChatCompletionError(
                 "Falha ao chamar a API OpenAI-compatible. "
                 "Verifique se o servidor do LM Studio está ativo e se SUMMARY_BASE_URL está correto. "
-                f"Detalhe: {exc}"
+                f"Detalhe: {self._error_sanitizer(str(exc))}"
             ) from exc
         try:
             choices = data["choices"]
@@ -155,7 +168,8 @@ class OpenAICompatibleChatClient:
         if self._strict_model_match and response_model and response_model != self._model:
             raise ChatCompletionError(
                 "O servidor OpenAI-compatible respondeu com um modelo diferente do configurado. "
-                f"SUMMARY_MODEL='{self._model}', modelo usado pelo servidor='{response_model}'. "
+                f"SUMMARY_MODEL='{self._model}', modelo usado pelo servidor='"
+                f"{self._error_sanitizer(response_model)}'. "
                 "Use exatamente o id listado por /v1/models em SUMMARY_MODEL ou desative "
                 "SUMMARY_STRICT_MODEL_MATCH=false se aceitar aliases do servidor."
             )
@@ -183,20 +197,22 @@ class OpenAICompatibleChatClient:
             )
         except urllib.error.HTTPError as exc:
             detail = _read_http_error_body(exc)
+            safe_detail = "[OMITTED]" if detail else self._error_sanitizer(str(exc.reason))
             raise ChatCompletionError(
                 "Não consegui validar SUMMARY_MODEL em /v1/models. "
-                f"Status: {exc.code}. Detalhe: {detail or exc.reason}. "
+                f"Status: {exc.code}. Detalhe: {safe_detail}. "
                 "Verifique SUMMARY_BASE_URL ou defina SUMMARY_VALIDATE_MODEL=false para pular a validação."
             ) from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise ChatCompletionError(
                 "Não consegui consultar /v1/models para validar SUMMARY_MODEL. "
                 "Verifique se o LM Studio Server está ativo e acessível pelo WSL2/host. "
-                f"Detalhe: {exc}"
+                f"Detalhe: {self._error_sanitizer(str(exc))}"
             ) from exc
         model_ids = _extract_model_ids(data)
         if self._model not in model_ids:
-            shown = ", ".join(model_ids[:20]) if model_ids else "<nenhum modelo retornado>"
+            shown_raw = ", ".join(model_ids[:20]) if model_ids else "<nenhum modelo retornado>"
+            shown = self._error_sanitizer(shown_raw)
             raise ChatCompletionError(
                 f"SUMMARY_MODEL='{self._model}' não está disponível em {self._base_url}/models. "
                 f"Modelos disponíveis: {shown}. "

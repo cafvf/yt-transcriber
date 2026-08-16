@@ -350,3 +350,77 @@ def test_openai_compatible_client_can_allow_response_model_alias() -> None:
     )
 
     assert client.complete(ChatCompletionRequest("s", "u")) == "resumo"
+
+
+def test_external_http_error_body_is_sanitized_before_escape() -> None:
+    import io
+    import urllib.error
+
+    secret = "sk-secret12345"
+    private = "private transcript text"
+
+    def transport(
+        url: str,
+        payload: Mapping[str, Any],
+        headers: Mapping[str, str],
+        timeout_s: float,
+    ) -> Mapping[str, Any]:
+        body = (
+            '{"error":{"message":"authorization: Bearer '
+            + secret
+            + '; transcript: "'
+            + private
+            + '""}}'
+        ).encode()
+        raise urllib.error.HTTPError(url, 500, "Server Error", {}, io.BytesIO(body))
+
+    client = OpenAICompatibleChatClient(
+        base_url="https://llm.example.invalid/v1",
+        model="configured-model",
+        validate_model=False,
+        transport=transport,
+    )
+    with pytest.raises(ChatCompletionError) as exc_info:
+        client.complete(ChatCompletionRequest("system", private))
+
+    message = str(exc_info.value)
+    assert secret not in message
+    assert private not in message
+    assert "[OMITTED]" in message
+    assert "authorization" not in message.lower()
+    assert "transcript:" not in message.lower()
+
+
+def test_context_overflow_detail_is_canonical_not_provider_body() -> None:
+    import io
+    import urllib.error
+
+    secret = "sk-secret12345"
+    private = "private transcript text"
+
+    def transport(
+        url: str,
+        payload: Mapping[str, Any],
+        headers: Mapping[str, str],
+        timeout_s: float,
+    ) -> Mapping[str, Any]:
+        body = (
+            "exceeds context; authorization: Bearer " + secret + "; transcript: " + private
+        ).encode()
+        raise urllib.error.HTTPError(url, 400, "Bad Request", {}, io.BytesIO(body))
+
+    client = OpenAICompatibleChatClient(
+        base_url="http://localhost:1234/v1",
+        model="configured-model",
+        validate_model=False,
+        transport=transport,
+    )
+    with pytest.raises(ChatCompletionError) as exc_info:
+        client.complete(ChatCompletionRequest("system", private))
+
+    message = str(exc_info.value)
+    assert "exceeds the available context size" in message
+    assert secret not in message
+    assert private not in message
+    assert "authorization" not in message.lower()
+    assert "transcript:" not in message.lower()
