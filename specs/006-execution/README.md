@@ -39,3 +39,13 @@ Current execution state:
 Detailed evidence is recorded in `F0-BASELINE.md`, `F1-SECURITY.md`,
 `F2-DOMAIN-DATA.md`, `F3-HEXAGONAL-SEAMS.md`, and
 `F4-WORKFLOW-DECOMPOSITION.md`.
+
+## Simplified tracking after PLAN-004
+
+To reduce execution-management overhead without changing frozen requirements, plans
+or tasks, post-PLAN-004 progress will be tracked through five larger outcome-based
+execution packages. PLAN-004 itself is unchanged and still finishes through its
+existing Subphases C and D.
+
+See `POST-PLAN-004-EXECUTION-ROADMAP.md` for the transition rule, package outcomes,
+execution cadence and session-resume instructions.

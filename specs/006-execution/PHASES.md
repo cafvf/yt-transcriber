@@ -41,3 +41,13 @@ dependencies, owners or gates:
 | D | `TASK-P04-014..017` | thin Telegram, reliability, convergence and exit gate |
 
 Subphase A is published and closed (`a68ba1c`, with post-push regression repair `8beea3d`). Subphase B is published and closed: `TASK-P04-002` at `d805525`, `TASK-P04-003` at `bb7ccd9`, with publication closure at `b9f2eba`. Execution is paused before Subphase C for review/discussion.
+
+## Post-PLAN-004 tracking decision
+
+The existing phase table and PLAN-004 Subphases A–D remain valid. No task owner,
+dependency or plan gate is changed.
+
+After `TASK-P04-017` closes PLAN-004, day-to-day progress reporting stops adding new
+phase/subphase layers and uses the five outcome-based execution packages documented
+in `POST-PLAN-004-EXECUTION-ROADMAP.md`. Frozen PLAN-005/PLAN-006 tasks remain the
+authoritative checklist underneath that simplified view.
