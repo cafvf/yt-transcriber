@@ -1,6 +1,6 @@
 # F4 — Application/Telegram workflow decomposition
 
-Status: **Active — execution subphase A / TASK-P04-001 published and closed; subphase B next**
+Status: **Active — execution subphases A and B published and closed; execution paused before subphase C for review/discussion**
 Plan: `PLAN-004`
 Base revision: `7c52c0d1d8682f4a1b59d8eeb57324171fa42fc7`
 Started: 2026-08-16
@@ -17,7 +17,7 @@ boundaries without changing any frozen task dependency or PLAN exit gate:
 | Execution subphase | Approved task range | Purpose | State |
 |---|---|---|---|
 | A | `TASK-P04-001` | establish application workflow/admission seam | **Published / closed** |
-| B | `TASK-P04-002..003` | execution/queue/cancel/recovery plus completed-history workflow | **Locally closed — convergence/push next** |
+| B | `TASK-P04-002..003` | execution/queue/cancel/recovery plus completed-history workflow | **Published / closed** |
 | C | `TASK-P04-004..013` | derived data, search, summary and operational decomposition | Pending |
 | D | `TASK-P04-014..017` | thin-Telegram closure, reliability, convergence and PLAN-004 exit gate | Pending |
 
@@ -309,7 +309,7 @@ was modified.
 
 ## TASK-P04-003 — Application-owned completed-history workflow
 
-Status: **Verified / locally closed — Subphase B ready for convergence and publication**
+Status: **Verified / published / closed**
 
 Functional commit:
 
@@ -418,8 +418,7 @@ Subphase B (`TASK-P04-002..003`) is now locally complete:
   coordination — locally closed;
 - `TASK-P04-003`: application-owned completed-history workflow — locally closed.
 
-Subphase B has not yet been published. The next operational step is a compact
-convergence gate over the combined P04-002/P04-003 state, followed by
-publication to `origin/main`.
+Subphase B passed its combined convergence gate and was published to
+`origin/main` at `b9f2eba7e005af87ec7a97ffe6c0e830fdeedbdc`.
 
-After publication, execution pauses before Subphase C for review/discussion.
+Execution is intentionally paused before Subphase C for review/discussion.

@@ -34,7 +34,7 @@ Current execution state:
 - F1 — security guardrails: **Verified / Closed**;
 - F2 — domain and data truth: **Verified / Closed**;
 - F3 — hexagonal boundaries and provider seams: **Verified / Closed — TASK-P03-001..014 complete; PLAN-003 exit gate passed**;
-- F4 — application/Telegram workflow decomposition: **Active — Subphase A published/closed; Subphase B locally closed — convergence and publication next**.
+- F4 — application/Telegram workflow decomposition: **Active — Subphases A and B published/closed; execution paused before Subphase C for review/discussion**.
 
 Detailed evidence is recorded in `F0-BASELINE.md`, `F1-SECURITY.md`,
 `F2-DOMAIN-DATA.md`, `F3-HEXAGONAL-SEAMS.md`, and
