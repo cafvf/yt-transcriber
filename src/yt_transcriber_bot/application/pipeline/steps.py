@@ -14,18 +14,26 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from yt_transcriber_bot.application.config import AppSettings
 from yt_transcriber_bot.application.pipeline.context import PipelineContext
 from yt_transcriber_bot.application.pipeline.runner import PipelineStep
 from yt_transcriber_bot.application.ports.audio_converter import AudioConverter
+from yt_transcriber_bot.application.ports.canonical_transcript import (
+    CanonicalTranscriptRecord,
+    CanonicalTranscriptStore,
+    TranscriptRenderContext,
+)
 from yt_transcriber_bot.application.ports.diarization_engine import (
     DiarizationEngine,
     DiarizationRequest,
     assign_speakers_to_segments,
 )
 from yt_transcriber_bot.application.ports.gpu_detector import GpuDetector
+from yt_transcriber_bot.application.ports.transcript_renderer import (
+    TranscriptRenderer,
+    TranscriptRenderRequest,
+)
 from yt_transcriber_bot.application.ports.transcription_engine import (
     OutOfMemoryError,
     ProcessingTarget,
@@ -42,6 +50,10 @@ from yt_transcriber_bot.application.runtime_selection import (
     RuntimePlan,
     select_runtime,
     smaller_model_alternative,
+)
+from yt_transcriber_bot.application.services.text_integrity import (
+    normalize_artifact_text,
+    text_has_unresolved_corruption,
 )
 from yt_transcriber_bot.domain.entities.job import JobStatus
 from yt_transcriber_bot.domain.entities.transcript import (
@@ -62,17 +74,6 @@ from yt_transcriber_bot.domain.value_objects.duration import Duration
 from yt_transcriber_bot.domain.value_objects.language import Language, LanguageSource
 from yt_transcriber_bot.domain.value_objects.provenance import ProcessingProvenance
 from yt_transcriber_bot.domain.value_objects.slug import Slug
-from yt_transcriber_bot.infrastructure.text.normalization import (
-    normalize_artifact_text,
-    text_has_unresolved_corruption,
-)
-
-if TYPE_CHECKING:
-    from yt_transcriber_bot.domain.entities.transcript import Transcript
-    from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
-    from yt_transcriber_bot.infrastructure.persistence.filesystem.transcript_snapshot import (
-        TranscriptSnapshotRepository,
-    )
 
 logger = logging.getLogger(__name__)
 
@@ -839,7 +840,7 @@ class DiarizeStep(PipelineStep):
 
 
 class RenderMarkdownStep(PipelineStep):
-    """Gera o arquivo .md final no diretório de transcrições."""
+    """Render approved Markdown and persist structured canonical evidence."""
 
     @property
     def name(self) -> str:
@@ -847,11 +848,11 @@ class RenderMarkdownStep(PipelineStep):
 
     def __init__(
         self,
-        renderer: object,
+        renderer: TranscriptRenderer,
         transcripts_dir: Path,
         settings: AppSettings,
         diarization_model_name: str = "pyannote/speaker-diarization-community-1",
-        snapshot_repository: TranscriptSnapshotRepository | None = None,
+        snapshot_repository: CanonicalTranscriptStore | None = None,
         processing_fingerprint: str = "",
     ) -> None:
         self._renderer = renderer
@@ -865,10 +866,8 @@ class RenderMarkdownStep(PipelineStep):
         ctx.job.transition_to(JobStatus.RENDERING)
         if ctx.metadata is None or ctx.transcript is None:
             raise RuntimeError("RenderMarkdownStep sem metadata/transcript")
-
-        from yt_transcriber_bot.infrastructure.rendering.markdown_renderer import (
-            RenderContext,
-        )
+        if self._snapshot_repository is None:
+            raise RuntimeError("Repositório canônico de transcrição não configurado")
 
         whisper_model = (
             ctx.runtime_plan.model.name
@@ -884,7 +883,7 @@ class RenderMarkdownStep(PipelineStep):
             dest = self._transcripts_dir / f"{slug}-{n}.md"
             n += 1
 
-        render_context = RenderContext(
+        render_context = TranscriptRenderContext(
             rendered_at=datetime.now(UTC),
             whisper_model=whisper_model,
             diarization_model=(
@@ -892,11 +891,18 @@ class RenderMarkdownStep(PipelineStep):
             ),
             transcription_source=ctx.transcript.source,
         )
-        rendered = self._renderer.render(  # type: ignore[attr-defined]
-            ctx.metadata,
-            ctx.transcript,
-            render_context,
-            speaker_aliases=ctx.job.speaker_renames,
+        record = CanonicalTranscriptRecord(
+            metadata=ctx.metadata,
+            transcript=ctx.transcript,
+            context=render_context,
+            processing_fingerprint=self._processing_fingerprint,
+            processing_provenance=ctx.processing_provenance,
+        )
+        rendered = self._renderer.render_transcript(
+            TranscriptRenderRequest(
+                record=record,
+                speaker_aliases=ctx.job.speaker_renames,
+            )
         )
         if ctx.youtube_subtitle_used and text_has_unresolved_corruption(rendered):
             ctx.add_diagnostic(
@@ -905,24 +911,9 @@ class RenderMarkdownStep(PipelineStep):
             raise PipelineRejectionError(
                 "A legenda do YouTube permaneceu corrompida após renderização."
             )
-        if self._snapshot_repository is None:
-            raise RuntimeError("Repositório de snapshot canônico não configurado")
-
-        from yt_transcriber_bot.infrastructure.persistence.filesystem.transcript_snapshot import (
-            TranscriptSnapshot,
-        )
 
         reference = ctx.job.job_id
-        self._snapshot_repository.save(
-            reference,
-            TranscriptSnapshot(
-                metadata=ctx.metadata,
-                transcript=ctx.transcript,
-                context=render_context,
-                processing_fingerprint=self._processing_fingerprint,
-                processing_provenance=ctx.processing_provenance,
-            ),
-        )
+        self._snapshot_repository.persist(reference, record)
         tmp = dest.with_name(f".{dest.name}.{ctx.job.job_id}.tmp")
         try:
             tmp.write_text(rendered, encoding="utf-8")

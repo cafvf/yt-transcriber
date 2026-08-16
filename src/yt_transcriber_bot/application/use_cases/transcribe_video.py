@@ -7,7 +7,6 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from yt_transcriber_bot.application.config import AppSettings
 from yt_transcriber_bot.application.pipeline.context import PipelineContext
@@ -28,9 +27,11 @@ from yt_transcriber_bot.application.pipeline.steps import (
     TranscriptionStepProgress,
 )
 from yt_transcriber_bot.application.ports.audio_converter import AudioConverter
+from yt_transcriber_bot.application.ports.canonical_transcript import CanonicalTranscriptStore
 from yt_transcriber_bot.application.ports.diarization_engine import DiarizationEngine
 from yt_transcriber_bot.application.ports.gpu_detector import GpuDetector
 from yt_transcriber_bot.application.ports.job_repository import JobRepository
+from yt_transcriber_bot.application.ports.transcript_renderer import TranscriptRenderer
 from yt_transcriber_bot.application.ports.transcription_engine import TranscriptionEngine
 from yt_transcriber_bot.application.ports.youtube_downloader import YouTubeDownloader
 from yt_transcriber_bot.application.services.config_signature import (
@@ -40,11 +41,6 @@ from yt_transcriber_bot.application.services.sanitization import sanitize_text
 from yt_transcriber_bot.domain.entities.job import Job, JobStatus
 
 logger = logging.getLogger(__name__)
-
-if TYPE_CHECKING:
-    from yt_transcriber_bot.infrastructure.persistence.filesystem.transcript_snapshot import (
-        TranscriptSnapshotRepository,
-    )
 
 
 @dataclass
@@ -67,10 +63,10 @@ class TranscribeVideoDependencies:
     gpu_detector: GpuDetector
     transcription_engine: TranscriptionEngine
     diarization_engine: DiarizationEngine
-    renderer: object
+    renderer: TranscriptRenderer
     settings: AppSettings
     repository: JobRepository
-    snapshot_repository: TranscriptSnapshotRepository | None = None
+    snapshot_repository: CanonicalTranscriptStore | None = None
     diarization_model_name: str = "pyannote/speaker-diarization-community-1"
 
 

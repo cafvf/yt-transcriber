@@ -9,6 +9,7 @@ from typing import Any
 
 from yt_transcriber_bot.application.config import AppSettings
 from yt_transcriber_bot.application.ports.audio_converter import AudioConverter
+from yt_transcriber_bot.application.ports.canonical_transcript import CanonicalTranscriptStore
 from yt_transcriber_bot.application.ports.diarization_engine import DiarizationEngine
 from yt_transcriber_bot.application.ports.gpu_detector import GpuDetector, HardwareProfile
 from yt_transcriber_bot.application.ports.job_repository import JobRepository
@@ -187,7 +188,7 @@ def _make_diarization_engine(hf_token: str) -> DiarizationEngine:
 def _make_summary_service(
     settings: AppSettings,
     credentials: ProviderCredentials,
-    snapshots: TranscriptSnapshotRepository,
+    snapshots: CanonicalTranscriptStore,
 ) -> TranscriptSummaryService | None:
     if settings.summary_backend == "disabled":
         return None

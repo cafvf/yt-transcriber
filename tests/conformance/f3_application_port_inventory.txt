@@ -1,11 +1,13 @@
 # PLAN-003 application port/data-contract inventory.
 # Keep sorted. Any addition requires an approved demonstrated capability.
 audio_converter.py
+canonical_transcript.py
 diarization_engine.py
 file_storage.py
 gpu_detector.py
 history_search.py
 incoming_media.py
 job_repository.py
+transcript_renderer.py
 transcription_engine.py
 youtube_downloader.py

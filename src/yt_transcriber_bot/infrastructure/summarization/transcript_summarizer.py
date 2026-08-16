@@ -16,11 +16,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol, cast
 
-from yt_transcriber_bot.domain.entities.transcript import TranscriptSegment
-from yt_transcriber_bot.infrastructure.persistence.filesystem.transcript_snapshot import (
-    TranscriptSnapshot,
-    TranscriptSnapshotRepository,
+from yt_transcriber_bot.application.ports.canonical_transcript import (
+    CanonicalTranscriptRecord,
+    CanonicalTranscriptStore,
 )
+from yt_transcriber_bot.domain.entities.transcript import TranscriptSegment
 from yt_transcriber_bot.infrastructure.summarization.openai_compatible_client import (
     ChatCompletionError,
     ChatCompletionRequest,
@@ -103,7 +103,7 @@ class TranscriptSummaryService:
     def __init__(
         self,
         *,
-        snapshots: TranscriptSnapshotRepository,
+        snapshots: CanonicalTranscriptStore,
         chat_client: ChatCompletionClient,
         output_dir: Path,
         max_chars_per_chunk: int = 18_000,
@@ -307,7 +307,7 @@ class TranscriptSummaryService:
     def _summarize_chunk_adaptively(
         self,
         *,
-        snap: TranscriptSnapshot,
+        snap: CanonicalTranscriptRecord,
         chunk: str,
         label: str,
         current: int,
@@ -398,7 +398,7 @@ class TranscriptSummaryService:
 
     def _synthesize_partials_adaptively(
         self,
-        snap: TranscriptSnapshot,
+        snap: CanonicalTranscriptRecord,
         partials: list[str],
         retries_left: int,
         on_progress: Callable[[SummaryProgress], None] | None,
@@ -429,7 +429,7 @@ class TranscriptSummaryService:
                 snap, [left, right], retries_left - 1, on_progress
             )
 
-    def _summarize_single(self, snap: TranscriptSnapshot, transcript_text: str) -> str:
+    def _summarize_single(self, snap: CanonicalTranscriptRecord, transcript_text: str) -> str:
         return self._chat_client.complete(
             ChatCompletionRequest(
                 system_prompt=_system_prompt(
@@ -441,7 +441,7 @@ class TranscriptSummaryService:
         )
 
     def _summarize_chunk(
-        self, snap: TranscriptSnapshot, chunk: str, index: str | int, total: str | int
+        self, snap: CanonicalTranscriptRecord, chunk: str, index: str | int, total: str | int
     ) -> str:
         return self._chat_client.complete(
             ChatCompletionRequest(
@@ -453,7 +453,7 @@ class TranscriptSummaryService:
             )
         )
 
-    def _synthesize_partials(self, snap: TranscriptSnapshot, partials: list[str]) -> str:
+    def _synthesize_partials(self, snap: CanonicalTranscriptRecord, partials: list[str]) -> str:
         joined = "\n\n---\n\n".join(partials)
         return self._chat_client.complete(
             ChatCompletionRequest(
@@ -510,7 +510,7 @@ def _system_prompt(
     )
 
 
-def _single_pass_prompt(snap: TranscriptSnapshot, transcript_text: str) -> str:
+def _single_pass_prompt(snap: CanonicalTranscriptRecord, transcript_text: str) -> str:
     return (
         f'Gere um resumo estruturado do vídeo "{snap.metadata.title}".\n\n'
         "A saída deve conter exatamente estas seções:\n"
@@ -527,7 +527,9 @@ def _single_pass_prompt(snap: TranscriptSnapshot, transcript_text: str) -> str:
     )
 
 
-def _chunk_prompt(snap: TranscriptSnapshot, chunk: str, index: str | int, total: str | int) -> str:
+def _chunk_prompt(
+    snap: CanonicalTranscriptRecord, chunk: str, index: str | int, total: str | int
+) -> str:
     return (
         f'Este é o bloco {index}/{total} da transcrição do vídeo "{snap.metadata.title}".\n'
         "Resuma apenas este bloco, preservando timestamps úteis e sem concluir além do trecho recebido.\n"
@@ -536,7 +538,7 @@ def _chunk_prompt(snap: TranscriptSnapshot, chunk: str, index: str | int, total:
     )
 
 
-def _synthesis_prompt(snap: TranscriptSnapshot, partials: str) -> str:
+def _synthesis_prompt(snap: CanonicalTranscriptRecord, partials: str) -> str:
     return (
         f'A seguir estão resumos parciais do vídeo "{snap.metadata.title}".\n'
         "Sintetize em um resumo final sem duplicar tópicos. Preserve timestamps úteis.\n\n"
@@ -554,7 +556,7 @@ def _synthesis_prompt(snap: TranscriptSnapshot, partials: str) -> str:
 
 
 def _snapshot_to_text(
-    snap: TranscriptSnapshot,
+    snap: CanonicalTranscriptRecord,
     aliases: Mapping[str, str],
     *,
     deduplicate: bool = True,
@@ -934,14 +936,14 @@ def _word_spans(text: str) -> list[tuple[str, int, int]]:
     ]
 
 
-def _transcript_language_code(snap: TranscriptSnapshot) -> str:
+def _transcript_language_code(snap: CanonicalTranscriptRecord) -> str:
     """Retorna o idioma conhecido sem fabricar um fato ausente."""
 
     return snap.transcript.language.code if snap.transcript.language else "desconhecido"
 
 
 def _wrap_summary_markdown(
-    snap: TranscriptSnapshot,
+    snap: CanonicalTranscriptRecord,
     body: str,
     *,
     model: str,

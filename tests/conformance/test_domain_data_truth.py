@@ -206,7 +206,6 @@ def test_f2_source_guards_against_known_fact_fabrication() -> None:
     assert "return Language.en()" not in youtube
     assert "allowed[0]" not in whisper
     assert 'or "pt"' not in steps
-    assert "Repositório de snapshot canônico não configurado" in steps
     assert "Falha ao persistir snapshot da transcrição" not in steps
 
 

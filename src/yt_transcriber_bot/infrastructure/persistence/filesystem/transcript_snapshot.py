@@ -3,35 +3,31 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from yt_transcriber_bot.application.ports.canonical_transcript import (
+    CanonicalTranscriptCorruptError,
+    CanonicalTranscriptRecord,
+    CanonicalTranscriptStore,
+    TranscriptRenderContext,
+)
 from yt_transcriber_bot.domain.entities.transcript import Transcript, TranscriptSegment
 from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
 from yt_transcriber_bot.domain.value_objects.duration import Duration
 from yt_transcriber_bot.domain.value_objects.language import Language, LanguageSource
 from yt_transcriber_bot.domain.value_objects.provenance import ProcessingProvenance
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
-from yt_transcriber_bot.infrastructure.rendering.markdown_renderer import RenderContext
 
 SCHEMA_VERSION = 2
 LEGACY_SCHEMA_VERSION = 1
 
 
-@dataclass(frozen=True)
-class TranscriptSnapshot:
-    metadata: VideoMetadata
-    transcript: Transcript
-    context: RenderContext
-    processing_fingerprint: str = ""
-    processing_provenance: ProcessingProvenance = field(
-        default_factory=ProcessingProvenance.unknown
-    )
+TranscriptSnapshot = CanonicalTranscriptRecord
 
 
-class TranscriptSnapshotRepository:
+class TranscriptSnapshotRepository(CanonicalTranscriptStore):
     """Salva/carrega snapshots JSON por referência canônica explícita."""
 
     def __init__(self, base_dir: Path) -> None:
@@ -39,6 +35,9 @@ class TranscriptSnapshotRepository:
 
     def path_for(self, reference: str) -> Path:
         return self._base_dir / f"{reference}.json"
+
+    def persist(self, reference: str, record: CanonicalTranscriptRecord) -> None:
+        self.save(reference, record)
 
     def save(self, reference: str, snapshot: TranscriptSnapshot) -> Path:
         self._base_dir.mkdir(parents=True, exist_ok=True)
@@ -61,7 +60,14 @@ class TranscriptSnapshotRepository:
         path = self.path_for(reference)
         if not path.is_file():
             return None
-        return self._decode(self._read_json(path))
+        try:
+            return self._decode(self._read_json(path))
+        except CanonicalTranscriptCorruptError:
+            raise
+        except (KeyError, TypeError, ValueError) as exc:
+            raise CanonicalTranscriptCorruptError(
+                "snapshot inválido: estrutura canônica corrompida"
+            ) from exc
 
     def load_reference(self, reference: str) -> TranscriptSnapshot | None:
         return self.load(reference)
@@ -73,8 +79,13 @@ class TranscriptSnapshotRepository:
         data = self._read_json(path)
         raw_metadata = data.get("metadata")
         if not isinstance(raw_metadata, dict):
-            raise ValueError("snapshot inválido: metadata deve ser um objeto")
-        return self._decode_metadata(raw_metadata)
+            raise CanonicalTranscriptCorruptError("snapshot inválido: metadata deve ser um objeto")
+        try:
+            return self._decode_metadata(raw_metadata)
+        except CanonicalTranscriptCorruptError:
+            raise
+        except (KeyError, TypeError, ValueError) as exc:
+            raise CanonicalTranscriptCorruptError("snapshot inválido: metadata corrompida") from exc
 
     def load_metadata_many(self, references: tuple[str, ...]) -> dict[str, VideoMetadata]:
         metadata: dict[str, VideoMetadata] = {}
@@ -86,9 +97,12 @@ class TranscriptSnapshotRepository:
 
     @staticmethod
     def _read_json(path: Path) -> dict[str, object]:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise CanonicalTranscriptCorruptError("snapshot inválido: JSON malformado") from exc
         if not isinstance(data, dict):
-            raise ValueError("snapshot inválido: JSON raiz deve ser um objeto")
+            raise CanonicalTranscriptCorruptError("snapshot inválido: JSON raiz deve ser um objeto")
         return data
 
     @staticmethod
@@ -147,12 +161,14 @@ class TranscriptSnapshotRepository:
     def _decode(data: dict[str, object]) -> TranscriptSnapshot:
         version = data.get("schema_version")
         if version not in {LEGACY_SCHEMA_VERSION, SCHEMA_VERSION}:
-            raise ValueError(f"schema_version não suportado: {version}")
+            raise CanonicalTranscriptCorruptError(f"schema_version não suportado: {version}")
         m_raw = data.get("metadata")
         t_raw = data.get("transcript")
         c_raw = data.get("context")
         if not (isinstance(m_raw, dict) and isinstance(t_raw, dict) and isinstance(c_raw, dict)):
-            raise ValueError("snapshot inválido: metadata/transcript/context devem ser dicts")
+            raise CanonicalTranscriptCorruptError(
+                "snapshot inválido: metadata/transcript/context devem ser dicts"
+            )
         metadata = TranscriptSnapshotRepository._decode_metadata(m_raw)
         raw_segments = t_raw.get("segments")
         if not isinstance(raw_segments, list):
@@ -194,7 +210,7 @@ class TranscriptSnapshotRepository:
             observed_language_confidence=observed_confidence,
             language_source=language_source,
         )
-        context = RenderContext(
+        context = TranscriptRenderContext(
             rendered_at=datetime.fromisoformat(str(c_raw["rendered_at"])),
             whisper_model=str(c_raw["whisper_model"]),
             diarization_model=str(c_raw["diarization_model"]),

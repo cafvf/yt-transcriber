@@ -14,13 +14,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from yt_transcriber_bot.application.ports.canonical_transcript import CanonicalTranscriptStore
 from yt_transcriber_bot.application.services.sanitization import sanitize_text
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
 from yt_transcriber_bot.infrastructure.exporting.transcript_exporter import (
     TranscriptExportService,
-)
-from yt_transcriber_bot.infrastructure.persistence.filesystem.transcript_snapshot import (
-    TranscriptSnapshotRepository,
 )
 
 
@@ -79,7 +77,7 @@ class VideoSoftSubtitleExportService:
     def __init__(
         self,
         *,
-        snapshots: TranscriptSnapshotRepository,
+        snapshots: CanonicalTranscriptStore,
         transcript_exporter: TranscriptExportService,
         ydl_factory: _YDLFactory,
         output_dir: Path,

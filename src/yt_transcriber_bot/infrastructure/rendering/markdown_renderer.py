@@ -12,26 +12,21 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
-from datetime import datetime
 
+from yt_transcriber_bot.application.ports.canonical_transcript import TranscriptRenderContext
+from yt_transcriber_bot.application.ports.transcript_renderer import (
+    TranscriptRenderer,
+    TranscriptRenderRequest,
+)
 from yt_transcriber_bot.domain.entities.transcript import SpeakerTurn, Transcript
 from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
 from yt_transcriber_bot.domain.value_objects.duration import Duration
 from yt_transcriber_bot.infrastructure.text.normalization import normalize_artifact_text
 
-
-@dataclass(frozen=True)
-class RenderContext:
-    """Metadados de execução incluídos no cabeçalho do MD."""
-
-    rendered_at: datetime
-    whisper_model: str
-    diarization_model: str  # ex.: "pyannote/speaker-diarization-3.1"
-    transcription_source: str  # whisperx | youtube_manual | youtube_auto
+RenderContext = TranscriptRenderContext
 
 
-class MarkdownTranscriptRenderer:
+class MarkdownTranscriptRenderer(TranscriptRenderer):
     """Converte (VideoMetadata, Transcript, RenderContext) em string Markdown.
 
     A saída é otimizada para leitura humana, não apenas para arquivamento:
@@ -43,6 +38,15 @@ class MarkdownTranscriptRenderer:
     max_block_duration_s = 90.0
     max_block_chars = 1200
     max_paragraph_chars = 520
+
+    def render_transcript(self, request: TranscriptRenderRequest) -> str:
+        record = request.record
+        return self.render(
+            record.metadata,
+            record.transcript,
+            record.context,
+            speaker_aliases=request.speaker_aliases,
+        )
 
     def render(
         self,

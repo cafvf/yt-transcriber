@@ -1,6 +1,6 @@
 """Exportação de snapshots de transcrição para JSON, SRT e VTT.
 
-Os exportadores trabalham sobre ``TranscriptSnapshot`` já persistido. Assim,
+Os exportadores trabalham sobre ``CanonicalTranscriptRecord`` já persistido. Assim,
 artefatos derivados podem ser gerados para vídeos antigos sem reprocessar áudio,
 WhisperX ou diarização.
 """
@@ -13,11 +13,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from yt_transcriber_bot.domain.entities.transcript import TranscriptSegment
-from yt_transcriber_bot.infrastructure.persistence.filesystem.transcript_snapshot import (
-    TranscriptSnapshot,
-    TranscriptSnapshotRepository,
+from yt_transcriber_bot.application.ports.canonical_transcript import (
+    CanonicalTranscriptRecord,
+    CanonicalTranscriptStore,
 )
+from yt_transcriber_bot.domain.entities.transcript import TranscriptSegment
 from yt_transcriber_bot.infrastructure.text.normalization import normalize_artifact_text
 
 ExportFormat = Literal["json", "srt", "vtt"]
@@ -35,7 +35,7 @@ class ExportResult:
 class TranscriptExportService:
     """Exporta uma transcrição persistida em formatos interoperáveis."""
 
-    def __init__(self, snapshots: TranscriptSnapshotRepository) -> None:
+    def __init__(self, snapshots: CanonicalTranscriptStore) -> None:
         self._snapshots = snapshots
 
     def export(
@@ -84,7 +84,7 @@ def _clean_caption_text(text: str) -> str:
     return normalize_artifact_text(text)
 
 
-def _render_json(snap: TranscriptSnapshot, aliases: Mapping[str, str]) -> str:
+def _render_json(snap: CanonicalTranscriptRecord, aliases: Mapping[str, str]) -> str:
     m = snap.metadata
     t = snap.transcript
     c = snap.context
@@ -139,7 +139,7 @@ def _render_json(snap: TranscriptSnapshot, aliases: Mapping[str, str]) -> str:
     return json.dumps(data, ensure_ascii=False, indent=2) + "\n"
 
 
-def _render_srt(snap: TranscriptSnapshot, aliases: Mapping[str, str]) -> str:
+def _render_srt(snap: CanonicalTranscriptRecord, aliases: Mapping[str, str]) -> str:
     blocks: list[str] = []
     for idx, seg in enumerate(_valid_segments(snap.transcript.segments), start=1):
         speaker = _display_speaker(seg.speaker_label, aliases)
@@ -152,7 +152,7 @@ def _render_srt(snap: TranscriptSnapshot, aliases: Mapping[str, str]) -> str:
     return "\n\n".join(blocks).rstrip() + "\n"
 
 
-def _render_vtt(snap: TranscriptSnapshot, aliases: Mapping[str, str]) -> str:
+def _render_vtt(snap: CanonicalTranscriptRecord, aliases: Mapping[str, str]) -> str:
     blocks = ["WEBVTT", ""]
     for seg in _valid_segments(snap.transcript.segments):
         speaker = _display_speaker(seg.speaker_label, aliases)

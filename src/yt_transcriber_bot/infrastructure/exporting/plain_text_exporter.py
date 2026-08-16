@@ -12,13 +12,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from yt_transcriber_bot.application.ports.canonical_transcript import (
+    CanonicalTranscriptRecord,
+    CanonicalTranscriptStore,
+)
 from yt_transcriber_bot.infrastructure.exporting.transcript_exporter import (
     _display_speaker,
     _valid_segments,
-)
-from yt_transcriber_bot.infrastructure.persistence.filesystem.transcript_snapshot import (
-    TranscriptSnapshot,
-    TranscriptSnapshotRepository,
 )
 from yt_transcriber_bot.infrastructure.text.normalization import normalize_artifact_text
 
@@ -33,7 +33,7 @@ class PlainTextExportResult:
 class PlainTextTranscriptExportService:
     """Renderiza texto simples, sanitizado e legível de uma transcrição salva."""
 
-    def __init__(self, snapshots: TranscriptSnapshotRepository) -> None:
+    def __init__(self, snapshots: CanonicalTranscriptStore) -> None:
         self._snapshots = snapshots
 
     def export(
@@ -57,7 +57,7 @@ class PlainTextTranscriptExportService:
         return PlainTextExportResult(path=output_path)
 
 
-def _render_plain_text(snapshot: TranscriptSnapshot, aliases: Mapping[str, str]) -> str:
+def _render_plain_text(snapshot: CanonicalTranscriptRecord, aliases: Mapping[str, str]) -> str:
     """Representa metadados mínimos e segmentos válidos, sem Markdown."""
     metadata = snapshot.metadata
     transcript = snapshot.transcript
