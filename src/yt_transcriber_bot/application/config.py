@@ -245,6 +245,11 @@ class AppSettings(BaseSettings):
         le=20000,
         description="Número máximo de caracteres do traceback operacional anexado ao /lasterror",
     )
+    operational_log_max_bytes: int = Field(default=5_000_000, ge=65_536, le=100_000_000)
+    operational_log_backup_count: int = Field(default=3, ge=1, le=20)
+    audit_log_max_bytes: int = Field(default=2_000_000, ge=65_536, le=100_000_000)
+    audit_log_backup_count: int = Field(default=2, ge=1, le=20)
+    operational_error_max_records: int = Field(default=500, ge=10, le=10_000)
 
     # ===== Sumarização por LLM local/OpenAI-compatible =====
     summary_backend: str = Field(

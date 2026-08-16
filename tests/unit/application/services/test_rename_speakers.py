@@ -18,6 +18,9 @@ from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
 from yt_transcriber_bot.domain.value_objects.duration import Duration
 from yt_transcriber_bot.domain.value_objects.language import Language
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
+from yt_transcriber_bot.infrastructure.persistence.filesystem.canonical_markdown_writer import (
+    FilesystemCanonicalMarkdownWriter,
+)
 from yt_transcriber_bot.infrastructure.persistence.filesystem.transcript_snapshot import (
     TranscriptSnapshot,
     TranscriptSnapshotRepository,
@@ -60,7 +63,9 @@ def snapshot() -> TranscriptSnapshot:
 @pytest.fixture
 def service(tmp_path: Path) -> RenameSpeakersService:
     repo = TranscriptSnapshotRepository(tmp_path / "segments")
-    return RenameSpeakersService(repo, MarkdownTranscriptRenderer())
+    return RenameSpeakersService(
+        repo, MarkdownTranscriptRenderer(), FilesystemCanonicalMarkdownWriter()
+    )
 
 
 def test_list_speakers(

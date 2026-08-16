@@ -24,12 +24,6 @@ PACKAGE_ROOT = REPO_ROOT / "src" / PROJECT_PACKAGE
 _GOVERNED_APPLICATION_IO_HOTSPOTS = {
     "application/config.py": "REQ-ARC-010",
     "application/pipeline/steps.py": "REQ-ARC-012 / TASK-P03-013",
-    "application/services/filesystem_safety.py": ("REQ-SEC-007 / REQ-ARC-009 / TASK-P04-012"),
-    "application/services/healthcheck.py": "REQ-ARC-009 / TASK-P04-012",
-    "application/services/last_error.py": (
-        "REQ-DATA-006 / REQ-ARC-009 / TASK-P04-010 / TASK-P04-012"
-    ),
-    "application/services/rename_speakers.py": "REQ-ARC-012 / TASK-P03-013",
 }
 
 _DIRECT_IO_MODULE_ROOTS = {

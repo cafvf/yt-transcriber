@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from yt_transcriber_bot.application.ports.canonical_markdown import CanonicalMarkdownWriter
 from yt_transcriber_bot.application.ports.canonical_transcript import (
     CanonicalTranscriptStore,
 )
@@ -29,9 +30,11 @@ class RenameSpeakersService:
         self,
         snapshots: CanonicalTranscriptStore,
         renderer: TranscriptRenderer,
+        writer: CanonicalMarkdownWriter,
     ) -> None:
         self._snapshots = snapshots
         self._renderer = renderer
+        self._writer = writer
 
     def list_speakers(self, slug: str) -> tuple[str, ...]:
         return self._snapshots.require(slug).transcript.speaker_labels()
@@ -63,6 +66,5 @@ class RenameSpeakersService:
                 speaker_aliases=effective,
             )
         )
-        md_path.parent.mkdir(parents=True, exist_ok=True)
-        md_path.write_text(rendered, encoding="utf-8")
+        self._writer.write(md_path, rendered)
         return RenameResult(md_path=md_path, speakers_renamed=len(effective))

@@ -45,6 +45,7 @@ from yt_transcriber_bot.application.services.retention_policy import (
     RetentionPolicy,
 )
 from yt_transcriber_bot.application.services.sanitization import sanitize_text
+from yt_transcriber_bot.application.services.search_indexing import SearchIndexingService
 from yt_transcriber_bot.application.services.startup_recovery import (
     RecoveredPendingJob,
     StartupRecoveryService,
@@ -65,6 +66,7 @@ from yt_transcriber_bot.application.workflows.admission import (
     prepare_validated_media_submission,
     validate_media_submission,
 )
+from yt_transcriber_bot.application.workflows.derivatives import TranscriptDerivativeWorkflow
 from yt_transcriber_bot.application.workflows.execution import (
     ExecutionLifecycleService,
     PrimaryDeliveryOutcome,
@@ -77,6 +79,9 @@ from yt_transcriber_bot.application.workflows.history import (
     CompletedHistoryWorkflow,
     MarkdownRetrievalState,
 )
+from yt_transcriber_bot.application.workflows.operations import OperationalWorkflow
+from yt_transcriber_bot.application.workflows.summary import SummaryWorkflow
+from yt_transcriber_bot.application.workflows.text_search import TextSearchWorkflow
 from yt_transcriber_bot.domain.entities.job import Job
 from yt_transcriber_bot.domain.value_objects.media_source import MediaSource, MediaSourceType
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
@@ -298,6 +303,11 @@ class TelegramBotAdapter:
         audit_logger: ExecutionAuditLogger | None = None,
         media_downloader: IncomingMediaDownloader | None = None,
         duration_inspector: AudioDurationInspector | None = None,
+        text_search_workflow: TextSearchWorkflow | None = None,
+        derivative_workflow: TranscriptDerivativeWorkflow | None = None,
+        summary_workflow: SummaryWorkflow | None = None,
+        operational_workflow: OperationalWorkflow | None = None,
+        search_indexing_service: SearchIndexingService | None = None,
     ) -> None:
         self._settings = settings
         self._client = client
@@ -321,7 +331,17 @@ class TelegramBotAdapter:
         self._audit_logger = audit_logger
         self._media_downloader = media_downloader
         self._duration_inspector = duration_inspector
-        self._execution_lifecycle = ExecutionLifecycleService(repository)
+        self._text_search_workflow = text_search_workflow
+        self._derivative_workflow = derivative_workflow
+        self._summary_workflow = summary_workflow
+        self._operational_workflow = operational_workflow
+        self._search_indexing_service = search_indexing_service
+        self._execution_lifecycle = ExecutionLifecycleService(
+            repository,
+            completed_observer=(
+                search_indexing_service.refresh if search_indexing_service is not None else None
+            ),
+        )
         self._rename_session: RenameSession | None = None
         self._queue: SequentialJobQueue[JobPayload] = SequentialJobQueue(self._process_job)
         self._startup_recovery_service = (
@@ -740,11 +760,16 @@ class TelegramBotAdapter:
     async def handle_command_healthcheck(self, *, chat_id: int, user_id: int) -> None:
         if not self._is_authorized(user_id):
             return
-        if self._healthcheck_service is None:
+        if self._operational_workflow is None and self._healthcheck_service is None:
             await self._send_text(chat_id, "Healthcheck indisponível neste bot.")
             return
         try:
-            report = await asyncio.to_thread(self._healthcheck_service.run)
+            runner = (
+                self._operational_workflow.healthcheck
+                if self._operational_workflow is not None
+                else self._healthcheck_service.run  # type: ignore[union-attr]
+            )
+            report = await asyncio.to_thread(runner)
         except Exception as exc:  # pragma: no cover - caminho defensivo
             logger.error(
                 "Healthcheck falhou: %s: %s",
@@ -762,11 +787,16 @@ class TelegramBotAdapter:
     async def handle_command_lasterror(self, *, chat_id: int, user_id: int) -> None:
         if not self._is_authorized(user_id):
             return
-        if self._lasterror_service is None:
+        if self._operational_workflow is None and self._lasterror_service is None:
             await self._send_text(chat_id, "Consulta de último erro indisponível neste bot.")
             return
         try:
-            report = await asyncio.to_thread(self._lasterror_service.latest_for_user, user_id)
+            getter = (
+                self._operational_workflow.last_error
+                if self._operational_workflow is not None
+                else self._lasterror_service.latest_for_user  # type: ignore[union-attr]
+            )
+            report = await asyncio.to_thread(getter, user_id)
         except Exception as exc:  # pragma: no cover - caminho defensivo
             logger.error(
                 "/lasterror falhou: %s: %s",
@@ -793,11 +823,16 @@ class TelegramBotAdapter:
         severity: str = "error",
     ) -> None:
         """Registra falhas de comandos derivados para consulta via /lasterror."""
-        if self._lasterror_service is None:
+        if self._operational_workflow is None and self._lasterror_service is None:
             return
         try:
+            recorder = (
+                self._operational_workflow.record_error
+                if self._operational_workflow is not None
+                else self._lasterror_service.record_operation_error  # type: ignore[union-attr]
+            )
             await asyncio.to_thread(
-                self._lasterror_service.record_operation_error,
+                recorder,
                 user_id=user_id,
                 operation=operation,
                 message=message,
@@ -983,52 +1018,68 @@ class TelegramBotAdapter:
         await self._send_text(chat_id, "\n".join(lines))
 
     async def handle_command_search(self, *, chat_id: int, user_id: int, text: str = "") -> None:
-        """Busca texto no histórico concluído e referencia sua numeração atual."""
         if not self._is_authorized(user_id):
-            return
-        if self._history_search_service is None:
-            await self._send_text(chat_id, "Busca indisponível neste bot.")
             return
         query = _search_query(text)
         if not query:
             await self._send_text(chat_id, "Uso: /search <texto>. Exemplo: /search privacidade.")
             return
-
-        try:
-            results = await asyncio.to_thread(
-                self._history_search_service.search, user_id=user_id, query=query
-            )
-        except Exception as exc:  # pragma: no cover - fronteira defensiva do adapter
-            logger.warning(
-                "Falha ao pesquisar histórico: %s", sanitize_text(str(exc), self._settings)
-            )
-            await self._send_text(chat_id, "Não foi possível pesquisar seu histórico agora.")
+        if self._text_search_workflow is not None:
+            try:
+                workflow_results = await asyncio.to_thread(
+                    self._text_search_workflow.search,
+                    user_id=user_id,
+                    query=query,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Falha ao pesquisar histórico: %s",
+                    sanitize_text(str(exc), self._settings),
+                )
+                await self._send_text(chat_id, "Não foi possível pesquisar seu histórico agora.")
+                return
+            if not workflow_results:
+                await self._send_text(chat_id, f"Nenhum resultado para “{query}”.")
+                return
+            lines = [f"Resultados para “{query}”: "]
+            for workflow_result in workflow_results:
+                lines.extend(
+                    [
+                        f"{workflow_result.history_index}. {_compact_search_text(workflow_result.title, limit=120)} — "
+                        f"{workflow_result.video_id or workflow_result.source_label} — {workflow_result.completed_at}",
+                        f"   {_compact_search_text(workflow_result.snippet, limit=240)}",
+                    ]
+                )
+            await self._send_text(chat_id, chr(10).join(lines))
             return
-        if not results:
+
+        # Compatibility path removed by TASK-P04-014.
+        if self._history_search_service is None:
+            await self._send_text(chat_id, "Busca indisponível neste bot.")
+            return
+        legacy_results = await asyncio.to_thread(
+            self._history_search_service.search, user_id=user_id, query=query
+        )
+        if not legacy_results:
             await self._send_text(chat_id, f"Nenhum resultado para “{query}”.")
             return
-
-        # O índice deve continuar compatível com /last, /summary e exportações.
-        # O backend limita o backfill pesquisável aos 200 mais recentes.
         history = self._completed_history.list_completed(user_id, limit=200)
-        history_indexes = {job.job_id: index for index, job in enumerate(history, start=1)}
+        indexes = {job.job_id: index for index, job in enumerate(history, start=1)}
         lines = [f"Resultados para “{query}”: "]
-        for result in results:
-            index = history_indexes.get(result.job_id)
-            if index is None:
-                continue
-            title = _compact_search_text(result.title, limit=120)
-            snippet = _compact_search_text(result.snippet, limit=240)
-            lines.extend(
-                [
-                    f"{index}. {title} — {result.video_id or result.source_label} — {result.completed_at}",
-                    f"   {snippet}",
-                ]
-            )
-        if len(lines) == 1:
-            await self._send_text(chat_id, f"Nenhum resultado para “{query}”.")
-            return
-        await self._send_text(chat_id, "\n".join(lines))
+        for legacy_result in legacy_results:
+            index = indexes.get(legacy_result.job_id)
+            if index is not None:
+                lines.extend(
+                    [
+                        f"{index}. {_compact_search_text(legacy_result.title, limit=120)} — "
+                        f"{legacy_result.video_id or legacy_result.source_label} — {legacy_result.completed_at}",
+                        f"   {_compact_search_text(legacy_result.snippet, limit=240)}",
+                    ]
+                )
+        await self._send_text(
+            chat_id,
+            chr(10).join(lines) if len(lines) > 1 else f"Nenhum resultado para “{query}”.",
+        )
 
     async def handle_command_last(self, *, chat_id: int, user_id: int, text: str = "") -> None:
         if not self._is_authorized(user_id):
@@ -1057,20 +1108,40 @@ class TelegramBotAdapter:
             await self._send_text(chat_id, "Renomeação indisponível neste bot.")
             return
         index = parse_history_index(text)
-        selected = await self._select_completed_job(chat_id=chat_id, user_id=user_id, index=index)
-        if selected is None:
-            return
-        slug = self._snapshot_ref_for_job(selected)
+        selected: Job
+        slug: str | None
+        if self._derivative_workflow is not None:
+            try:
+                prepared = await asyncio.to_thread(
+                    self._derivative_workflow.prepare_rename,
+                    user_id=user_id,
+                    index=index,
+                )
+            except (ValueError, LookupError, FileNotFoundError) as exc:
+                await self._send_text(chat_id, str(exc))
+                return
+            selected = prepared.job
+            slug = prepared.canonical_transcript_ref
+            speakers = prepared.speakers
+        else:
+            legacy_selected = await self._select_completed_job(
+                chat_id=chat_id, user_id=user_id, index=index
+            )
+            if legacy_selected is None:
+                return
+            selected = legacy_selected
+            slug = self._snapshot_ref_for_job(selected)
         if slug is None:
             await self._send_text(chat_id, "Não consegui localizar o snapshot dessa transcrição.")
             return
-        try:
-            speakers = self._rename_service.list_speakers(slug)
-        except FileNotFoundError:
-            await self._send_text(
-                chat_id, "Snapshot dessa transcrição expirou. Reprocesse o vídeo."
-            )
-            return
+        if self._derivative_workflow is None:
+            try:
+                speakers = self._rename_service.list_speakers(slug)
+            except FileNotFoundError:
+                await self._send_text(
+                    chat_id, "Snapshot dessa transcrição expirou. Reprocesse o vídeo."
+                )
+                return
         if not speakers:
             await self._send_text(chat_id, "Nenhum falante para renomear.")
             return
@@ -1147,6 +1218,9 @@ class TelegramBotAdapter:
     async def handle_command_summary(self, *, chat_id: int, user_id: int, text: str = "") -> None:
         """Gera resumo estruturado em Markdown para uma transcrição concluída."""
         if not self._is_authorized(user_id):
+            return
+        if self._summary_workflow is not None:
+            await self._run_summary_workflow(chat_id=chat_id, user_id=user_id, text=text)
             return
         if self._repository is None or self._summary_service is None:
             await self._send_text(
@@ -1262,6 +1336,60 @@ class TelegramBotAdapter:
             )
         await self._send_document_with_retry(chat_id, result.path)
 
+    async def _run_summary_workflow(self, *, chat_id: int, user_id: int, text: str) -> None:
+        assert self._summary_workflow is not None
+        index = parse_history_index(text)
+        progress_message_id = await self._send_text(
+            chat_id,
+            f"🧠 Gerando resumo da transcrição #{index} com {self._settings.summary_model}. "
+            "Preparando transcrição para a LLM…",
+        )
+        loop = asyncio.get_running_loop()
+        progress = (
+            ProgressReporter(
+                _make_editor(self._client, chat_id, progress_message_id, settings=self._settings),
+                min_interval_s=self._settings.telegram_message_edit_min_interval_s,
+            )
+            if progress_message_id
+            else None
+        )
+
+        def callback(event: SummaryProgress) -> None:
+            if progress is not None:
+                asyncio.run_coroutine_threadsafe(
+                    progress.stage(_humanize_summary_progress(event)), loop
+                )
+
+        try:
+            result = await asyncio.to_thread(
+                self._summary_workflow.summarize,
+                user_id=user_id,
+                index=index,
+                on_progress=callback,
+            )
+        except (FileNotFoundError, ValueError, LookupError) as exc:
+            await self._send_text(chat_id, str(exc))
+            return
+        except (ChatCompletionError, SummaryError) as exc:
+            await self._record_operational_error(
+                user_id=user_id,
+                operation="summary",
+                message=f"Falha ao gerar resumo: {exc}",
+                error=exc,
+                stage="summary",
+            )
+            await self._send_text(
+                chat_id,
+                "Falha ao gerar resumo. Detalhes técnicos sanitizados foram registrados em /lasterror.",
+            )
+            return
+        if progress is not None:
+            await progress.finish(
+                f"✅ Resumo gerado para a transcrição #{index} "
+                f"({result.chunks} bloco(s), modelo {result.model}). Enviando arquivo…"
+            )
+        await self._send_document_with_retry(chat_id, result.path)
+
     async def handle_command_export_shortcut(
         self, *, chat_id: int, user_id: int, format: str, text: str = ""
     ) -> None:
@@ -1277,6 +1405,23 @@ class TelegramBotAdapter:
     async def handle_command_text(self, *, chat_id: int, user_id: int, text: str = "") -> None:
         """Exporta texto limpo de snapshot concluído, sem reprocessar mídia."""
         if not self._is_authorized(user_id):
+            return
+
+        if self._derivative_workflow is not None:
+            index = parse_history_index(text)
+            try:
+                workflow_result = await asyncio.to_thread(
+                    self._derivative_workflow.export_text,
+                    user_id=user_id,
+                    index=index,
+                )
+            except (ValueError, LookupError, FileNotFoundError) as exc:
+                await self._send_text(chat_id, str(exc))
+                return
+            await self._send_text(
+                chat_id, f"📄 Texto limpo gerado para a transcrição #{index}. Enviando arquivo…"
+            )
+            await self._send_document_with_retry(chat_id, workflow_result.path)
             return
         if self._repository is None:
             await self._send_text(chat_id, "Exportação de texto indisponível neste bot.")
@@ -1328,6 +1473,34 @@ class TelegramBotAdapter:
     async def handle_command_export(self, *, chat_id: int, user_id: int, text: str = "") -> None:
         """Exporta JSON/SRT/VTT de uma transcrição concluída sem reprocessar."""
         if not self._is_authorized(user_id):
+            return
+
+        if self._derivative_workflow is not None:
+            parsed = _parse_export_command(text)
+            if parsed is None:
+                await self._send_text(
+                    chat_id,
+                    "Uso: /export json|srt|vtt [n]. Exemplo: /export srt 2. "
+                    "Use /list para ver as transcrições disponíveis.",
+                )
+                return
+            fmt, index = parsed
+            try:
+                workflow_result = await asyncio.to_thread(
+                    self._derivative_workflow.export_transcript,
+                    user_id=user_id,
+                    index=index,
+                    format=fmt,
+                )
+            except (ValueError, LookupError, FileNotFoundError) as exc:
+                await self._send_text(chat_id, str(exc))
+                return
+            await self._send_text(
+                chat_id,
+                f"📦 Exportação {workflow_result.format.upper()} gerada para a transcrição "
+                f"#{index}. Enviando arquivo…",
+            )
+            await self._send_document_with_retry(chat_id, workflow_result.path)
             return
         if self._repository is None or self._export_service is None:
             await self._send_text(chat_id, "Exportação indisponível neste bot.")
@@ -1393,6 +1566,46 @@ class TelegramBotAdapter:
     ) -> None:
         """Gera e envia MP4 com legenda selecionável para uma transcrição concluída."""
         if not self._is_authorized(user_id):
+            return
+
+        if self._derivative_workflow is not None:
+            index = parse_history_index(text)
+            try:
+                workflow_result = await asyncio.to_thread(
+                    self._derivative_workflow.export_video,
+                    user_id=user_id,
+                    index=index,
+                )
+            except (
+                VideoSubtitleTooLongError,
+                VideoSubtitleTooLargeError,
+                VideoSubtitleExportError,
+                ValueError,
+                LookupError,
+                FileNotFoundError,
+            ) as exc:
+                await self._record_operational_error(
+                    user_id=user_id,
+                    operation="video_subs",
+                    message=str(exc),
+                    error=exc,
+                    stage="video_derivative",
+                )
+                await self._send_text(chat_id, str(exc))
+                return
+            await self._send_text(
+                chat_id,
+                f"✅ MP4 com legenda selecionável gerado para a transcrição #{index}. Enviando vídeo…",
+            )
+            await self._send_video_with_retry(
+                chat_id,
+                workflow_result.path,
+                caption=(
+                    "🎬 Vídeo com legenda selecionável\n"
+                    f"Arquivo: {_format_file_size(workflow_result.size_bytes or 0)}\n"
+                    "A legenda foi adicionada como faixa selecionável no MP4."
+                ),
+            )
             return
         if self._repository is None or self._video_subtitle_export_service is None:
             await self._send_text(chat_id, "Exportação de vídeo legendado indisponível neste bot.")
@@ -1497,6 +1710,15 @@ class TelegramBotAdapter:
 
     async def handle_command_clearcache(self, *, chat_id: int, user_id: int) -> None:
         if not self._is_authorized(user_id):
+            return
+
+        if self._operational_workflow is not None:
+            result = await asyncio.to_thread(self._operational_workflow.clear_cache)
+            suffix = f" {result.failures} falha(s)." if result.failures else ""
+            await self._send_text(
+                chat_id,
+                f"Cache limpo. {result.removed_files} arquivo(s) removido(s).{suffix}",
+            )
             return
         if self._models_dir is None or not self._models_dir.is_dir():
             await self._send_text(chat_id, "Diretório de cache de modelos não definido.")
@@ -1610,7 +1832,18 @@ class TelegramBotAdapter:
         session: RenameSession,
         aliases: dict[str, str],
     ) -> RenameResult | None:
-        # Recupera o job e o md_path selecionados no início do diálogo.
+        if self._derivative_workflow is not None:
+            try:
+                return await asyncio.to_thread(
+                    self._derivative_workflow.rename,
+                    job_id=session.job_id,
+                    aliases=aliases,
+                )
+            except (LookupError, FileNotFoundError) as exc:
+                await self._send_text(chat_id, str(exc))
+                self._clear_pending_rename()
+                return None
+        # Compatibility path until TASK-P04-014.
         assert self._repository is not None
         assert self._rename_service is not None
         target = self._repository.get_by_id(session.job_id)
@@ -2010,10 +2243,14 @@ class TelegramBotAdapter:
 
     def _apply_retention_after_success(self) -> None:
         """Aplica retenção FIFO após entrega bem-sucedida sem derrubar o bot."""
-        if self._retention_policy is None:
+        if self._operational_workflow is None and self._retention_policy is None:
             return
         try:
-            result = self._retention_policy.apply()
+            result = (
+                self._operational_workflow.apply_retention()
+                if self._operational_workflow is not None
+                else self._retention_policy.apply()  # type: ignore[union-attr]
+            )
         except Exception as exc:  # pragma: no cover - caminho defensivo
             logger.warning(
                 "Falha ao aplicar retenção FIFO: %s",

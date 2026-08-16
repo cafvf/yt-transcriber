@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from yt_transcriber_bot.application.services.filesystem_safety import (
+from yt_transcriber_bot.infrastructure.filesystem_safety import (
     PRIVATE_DIR_MODE,
     PRIVATE_FILE_MODE,
     UnsafeFilesystemTargetError,

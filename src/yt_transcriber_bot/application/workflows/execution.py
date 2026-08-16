@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from yt_transcriber_bot.application.ports.job_repository import JobRepository
@@ -23,8 +24,14 @@ class ExecutionLifecycleService:
     política de transição/persistência do Job resultante.
     """
 
-    def __init__(self, repository: JobRepository | None) -> None:
+    def __init__(
+        self,
+        repository: JobRepository | None,
+        *,
+        completed_observer: Callable[[Job], None] | None = None,
+    ) -> None:
         self._repository = repository
+        self._completed_observer = completed_observer
 
     def start(self, job: Job) -> None:
         job.transition_to(JobStatus.ACQUIRING)
@@ -49,12 +56,14 @@ class ExecutionLifecycleService:
     ) -> None:
         if outcome.delivered:
             job.transition_to(JobStatus.COMPLETED)
-        else:
-            job.transition_to(
-                JobStatus.DELIVERY_FAILED,
-                error=outcome.error
-                or "Falha na entrega primária; artefatos preservados localmente.",
-            )
+            self._save(job)
+            if self._completed_observer is not None:
+                self._completed_observer(job)
+            return
+        job.transition_to(
+            JobStatus.DELIVERY_FAILED,
+            error=outcome.error or "Falha na entrega primária; artefatos preservados localmente.",
+        )
         self._save(job)
 
     def _save(self, job: Job) -> None:

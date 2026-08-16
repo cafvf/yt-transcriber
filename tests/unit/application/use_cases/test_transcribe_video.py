@@ -48,6 +48,9 @@ from yt_transcriber_bot.domain.value_objects.duration import Duration
 from yt_transcriber_bot.domain.value_objects.language import Language
 from yt_transcriber_bot.domain.value_objects.media_source import MediaSource
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
+from yt_transcriber_bot.infrastructure.persistence.filesystem.owned_artifact_cleanup import (
+    FilesystemOwnedArtifactCleanup,
+)
 from yt_transcriber_bot.infrastructure.persistence.filesystem.transcript_snapshot import (
     TranscriptSnapshotRepository,
 )
@@ -216,10 +219,12 @@ class TestHappyPath:
         second.transition_to(JobStatus.COMPLETED)
         RetentionPolicy(
             fake_repo,
-            owned_roots=(
-                settings.downloads_dir(),
-                settings.processed_dir(),
-                settings.logs_dir(),
+            artifact_cleanup=FilesystemOwnedArtifactCleanup(
+                (
+                    settings.downloads_dir(),
+                    settings.processed_dir(),
+                    settings.logs_dir(),
+                )
             ),
             max_volatile_jobs=1,
         ).apply()

@@ -10,6 +10,9 @@ import pytest
 from yt_transcriber_bot.application.services.retention_policy import RetentionPolicy
 from yt_transcriber_bot.domain.entities.job import Job, JobStatus
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
+from yt_transcriber_bot.infrastructure.persistence.filesystem.owned_artifact_cleanup import (
+    FilesystemOwnedArtifactCleanup,
+)
 
 
 class FakeRepo:
@@ -61,7 +64,7 @@ def _job_at(tmp_path: Path, idx: int) -> Job:
 def _policy(repo: FakeRepo, root: Path, *, max_jobs: int = 5) -> RetentionPolicy:
     return RetentionPolicy(  # type: ignore[arg-type]
         repo,
-        owned_roots=(root,),
+        artifact_cleanup=FilesystemOwnedArtifactCleanup((root,)),
         max_volatile_jobs=max_jobs,
     )
 
@@ -106,13 +109,15 @@ def test_handles_missing_files_gracefully(tmp_path: Path) -> None:
 def test_invalid_max_jobs(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="max_volatile_jobs"):
         RetentionPolicy(  # type: ignore[arg-type]
-            FakeRepo([]), owned_roots=(tmp_path,), max_volatile_jobs=0
+            FakeRepo([]),
+            artifact_cleanup=FilesystemOwnedArtifactCleanup((tmp_path,)),
+            max_volatile_jobs=0,
         )
 
 
 def test_requires_explicit_owned_root() -> None:
     with pytest.raises(ValueError, match="owned_roots"):
-        RetentionPolicy(FakeRepo([]), owned_roots=())  # type: ignore[arg-type]
+        FilesystemOwnedArtifactCleanup(())
 
 
 def test_max_jobs_one(tmp_path: Path) -> None:

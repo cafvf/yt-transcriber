@@ -1,12 +1,20 @@
-# PLAN-003 application port/data-contract inventory.
+# PLAN-003/PLAN-004 application port/data-contract inventory.
 # Keep sorted. Any addition requires an approved demonstrated capability.
+artifact_cleanup.py
 audio_converter.py
+cache.py
+canonical_markdown.py
 canonical_transcript.py
+derived_artifacts.py
 diarization_engine.py
 gpu_detector.py
+health_probe.py
 history_search.py
 incoming_media.py
 job_repository.py
+operational_error.py
+text_generation.py
+text_search.py
 transcript_renderer.py
 transcription_engine.py
 youtube_downloader.py

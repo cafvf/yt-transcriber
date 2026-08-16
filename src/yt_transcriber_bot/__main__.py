@@ -8,7 +8,6 @@ import importlib.util
 import logging
 import shutil
 import sys
-from pathlib import Path
 
 from telegram import Update
 from telegram.ext import (
@@ -25,35 +24,7 @@ from yt_transcriber_bot.application.ports.incoming_media import (
     IncomingMedia,
     IncomingMediaKind,
 )
-from yt_transcriber_bot.application.services.filesystem_safety import (
-    ensure_private_directory,
-    ensure_private_file,
-)
-from yt_transcriber_bot.composition_root import build_runtime
-
-
-def _configure_logging(logs_dir: Path) -> None:
-    ensure_private_directory(logs_dir)
-    log_path = logs_dir / "bot.log"
-    handler_file = logging.FileHandler(log_path, encoding="utf-8")
-    ensure_private_file(log_path)
-    handler_console = logging.StreamHandler(sys.stdout)
-    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-    handler_file.setFormatter(fmt)
-    handler_console.setFormatter(fmt)
-    root = logging.getLogger()
-    root.setLevel(logging.INFO)
-    root.handlers = [handler_file, handler_console]
-    for noisy_logger in (
-        "httpx",
-        "httpcore",
-        "telegram",
-        "telegram.ext",
-        "telegram.request",
-        "apscheduler",
-        "urllib3",
-    ):
-        logging.getLogger(noisy_logger).setLevel(logging.WARNING)
+from yt_transcriber_bot.composition_root import build_runtime, configure_runtime_logging
 
 
 def _missing_runtime_ml_dependencies() -> list[str]:
@@ -103,7 +74,7 @@ def _validate_environment(settings: AppSettings) -> None:
 
 async def _run() -> None:
     settings = AppSettings()
-    _configure_logging(settings.logs_dir())
+    configure_runtime_logging(settings)
     _validate_environment(settings)
 
     logger = logging.getLogger("yt_transcriber_bot")

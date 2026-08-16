@@ -27,6 +27,9 @@ DOMAIN_ROOT = PACKAGE_ROOT / "domain"
 
 def _is_credential_name(name: str) -> bool:
     normalized = name.lower()
+    non_credentials = {"chars_per_token"}
+    if normalized in non_credentials:
+        return False
     exact = {
         "token",
         "secret",

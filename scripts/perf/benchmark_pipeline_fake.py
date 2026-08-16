@@ -13,6 +13,10 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 from yt_transcriber_bot.application.services.rename_speakers import RenameSpeakersService
+from yt_transcriber_bot.application.services.transcript_summary import (
+    _chunk_text,
+    _snapshot_to_text,
+)
 from yt_transcriber_bot.domain.entities.job import Job, JobStatus
 from yt_transcriber_bot.domain.entities.transcript import (
     SpeakerTurn,
@@ -23,6 +27,9 @@ from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
 from yt_transcriber_bot.domain.value_objects.duration import Duration
 from yt_transcriber_bot.domain.value_objects.language import Language
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
+from yt_transcriber_bot.infrastructure.persistence.filesystem.canonical_markdown_writer import (
+    FilesystemCanonicalMarkdownWriter,
+)
 from yt_transcriber_bot.infrastructure.persistence.filesystem.transcript_snapshot import (
     TranscriptSnapshot,
     TranscriptSnapshotRepository,
@@ -30,10 +37,6 @@ from yt_transcriber_bot.infrastructure.persistence.filesystem.transcript_snapsho
 from yt_transcriber_bot.infrastructure.rendering.markdown_renderer import (
     MarkdownTranscriptRenderer,
     RenderContext,
-)
-from yt_transcriber_bot.infrastructure.summarization.transcript_summarizer import (
-    _chunk_text,
-    _snapshot_to_text,
 )
 from yt_transcriber_bot.infrastructure.telegram.bot_adapter import TelegramBotAdapter
 from yt_transcriber_bot.infrastructure.youtube.yt_dlp_downloader import _parse_subtitle
@@ -67,7 +70,9 @@ def run_benchmarks(*, iterations: int) -> dict[str, object]:
         snapshots = TranscriptSnapshotRepository(base_dir / "segments")
         renderer = MarkdownTranscriptRenderer()
         legacy_renderer = _LegacyMarkdownTranscriptRenderer()
-        rename_service = RenameSpeakersService(snapshots, renderer)
+        rename_service = RenameSpeakersService(
+            snapshots, renderer, FilesystemCanonicalMarkdownWriter()
+        )
         transcript = _build_transcript(segment_count=160)
         metadata = _build_metadata("benchmark-video")
         context = _build_context()

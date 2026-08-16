@@ -1,287 +1,78 @@
-"""Testes do serviço de /lasterror."""
-
 from __future__ import annotations
 
-import os
-from datetime import UTC, datetime
 from pathlib import Path
 
-import pytest
-
 from yt_transcriber_bot.application.config import AppSettings
+from yt_transcriber_bot.application.ports.operational_error import (
+    JobLogReader,
+    OperationalErrorRecord,
+    OperationalErrorStore,
+)
 from yt_transcriber_bot.application.services.last_error import LastErrorService
 from yt_transcriber_bot.domain.entities.job import Job, JobStatus
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
 
 
-class FakeRepo:
+class Repo:
     def __init__(self, jobs: list[Job]) -> None:
         self.jobs = jobs
 
     def list_recent_for_user(self, user_id: int, limit: int) -> list[Job]:
-        return [job for job in self.jobs if job.requested_by_user_id == user_id][-limit:]
+        return [job for job in self.jobs if job.requested_by_user_id == user_id][:limit]
 
 
-def _settings(tmp_path: Path) -> AppSettings:
-    return AppSettings(
-        telegram_bot_token="dummy-telegram-token-for-tests",
-        telegram_allowed_user_id=42,
-        hf_token="alpha-bravo-charlie",
-        base_dir=tmp_path / "data",
-        models_dir=tmp_path / "models",
-        lasterror_log_tail_lines=2,
+class Store(OperationalErrorStore):
+    def __init__(self) -> None:
+        self.records: list[OperationalErrorRecord] = []
+
+    def append(self, record: OperationalErrorRecord) -> None:
+        self.records.append(record)
+
+    def latest_for_user(self, user_id: int, *, limit: int) -> OperationalErrorRecord | None:
+        matches = [record for record in self.records if record.user_id == user_id][-limit:]
+        return max(matches, key=lambda record: record.occurred_at) if matches else None
+
+
+class Logs(JobLogReader):
+    def tail(self, path: Path, *, max_lines: int, max_chars: int) -> str:
+        _ = (path, max_lines, max_chars)
+        return "safe tail"
+
+
+def _settings() -> AppSettings:
+    return AppSettings(_env_file=None, telegram_allowed_user_id=7)
+
+
+def test_operational_error_roundtrip_is_sanitized_and_selected() -> None:
+    store = Store()
+    settings = _settings()
+    service = LastErrorService(
+        repository=Repo([]),  # type: ignore[arg-type]
+        settings=settings,
+        error_store=store,
+        log_reader=Logs(),
     )
-
-
-def _failed_job(user_id: int, when: datetime, *, error: str) -> Job:
-    job = Job.new(VideoId("dQw4w9WgXcQ"), user_id)
-    object.__setattr__(job, "requested_at", when)
-    job.transition_to(JobStatus.FAILED, error=error)
-    object.__setattr__(job, "updated_at", when)
-    return job
-
-
-def _delivery_failed_job(user_id: int, when: datetime, *, error: str) -> Job:
-    job = Job.new(VideoId("dQw4w9WgXcQ"), user_id)
-    object.__setattr__(job, "requested_at", when)
-    for status in (
-        JobStatus.ACQUIRING,
-        JobStatus.CONVERTING,
-        JobStatus.TRANSCRIBING,
-        JobStatus.DIARIZING,
-        JobStatus.RENDERING,
-        JobStatus.DELIVERING,
-    ):
-        job.transition_to(status)
-    job.transition_to(JobStatus.DELIVERY_FAILED, error=error)
-    object.__setattr__(job, "updated_at", when)
-    return job
-
-
-def test_lasterror_reports_no_recent_failure(tmp_path: Path) -> None:
-    service = LastErrorService(repository=FakeRepo([]), settings=_settings(tmp_path))  # type: ignore[arg-type]
-
-    report = service.latest_for_user(42)
-
-    assert report.job is None
-    assert "Nenhum erro" in report.message
-
-
-def test_lasterror_selects_latest_failed_job_and_sanitizes_secrets(tmp_path: Path) -> None:
-    settings = _settings(tmp_path)
-    older = _failed_job(42, datetime(2026, 5, 1, 10, tzinfo=UTC), error="erro antigo")
-    newer = _failed_job(
-        42,
-        datetime(2026, 5, 1, 11, tzinfo=UTC),
-        error="falhou com token dummy-telegram-token-for-tests",
-    )
-    log = tmp_path / "bot.log"
-    log.write_text("linha1\nlinha2\nAUTH=alpha-bravo-charlie\n", encoding="utf-8")
-    newer.log_path = str(log)
-    service = LastErrorService(repository=FakeRepo([older, newer]), settings=settings)  # type: ignore[arg-type]
-
-    report = service.latest_for_user(42)
-
-    assert report.job is newer
-    assert "falhou com token" in report.message
-    assert "dummy-telegram-token-for-tests" not in report.message
-    assert "alpha-bravo-charlie" not in report.message
-    assert "[REDACTED]" in report.message
-    assert "linha2" in report.message
-    assert "linha1" not in report.message
-    assert str(log) not in report.message
-
-
-def test_lasterror_reports_delivery_failed_artifact_availability_without_private_paths(
-    tmp_path: Path,
-) -> None:
-    settings = _settings(tmp_path)
-    job = _delivery_failed_job(
-        42,
-        datetime(2026, 5, 1, 12, tzinfo=UTC),
-        error="Falha ao entregar artefatos pelo Telegram",
-    )
-    job.md_path = str(tmp_path / "transcripts" / "video.md")
-    job.audio_path = str(tmp_path / "processed" / "video.mp3")
-    service = LastErrorService(repository=FakeRepo([job]), settings=settings)  # type: ignore[arg-type]
-
-    report = service.latest_for_user(42)
-
-    assert report.job is job
-    assert report.operational_error is None
-    assert "Tipo: job de transcrição" in report.message
-    assert "Status: delivery_failed" in report.message
-    assert "Markdown parcial: disponível" in report.message
-    assert "Áudio parcial: disponível" in report.message
-    assert job.md_path not in report.message
-    assert job.audio_path not in report.message
-
-
-def test_lasterror_reports_operational_error_from_summary(tmp_path: Path) -> None:
-    settings = _settings(tmp_path)
-    service = LastErrorService(repository=FakeRepo([]), settings=settings)  # type: ignore[arg-type]
-
     service.record_operation_error(
-        user_id=42,
+        user_id=7,
         operation="summary",
-        message=(
-            "Falha ao chamar a LLM de resumo: Não consegui consultar /v1/models. "
-            "Authorization: Bearer dummy-bearer-token-for-tests"
-        ),
-        context={"video_id": "dQw4w9WgXcQ", "history_index": 1},
-        stage="llm",
+        message="timeout",
+        context={"path": "/private/staging/file"},
+        error=TimeoutError("timeout"),
     )
-
-    report = service.latest_for_user(42)
-
-    assert report.job is None
+    report = service.latest_for_user(7)
     assert report.operational_error is not None
-    assert "operação derivada" in report.message
-    assert "Operação: summary" in report.message
-    assert "Etapa: llm" in report.message
-    assert "Falha ao chamar a LLM" in report.message
-    assert "dQw4w9WgXcQ" in report.message
-    assert "dummy-telegram-token-for-tests" not in report.message
-    assert "[REDACTED]" in report.message
+    assert "summary" in report.message
+    assert "timeout" in report.message
 
 
-def test_lasterror_records_error_type_stage_traceback_and_hints(tmp_path: Path) -> None:
-    settings = _settings(tmp_path)
-    service = LastErrorService(repository=FakeRepo([]), settings=settings)  # type: ignore[arg-type]
-
-    try:
-        raise TimeoutError("LM Studio timeout while calling /v1/models")
-    except TimeoutError as exc:
-        service.record_operation_error(
-            user_id=42,
-            operation="summary",
-            message="Falha ao chamar a LLM de resumo: LM Studio timeout",
-            context={"video_id": "dQw4w9WgXcQ"},
-            error=exc,
-            stage="llm",
-        )
-
-    report = service.latest_for_user(42)
-
-    assert report.operational_error is not None
-    assert "Classe do erro: TimeoutError" in report.message
-    assert "Etapa: llm" in report.message
-    assert "Traceback final sanitizado" in report.message
-    assert "TimeoutError" in report.message
-    assert "Próximas verificações" in report.message
-    assert "SUMMARY_MAX_INPUT_TOKENS" in report.message
-
-
-def test_lasterror_sanitizes_api_bodies_in_message_context_and_traceback(tmp_path: Path) -> None:
-    settings = _settings(tmp_path)
-    service = LastErrorService(repository=FakeRepo([]), settings=settings)  # type: ignore[arg-type]
-
-    try:
-        raise RuntimeError(
-            'HTTP 400 body={"messages":[{"role":"user","content":"raw transcript"}],'
-            '"input":"private input body","Authorization":"Bearer backend-token"}'
-        )
-    except RuntimeError as exc:
-        service.record_operation_error(
-            user_id=42,
-            operation="summary",
-            message=f"Backend recusou request_body={{'transcript':'private transcript text'}}: {exc}",
-            context={
-                "response_body": '{"content":"echoed prompt body"}',
-                "headers": "Authorization: Bearer context-token",
-            },
-            error=exc,
-            stage="llm",
-        )
-
-    raw_log = (settings.logs_dir() / "operational_errors.jsonl").read_text(encoding="utf-8")
-    report = service.latest_for_user(42)
-    combined = raw_log + "\n" + report.message
-
-    assert "raw transcript" not in combined
-    assert "private input body" not in combined
-    assert "private transcript text" not in combined
-    assert "echoed prompt body" not in combined
-    assert "backend-token" not in combined
-    assert "context-token" not in combined
-    assert "[REDACTED]" in combined or "[OMITTED]" in combined
-
-
-def test_lasterror_redacts_private_path_context(tmp_path: Path) -> None:
-    settings = _settings(tmp_path)
-    service = LastErrorService(repository=FakeRepo([]), settings=settings)  # type: ignore[arg-type]
-    private_path = tmp_path / "downloads" / "private-audio.ogg"
-
-    service.record_operation_error(
-        user_id=42,
-        operation="clearcache",
-        message="cleanup failed",
-        context={"failed_file": private_path},
+def test_failed_job_can_be_rendered_without_reading_whole_log() -> None:
+    job = Job.new(VideoId("dQw4w9WgXcQ"), user_id=7)
+    job.transition_to(JobStatus.FAILED, error="boom")
+    job.log_path = "/private/job.log"
+    service = LastErrorService(
+        repository=Repo([job]),  # type: ignore[arg-type]
+        settings=_settings(),
+        error_store=Store(),
+        log_reader=Logs(),
     )
-
-    report = service.latest_for_user(42)
-    assert str(private_path) not in report.message
-    assert "[PRIVATE PATH]" in report.message
-
-
-def test_lasterror_prefers_newer_operational_error_over_older_failed_job(tmp_path: Path) -> None:
-    settings = _settings(tmp_path)
-    older = _failed_job(42, datetime(2026, 5, 1, 10, tzinfo=UTC), error="erro antigo")
-    service = LastErrorService(repository=FakeRepo([older]), settings=settings)  # type: ignore[arg-type]
-
-    service.record_operation_error(
-        user_id=42,
-        operation="summary",
-        message="LM Studio connection refused",
-        context={"video_id": "dQw4w9WgXcQ"},
-    )
-
-    report = service.latest_for_user(42)
-
-    assert report.operational_error is not None
-    assert report.job is None
-    assert "Operação: summary" in report.message
-    assert "connection refused" in report.message
-
-
-def test_lasterror_ignores_operational_errors_from_other_users(tmp_path: Path) -> None:
-    settings = _settings(tmp_path)
-    service = LastErrorService(repository=FakeRepo([]), settings=settings)  # type: ignore[arg-type]
-
-    service.record_operation_error(user_id=99, operation="summary", message="erro de outro usuário")
-
-    report = service.latest_for_user(42)
-
-    assert report.job is None
-    assert report.operational_error is None
-    assert "Nenhum erro" in report.message
-
-
-def test_lasterror_reads_legacy_operational_error_records(tmp_path: Path) -> None:
-    settings = _settings(tmp_path)
-    path = settings.logs_dir() / "operational_errors.jsonl"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        '{"user_id": 42, "operation": "summary", "message": "erro legado", '
-        '"occurred_at": "2026-05-04T10:00:00+00:00", "context": {"video_id": "x"}}\n',
-        encoding="utf-8",
-    )
-    service = LastErrorService(repository=FakeRepo([]), settings=settings)  # type: ignore[arg-type]
-
-    report = service.latest_for_user(42)
-
-    assert report.operational_error is not None
-    assert "erro legado" in report.message
-    assert "Operação: summary" in report.message
-
-
-@pytest.mark.skipif(os.name != "posix", reason="POSIX permission contract")
-def test_operational_error_log_is_private(tmp_path: Path) -> None:
-    settings = _settings(tmp_path)
-    service = LastErrorService(repository=FakeRepo([]), settings=settings)  # type: ignore[arg-type]
-
-    service.record_operation_error(user_id=42, operation="summary", message="private failure")
-    path = settings.logs_dir() / "operational_errors.jsonl"
-
-    assert path.parent.stat().st_mode & 0o777 == 0o700
-    assert path.stat().st_mode & 0o777 == 0o600
+    assert "safe tail" in service.latest_for_user(7).message

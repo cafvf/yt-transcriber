@@ -13,32 +13,22 @@ import socket
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
 from typing import Any
 
+from yt_transcriber_bot.application.ports.text_generation import (
+    TextGenerationError as ChatCompletionError,
+)
+from yt_transcriber_bot.application.ports.text_generation import (
+    TextGenerationRequest as ChatCompletionRequest,
+)
+from yt_transcriber_bot.application.ports.text_generation import (
+    TextGenerationTimeoutError as ChatCompletionTimeoutError,
+)
 from yt_transcriber_bot.application.services.sanitization import sanitize_text
-
-
-class ChatCompletionError(RuntimeError):
-    """Falha ao solicitar ou interpretar uma resposta da LLM."""
-
-
-class ChatCompletionTimeoutError(ChatCompletionError):
-    """A chamada à LLM excedeu o tempo limite configurado."""
-
 
 Transport = Callable[[str, Mapping[str, Any], Mapping[str, str], float], Mapping[str, Any]]
 ModelsTransport = Callable[[str, Mapping[str, str], float], Mapping[str, Any]]
 ErrorSanitizer = Callable[[str], str]
-
-
-@dataclass(frozen=True)
-class ChatCompletionRequest:
-    """Entrada normalizada para uma chamada de chat completion."""
-
-    system_prompt: str
-    user_prompt: str
-    max_tokens: int | None = None
 
 
 class OpenAICompatibleChatClient:
@@ -324,3 +314,11 @@ def _read_http_error_body(exc: urllib.error.HTTPError) -> str:
         if message:
             return str(message)[:1000]
     return raw[:1000]
+
+
+__all__ = [
+    "ChatCompletionError",
+    "ChatCompletionRequest",
+    "ChatCompletionTimeoutError",
+    "OpenAICompatibleChatClient",
+]

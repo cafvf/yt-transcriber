@@ -72,6 +72,7 @@ def test_build_wires_credentials_and_runtime_tokenizer_at_composition(
     summary_service: dict[str, object] = {}
     tokenizer_args: dict[str, object] = {}
     healthcheck: dict[str, object] = {}
+    health_environment: dict[str, object] = {}
     tokenizer = object()
 
     monkeypatch.setattr(composition_root, "_make_gpu_detector", lambda: object())
@@ -103,6 +104,10 @@ def test_build_wires_credentials_and_runtime_tokenizer_at_composition(
         def __init__(self, **kwargs: object) -> None:
             healthcheck.update(kwargs)
 
+    class FakeHealthEnvironmentProbe:
+        def __init__(self, **kwargs: object) -> None:
+            health_environment.update(kwargs)
+
     def fake_tokenizer(**kwargs: object) -> object:
         tokenizer_args.update(kwargs)
         return tokenizer
@@ -116,6 +121,7 @@ def test_build_wires_credentials_and_runtime_tokenizer_at_composition(
     monkeypatch.setattr(composition_root, "OpenAICompatibleChatClient", FakeSummaryClient)
     monkeypatch.setattr(composition_root, "TranscriptSummaryService", FakeSummaryService)
     monkeypatch.setattr(composition_root, "HealthCheckService", FakeHealthCheckService)
+    monkeypatch.setattr(composition_root, "LocalHealthEnvironmentProbe", FakeHealthEnvironmentProbe)
     monkeypatch.setattr(composition_root, "make_text_tokenizer", fake_tokenizer)
 
     settings = _settings(
@@ -149,11 +155,12 @@ def test_build_wires_credentials_and_runtime_tokenizer_at_composition(
     }
     assert summary_service["tokenizer"] is tokenizer
     assert summary_service["tokenizer_trust_remote_code"] is True
-    assert healthcheck["models_probe"] is composition_root.probe_openai_compatible_models
-    assert healthcheck["executable_finder"] is composition_root.find_executable
-    assert healthcheck["module_checker"] is composition_root.module_available
-    assert healthcheck["disk_usage"] is composition_root.local_disk_usage
-    assert healthcheck["sqlite_probe"] is not None
+    assert health_environment["models_probe"] is composition_root.probe_openai_compatible_models
+    assert health_environment["executable_finder"] is composition_root.find_executable
+    assert health_environment["module_checker"] is composition_root.module_available
+    assert health_environment["disk_usage"] is composition_root.local_disk_usage
+    assert health_environment["sqlite_probe"] is not None
+    assert isinstance(healthcheck["environment_probe"], FakeHealthEnvironmentProbe)
 
 
 def test_disabled_summary_skips_optional_provider_construction_without_api_key(
@@ -229,6 +236,11 @@ def test_build_runtime_owns_telegram_provider_graph(
         lasterror_service=object(),
         retention_policy=object(),
         audit_logger=object(),
+        search_indexing_service=SimpleNamespace(refresh=lambda _job: None),
+        text_search_workflow=object(),
+        derivative_workflow=object(),
+        summary_workflow=None,
+        operational_workflow=object(),
     )
     application = SimpleNamespace(bot=object())
     captured: dict[str, object] = {}
@@ -256,5 +268,19 @@ def test_build_runtime_owns_telegram_provider_graph(
     assert runtime.core is core
     assert runtime.application is application
     assert isinstance(runtime.adapter, TelegramBotAdapter)
+    assert runtime.adapter._text_search_workflow is core.text_search_workflow
+    assert runtime.adapter._derivative_workflow is core.derivative_workflow
+    assert runtime.adapter._summary_workflow is core.summary_workflow
+    assert runtime.adapter._operational_workflow is core.operational_workflow
+    assert runtime.adapter._search_indexing_service is core.search_indexing_service
+    assert runtime.adapter._rename_service is None
+    assert runtime.adapter._export_service is None
+    assert runtime.adapter._plain_text_export_service is None
+    assert runtime.adapter._summary_service is None
+    assert runtime.adapter._video_subtitle_export_service is None
+    assert runtime.adapter._history_search_service is None
+    assert runtime.adapter._healthcheck_service is None
+    assert runtime.adapter._lasterror_service is None
+    assert runtime.adapter._retention_policy is None
     assert runtime.audience.allowed_user_id == 42
     assert isinstance(runtime.denied_audience_filter, DeniedAudienceFilter)

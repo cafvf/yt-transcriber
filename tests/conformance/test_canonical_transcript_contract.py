@@ -11,6 +11,9 @@ from pathlib import Path
 
 import pytest
 
+from yt_transcriber_bot.application.ports.canonical_markdown import (
+    CanonicalMarkdownWriter,
+)
 from yt_transcriber_bot.application.ports.canonical_transcript import (
     CanonicalTranscriptCorruptError,
     CanonicalTranscriptNotFoundError,
@@ -88,6 +91,16 @@ class FakeRenderer(TranscriptRenderer):
         aliases = dict(request.speaker_aliases or {})
         names = [aliases.get(label, label) for label in request.record.transcript.speaker_labels()]
         return "# fake\n" + "\n".join(names) + "\n"
+
+
+@dataclass
+class FakeMarkdownWriter(CanonicalMarkdownWriter):
+    writes: list[tuple[Path, str]] = field(default_factory=list)
+
+    def write(self, path: Path, content: str) -> None:
+        self.writes.append((path, content))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
 
 
 class FakeChatClient:
@@ -260,7 +273,8 @@ def test_rename_workflow_runs_with_in_memory_store_and_fake_renderer(
     store = InMemoryCanonicalTranscriptStore()
     store.persist("ref", _record())
     renderer = FakeRenderer()
-    service = RenameSpeakersService(store, renderer)
+    writer = FakeMarkdownWriter()
+    service = RenameSpeakersService(store, renderer, writer)
 
     result = service.rename(
         "ref",
@@ -271,6 +285,7 @@ def test_rename_workflow_runs_with_in_memory_store_and_fake_renderer(
     assert result.speakers_renamed == 1
     assert result.md_path.read_text(encoding="utf-8").startswith("# fake")
     assert renderer.requests[0].record is store.records["ref"]
+    assert writer.writes[0][0] == result.md_path
 
 
 def test_export_consumer_runs_with_in_memory_store(tmp_path: Path) -> None:

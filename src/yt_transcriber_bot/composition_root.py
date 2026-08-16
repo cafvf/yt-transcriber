@@ -1,5 +1,3 @@
-# Single composition owner for concrete provider selection and construction.
-
 from __future__ import annotations
 
 import logging
@@ -15,20 +13,26 @@ from yt_transcriber_bot.application.ports.gpu_detector import GpuDetector, Hardw
 from yt_transcriber_bot.application.ports.job_repository import JobRepository
 from yt_transcriber_bot.application.ports.transcription_engine import TranscriptionEngine
 from yt_transcriber_bot.application.ports.youtube_downloader import YouTubeDownloader
+from yt_transcriber_bot.application.services.cache_maintenance import CacheMaintenanceService
 from yt_transcriber_bot.application.services.healthcheck import HealthCheckService
 from yt_transcriber_bot.application.services.history_search import HistorySearchService
 from yt_transcriber_bot.application.services.last_error import LastErrorService
 from yt_transcriber_bot.application.services.rename_speakers import RenameSpeakersService
 from yt_transcriber_bot.application.services.retention_policy import RetentionPolicy
 from yt_transcriber_bot.application.services.sanitization import sanitize_text
+from yt_transcriber_bot.application.services.search_indexing import SearchIndexingService
+from yt_transcriber_bot.application.services.transcript_summary import TranscriptSummaryService
 from yt_transcriber_bot.application.use_cases.transcribe_video import (
     TranscribeVideoDependencies,
     TranscribeVideoUseCase,
 )
+from yt_transcriber_bot.application.workflows.derivatives import TranscriptDerivativeWorkflow
+from yt_transcriber_bot.application.workflows.history import CompletedHistoryWorkflow
+from yt_transcriber_bot.application.workflows.operations import OperationalWorkflow
+from yt_transcriber_bot.application.workflows.summary import SummaryWorkflow
+from yt_transcriber_bot.application.workflows.text_search import TextSearchWorkflow
 from yt_transcriber_bot.configuration.credentials import ProviderCredentials
-from yt_transcriber_bot.configuration.external_services import (
-    TextGenerationEndpointPolicy,
-)
+from yt_transcriber_bot.configuration.external_services import TextGenerationEndpointPolicy
 from yt_transcriber_bot.infrastructure.audio.ffmpeg_converter import FfmpegAudioConverter
 from yt_transcriber_bot.infrastructure.diarization.composite_engine import (
     CompositeDiarizationEngine,
@@ -36,19 +40,42 @@ from yt_transcriber_bot.infrastructure.diarization.composite_engine import (
 from yt_transcriber_bot.infrastructure.exporting.plain_text_exporter import (
     PlainTextTranscriptExportService,
 )
-from yt_transcriber_bot.infrastructure.exporting.transcript_exporter import (
-    TranscriptExportService,
+from yt_transcriber_bot.infrastructure.exporting.transcript_derivatives_adapter import (
+    TranscriptDerivativesAdapter,
 )
+from yt_transcriber_bot.infrastructure.exporting.transcript_exporter import TranscriptExportService
 from yt_transcriber_bot.infrastructure.exporting.video_subtitles_exporter import (
     VideoSoftSubtitleExportService,
     VideoSubtitleExportLimits,
 )
 from yt_transcriber_bot.infrastructure.logging.execution_audit import ExecutionAuditLogger
+from yt_transcriber_bot.infrastructure.logging.runtime_logging import (
+    configure_runtime_logging as _configure_runtime_logging,
+)
+from yt_transcriber_bot.infrastructure.operational.bounded_log_reader import BoundedTextLogReader
+from yt_transcriber_bot.infrastructure.operational.health_environment_probe import (
+    LocalHealthEnvironmentProbe,
+)
 from yt_transcriber_bot.infrastructure.operational.health_probes import (
     find_executable,
     local_disk_usage,
     module_available,
     probe_openai_compatible_models,
+)
+from yt_transcriber_bot.infrastructure.persistence.filesystem.canonical_markdown_writer import (
+    FilesystemCanonicalMarkdownWriter,
+)
+from yt_transcriber_bot.infrastructure.persistence.filesystem.operational_error_store import (
+    JsonlOperationalErrorStore,
+)
+from yt_transcriber_bot.infrastructure.persistence.filesystem.owned_artifact_cleanup import (
+    FilesystemOwnedArtifactCleanup,
+)
+from yt_transcriber_bot.infrastructure.persistence.filesystem.reconstructible_cache import (
+    FilesystemReconstructibleCache,
+)
+from yt_transcriber_bot.infrastructure.persistence.filesystem.summary_artifact_store import (
+    FilesystemSummaryArtifactStore,
 )
 from yt_transcriber_bot.infrastructure.persistence.filesystem.transcript_snapshot import (
     TranscriptSnapshotRepository,
@@ -56,17 +83,15 @@ from yt_transcriber_bot.infrastructure.persistence.filesystem.transcript_snapsho
 from yt_transcriber_bot.infrastructure.persistence.sqlalchemy.job_repository import (
     SqlAlchemyJobRepository,
 )
-from yt_transcriber_bot.infrastructure.persistence.sqlite_health import SqliteHealthProbe
-from yt_transcriber_bot.infrastructure.rendering.markdown_renderer import (
-    MarkdownTranscriptRenderer,
+from yt_transcriber_bot.infrastructure.persistence.sqlalchemy.text_search_repository import (
+    SqlAlchemyTextSearchRepository,
 )
+from yt_transcriber_bot.infrastructure.persistence.sqlite_health import SqliteHealthProbe
+from yt_transcriber_bot.infrastructure.rendering.markdown_renderer import MarkdownTranscriptRenderer
 from yt_transcriber_bot.infrastructure.summarization.openai_compatible_client import (
     OpenAICompatibleChatClient,
 )
-from yt_transcriber_bot.infrastructure.summarization.transcript_summarizer import (
-    TranscriptSummaryService,
-    make_text_tokenizer,
-)
+from yt_transcriber_bot.infrastructure.summarization.tokenizer import make_text_tokenizer
 from yt_transcriber_bot.infrastructure.telegram.audience import (
     DeniedAudienceFilter,
     TelegramAudiencePolicy,
@@ -83,8 +108,15 @@ from yt_transcriber_bot.infrastructure.youtube.yt_dlp_real_factory import (
 )
 
 logger = logging.getLogger(__name__)
-
 _DIARIZATION_MODEL_NAME = "pyannote/speaker-diarization-community-1"
+
+
+def configure_runtime_logging(settings: AppSettings) -> None:
+    _configure_runtime_logging(
+        settings.logs_dir(),
+        max_bytes=settings.operational_log_max_bytes,
+        backup_count=settings.operational_log_backup_count,
+    )
 
 
 def _bound_error_sanitizer(settings: AppSettings) -> Callable[[str], str]:
@@ -110,6 +142,11 @@ class Composition:
     lasterror_service: LastErrorService
     retention_policy: RetentionPolicy
     audit_logger: ExecutionAuditLogger
+    search_indexing_service: SearchIndexingService
+    text_search_workflow: TextSearchWorkflow
+    derivative_workflow: TranscriptDerivativeWorkflow
+    summary_workflow: SummaryWorkflow | None
+    operational_workflow: OperationalWorkflow
 
 
 @dataclass(frozen=True)
@@ -123,9 +160,7 @@ class RuntimeComposition:
 
 def _make_gpu_detector() -> GpuDetector:
     try:
-        from yt_transcriber_bot.infrastructure.gpu.torch_gpu_detector import (
-            TorchGpuDetector,
-        )
+        from yt_transcriber_bot.infrastructure.gpu.torch_gpu_detector import TorchGpuDetector
 
         return TorchGpuDetector()
     except ImportError as exc:
@@ -134,7 +169,7 @@ def _make_gpu_detector() -> GpuDetector:
 
 
 class _StubGpuDetector(GpuDetector):
-    def detect(self) -> HardwareProfile:  # pragma: no cover - host fallback
+    def detect(self) -> HardwareProfile:
         return HardwareProfile(
             has_cuda=False,
             cuda_compute_capability=None,
@@ -185,19 +220,17 @@ def _make_summary_service(
     settings: AppSettings,
     credentials: ProviderCredentials,
     snapshots: CanonicalTranscriptStore,
+    error_sanitizer: Callable[[str], str],
 ) -> TranscriptSummaryService | None:
     if settings.summary_backend == "disabled":
         return None
-
     endpoint = TextGenerationEndpointPolicy(
         base_url=settings.summary_base_url,
         model=settings.summary_model,
         explicitly_configured="summary_base_url" in settings.model_fields_set,
     )
     endpoint.require_transcript_disclosure_allowed()
-    error_sanitizer = _bound_error_sanitizer(settings)
-
-    summary_client = OpenAICompatibleChatClient(
+    client = OpenAICompatibleChatClient(
         base_url=endpoint.base_url,
         model=endpoint.model,
         temperature=settings.summary_temperature,
@@ -209,16 +242,15 @@ def _make_summary_service(
         strict_model_match=settings.summary_strict_model_match,
         error_sanitizer=error_sanitizer,
     )
-    tokenizer_model = settings.summary_tokenizer_model or settings.summary_model
     tokenizer = make_text_tokenizer(
         backend=settings.summary_tokenizer_backend,
-        model=tokenizer_model,
+        model=settings.summary_tokenizer_model or settings.summary_model,
         chars_per_token=settings.summary_chars_per_token,
         trust_remote_code=settings.summary_tokenizer_trust_remote_code,
     )
     return TranscriptSummaryService(
         snapshots=snapshots,
-        chat_client=summary_client,
+        chat_client=client,
         output_dir=settings.summaries_dir(),
         max_chars_per_chunk=settings.summary_max_chars_per_chunk,
         max_input_tokens=settings.summary_max_input_tokens,
@@ -238,27 +270,29 @@ def _make_summary_service(
     )
 
 
-def build(
-    settings: AppSettings,
-    *,
-    credentials: ProviderCredentials,
-) -> Composition:
-    settings.base_dir.mkdir(parents=True, exist_ok=True)
-    settings.downloads_dir().mkdir(parents=True, exist_ok=True)
-    settings.processed_dir().mkdir(parents=True, exist_ok=True)
-    settings.transcripts_dir().mkdir(parents=True, exist_ok=True)
-    settings.logs_dir().mkdir(parents=True, exist_ok=True)
-    settings.video_exports_dir().mkdir(parents=True, exist_ok=True)
-    settings.summaries_dir().mkdir(parents=True, exist_ok=True)
-    segments_dir = settings.base_dir / "segments"
-    segments_dir.mkdir(parents=True, exist_ok=True)
-    settings.models_dir.mkdir(parents=True, exist_ok=True)
-    settings.db_path.parent.mkdir(parents=True, exist_ok=True)
-
-    repository = SqlAlchemyJobRepository.from_url(f"sqlite:///{settings.db_path}")
-    snapshots = TranscriptSnapshotRepository(segments_dir)
+def build(settings: AppSettings, *, credentials: ProviderCredentials) -> Composition:
+    for path in (
+        settings.base_dir,
+        settings.downloads_dir(),
+        settings.processed_dir(),
+        settings.transcripts_dir(),
+        settings.logs_dir(),
+        settings.video_exports_dir(),
+        settings.summaries_dir(),
+        settings.base_dir / "segments",
+        settings.models_dir,
+        settings.db_path.parent,
+    ):
+        path.mkdir(parents=True, exist_ok=True)
 
     error_sanitizer = _bound_error_sanitizer(settings)
+
+    url = f"sqlite:///{settings.db_path}"
+    repository = SqlAlchemyJobRepository.from_url(url)
+    search_repository = SqlAlchemyTextSearchRepository.from_url(url)
+    snapshots = TranscriptSnapshotRepository(settings.base_dir / "segments")
+    summary_store = FilesystemSummaryArtifactStore(settings.summaries_dir())
+
     downloader: YouTubeDownloader = YtDlpDownloader(
         ydl_factory=real_ydl_factory,
         subtitle_fetcher=real_subtitle_fetcher,
@@ -267,19 +301,14 @@ def build(
         error_sanitizer=error_sanitizer,
     )
     converter: AudioConverter = FfmpegAudioConverter()
-
-    gpu_detector = _make_gpu_detector()
-    transcription_engine = _make_transcription_engine()
-    diarization_engine = _make_diarization_engine(credentials.hf_token)
     renderer = MarkdownTranscriptRenderer()
-
     use_case = TranscribeVideoUseCase(
         TranscribeVideoDependencies(
             downloader=downloader,
             converter=converter,
-            gpu_detector=gpu_detector,
-            transcription_engine=transcription_engine,
-            diarization_engine=diarization_engine,
+            gpu_detector=_make_gpu_detector(),
+            transcription_engine=_make_transcription_engine(),
+            diarization_engine=_make_diarization_engine(credentials.hf_token),
             renderer=renderer,
             settings=settings,
             repository=repository,
@@ -287,11 +316,9 @@ def build(
         )
     )
 
-    rename_service = RenameSpeakersService(snapshots, renderer)
+    rename_service = RenameSpeakersService(snapshots, renderer, FilesystemCanonicalMarkdownWriter())
     export_service = TranscriptExportService(snapshots)
     plain_text_export_service = PlainTextTranscriptExportService(snapshots)
-    summary_service = _make_summary_service(settings, credentials, snapshots)
-
     video_subtitle_export_service = VideoSoftSubtitleExportService(
         snapshots=snapshots,
         transcript_exporter=export_service,
@@ -305,28 +332,83 @@ def build(
             max_size_bytes=settings.max_video_subtitles_size_mb * 1024 * 1024,
         ),
     )
+
+    indexer = SearchIndexingService(
+        repository=repository,
+        canonical_transcripts=snapshots,
+        index=search_repository,
+        summaries=summary_store,
+    )
+    history = CompletedHistoryWorkflow(repository)
+    text_search_workflow = TextSearchWorkflow(
+        history=history, query=search_repository, indexer=indexer
+    )
+    derivative_workflow = TranscriptDerivativeWorkflow(
+        repository=repository,
+        history=history,
+        rename_service=rename_service,
+        gateway=TranscriptDerivativesAdapter(
+            text=plain_text_export_service,
+            transcript=export_service,
+            video=video_subtitle_export_service,
+        ),
+        indexer=indexer,
+        transcripts_dir=settings.transcripts_dir(),
+    )
+
+    summary_service = _make_summary_service(settings, credentials, snapshots, error_sanitizer)
+    summary_workflow = (
+        SummaryWorkflow(
+            history=history,
+            summary_policy=summary_service,
+            store=summary_store,
+            indexer=indexer,
+        )
+        if summary_service is not None
+        else None
+    )
+
+    error_store = JsonlOperationalErrorStore(
+        settings.logs_dir() / "operational_errors.jsonl",
+        max_records=settings.operational_error_max_records,
+        max_bytes=settings.audit_log_max_bytes,
+    )
     healthcheck_service = HealthCheckService(
         settings=settings,
-        models_probe=probe_openai_compatible_models,
-        executable_finder=find_executable,
-        module_checker=module_available,
-        disk_usage=local_disk_usage,
-        sqlite_probe=SqliteHealthProbe(),
+        environment_probe=LocalHealthEnvironmentProbe(
+            settings=settings,
+            models_probe=probe_openai_compatible_models,
+            executable_finder=find_executable,
+            module_checker=module_available,
+            disk_usage=local_disk_usage,
+            sqlite_probe=SqliteHealthProbe(),
+            operational_errors=error_store,
+        ),
     )
-    history_search_service = HistorySearchService(repository)
-    lasterror_service = LastErrorService(repository=repository, settings=settings)
-    audit_logger = ExecutionAuditLogger(
-        settings.logs_dir() / "execution_audit.jsonl",
+    lasterror_service = LastErrorService(
+        repository=repository,
         settings=settings,
+        error_store=error_store,
+        log_reader=BoundedTextLogReader(),
     )
     retention_policy = RetentionPolicy(
         repository=repository,
-        owned_roots=(
-            settings.downloads_dir(),
-            settings.processed_dir(),
-            settings.logs_dir(),
+        artifact_cleanup=FilesystemOwnedArtifactCleanup(
+            (settings.downloads_dir(), settings.processed_dir(), settings.logs_dir())
         ),
         max_volatile_jobs=settings.retention_count,
+    )
+    operational_workflow = OperationalWorkflow(
+        healthcheck=healthcheck_service,
+        last_error=lasterror_service,
+        cache=CacheMaintenanceService(FilesystemReconstructibleCache((settings.models_dir,))),
+        retention=retention_policy,
+    )
+    audit_logger = ExecutionAuditLogger(
+        settings.logs_dir() / "execution_audit.jsonl",
+        settings=settings,
+        max_bytes=settings.audit_log_max_bytes,
+        backup_count=settings.audit_log_backup_count,
     )
 
     return Composition(
@@ -340,10 +422,15 @@ def build(
         summary_service=summary_service,
         video_subtitle_export_service=video_subtitle_export_service,
         healthcheck_service=healthcheck_service,
-        history_search_service=history_search_service,
+        history_search_service=HistorySearchService(search_repository),
         lasterror_service=lasterror_service,
         retention_policy=retention_policy,
         audit_logger=audit_logger,
+        search_indexing_service=indexer,
+        text_search_workflow=text_search_workflow,
+        derivative_workflow=derivative_workflow,
+        summary_workflow=summary_workflow,
+        operational_workflow=operational_workflow,
     )
 
 
@@ -365,19 +452,14 @@ def _make_telegram_runtime(
         client=client,
         use_case=core.use_case,
         repository=core.repository,
-        rename_service=core.rename_service,
-        export_service=core.export_service,
-        plain_text_export_service=core.plain_text_export_service,
-        summary_service=core.summary_service,
-        video_subtitle_export_service=core.video_subtitle_export_service,
-        healthcheck_service=core.healthcheck_service,
-        history_search_service=core.history_search_service,
-        lasterror_service=core.lasterror_service,
-        retention_policy=core.retention_policy,
-        models_dir=settings.models_dir,
         audit_logger=core.audit_logger,
         media_downloader=client,
         duration_inspector=FfprobeAudioDurationInspector(),
+        text_search_workflow=core.text_search_workflow,
+        derivative_workflow=core.derivative_workflow,
+        summary_workflow=core.summary_workflow,
+        operational_workflow=core.operational_workflow,
+        search_indexing_service=core.search_indexing_service,
     )
     audience = TelegramAudiencePolicy(settings.telegram_allowed_user_id)
     return RuntimeComposition(
@@ -389,10 +471,5 @@ def _make_telegram_runtime(
     )
 
 
-def build_runtime(
-    settings: AppSettings,
-    *,
-    credentials: ProviderCredentials,
-) -> RuntimeComposition:
-    core = build(settings, credentials=credentials)
-    return _make_telegram_runtime(settings, credentials, core)
+def build_runtime(settings: AppSettings, *, credentials: ProviderCredentials) -> RuntimeComposition:
+    return _make_telegram_runtime(settings, credentials, build(settings, credentials=credentials))

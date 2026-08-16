@@ -32,6 +32,9 @@ from yt_transcriber_bot.infrastructure.exporting.transcript_exporter import (
 from yt_transcriber_bot.infrastructure.exporting.video_subtitles_exporter import (
     VideoSubtitleExportError,
 )
+from yt_transcriber_bot.infrastructure.persistence.filesystem.canonical_markdown_writer import (
+    FilesystemCanonicalMarkdownWriter,
+)
 from yt_transcriber_bot.infrastructure.persistence.filesystem.transcript_snapshot import (
     TranscriptSnapshot,
     TranscriptSnapshotRepository,
@@ -292,7 +295,9 @@ def snapshots(tmp_path: Path) -> TranscriptSnapshotRepository:
 def rename_service(
     snapshots: TranscriptSnapshotRepository,
 ) -> RenameSpeakersService:
-    return RenameSpeakersService(snapshots, MarkdownTranscriptRenderer())
+    return RenameSpeakersService(
+        snapshots, MarkdownTranscriptRenderer(), FilesystemCanonicalMarkdownWriter()
+    )
 
 
 @pytest.fixture

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from yt_transcriber_bot.application.ports.history_search import (
+from yt_transcriber_bot.application.ports.text_search import (
     HistorySearchHit,
-    HistorySearchRepository,
+    TextSearchQuery,
 )
 
 
@@ -27,7 +27,7 @@ class HistorySearchService:
 
     max_results = 10
 
-    def __init__(self, repository: HistorySearchRepository) -> None:
+    def __init__(self, repository: TextSearchQuery) -> None:
         self._repository = repository
 
     def search(
@@ -41,10 +41,6 @@ class HistorySearchService:
             user_id=user_id, query=normalized, limit=bounded_limit
         )
         return [self._to_result(hit) for hit in hits]
-
-    def refresh(self, job_id: str) -> None:
-        """Permite aos fluxos de rename/summary atualizar o texto derivado."""
-        self._repository.refresh_search_index(job_id)
 
     @staticmethod
     def _to_result(hit: HistorySearchHit) -> HistorySearchResult:

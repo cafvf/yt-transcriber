@@ -9,8 +9,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from yt_transcriber_bot.application.services.healthcheck import DiskUsageResult
-
 
 def probe_openai_compatible_models(
     url: str,
@@ -46,6 +44,6 @@ class _LocalDiskUsageResult:
     free: int
 
 
-def local_disk_usage(path: Path) -> DiskUsageResult:
+def local_disk_usage(path: Path) -> _LocalDiskUsageResult:
     usage = shutil.disk_usage(path)
     return _LocalDiskUsageResult(free=usage.free)

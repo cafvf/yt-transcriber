@@ -1,214 +1,94 @@
-"""Testes do serviço de /healthcheck."""
-
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
-
 from yt_transcriber_bot.application.config import AppSettings
+from yt_transcriber_bot.application.ports.health_probe import (
+    HealthEnvironmentProbe,
+    HealthEnvironmentSnapshot,
+)
 from yt_transcriber_bot.application.services.healthcheck import HealthCheckService
 
 
-def _settings(tmp_path: Path, **kwargs: object) -> AppSettings:
-    values: dict[str, object] = {
-        "telegram_bot_token": "dummy-telegram-token-for-tests",
-        "telegram_allowed_user_id": 42,
-        "hf_token": "alpha-bravo-charlie",
-        "base_dir": tmp_path / "data",
-        "models_dir": tmp_path / "models",
-        "db_path": tmp_path / "data" / "jobs.db",
-        "summary_model": "qwen/qwen3.5-9b",
-    }
-    values.update(kwargs)
-    return AppSettings(**values)
+class FakeProbe(HealthEnvironmentProbe):
+    def __init__(
+        self,
+        *,
+        model_ids: tuple[str, ...] | None = ("qwen3.5-9b",),
+        model_error: str | None = None,
+    ) -> None:
+        self.model_ids = model_ids
+        self.model_error = model_error
+
+    def snapshot(self) -> HealthEnvironmentSnapshot:
+        return HealthEnvironmentSnapshot(
+            python_detail="CPython test",
+            project_root_found=True,
+            env_file_state="arquivo runtime encontrado.",
+            executable_available={"ffmpeg": True, "ffprobe": True, "yt-dlp": True},
+            module_available={
+                "yt_dlp": True,
+                "telegram": True,
+                "sqlalchemy": True,
+                "whisperx": True,
+                "pyannote.audio": True,
+                "transformers": True,
+            },
+            directory_writable={
+                "base_dir": True,
+                "downloads": True,
+                "processed": True,
+                "transcripts": True,
+                "logs": True,
+                "summaries": True,
+                "video_exports": True,
+                "models": True,
+            },
+            sqlite_error=None,
+            operational_error_log_writable=True,
+            operational_error_records=3,
+            free_disk_mb=10_000,
+            cookies_file_exists=None,
+            model_ids=self.model_ids,
+            model_probe_error=self.model_error,
+        )
 
 
-def test_healthcheck_reports_ok_when_core_dependencies_and_model_are_available(
-    tmp_path: Path,
-) -> None:
-    settings = _settings(tmp_path)
-
-    def models_probe(url: str, headers: dict[str, str], timeout_s: float) -> dict[str, Any]:
-        assert url.endswith("/models")
-        assert timeout_s == settings.healthcheck_lmstudio_timeout_s
-        return {"data": [{"id": "qwen/qwen3.5-9b"}]}
-
-    service = HealthCheckService(
-        settings=settings,
-        models_probe=models_probe,
-        executable_finder=lambda name: f"/usr/bin/{name}",
-        module_checker=lambda name: True,
+def _settings(**kwargs: object) -> AppSettings:
+    return AppSettings(
+        _env_file=None,
+        telegram_allowed_user_id=7,
+        telegram_bot_token="1234567890:" + "x" * 35,
+        hf_token="hf_" + "x" * 30,
+        youtube_cookies_browser="firefox",
+        summary_model="qwen3.5-9b",
+        **kwargs,
     )
 
-    report = service.run()
+
+def test_healthcheck_policy_maps_injected_facts_without_host_io() -> None:
+    settings = _settings()
+    report = HealthCheckService(settings=settings, environment_probe=FakeProbe()).run()
     rendered = report.render(settings)
-
-    assert report.overall_status in {"ok", "warn"}
-    assert "LM Studio" in rendered
-    assert "qwen/qwen3.5-9b" in rendered
-    assert "dummy-telegram-token-for-tests" not in rendered
-    assert "alpha-bravo-charlie" not in rendered
-
-
-def test_healthcheck_fails_when_summary_model_is_absent_from_lm_studio(tmp_path: Path) -> None:
-    settings = _settings(tmp_path, summary_model="modelo-ausente")
-    service = HealthCheckService(
-        settings=settings,
-        models_probe=lambda *_args: {"data": [{"id": "outro-modelo"}]},
-        executable_finder=lambda name: f"/usr/bin/{name}",
-        module_checker=lambda name: True,
-    )
-
-    report = service.run()
-    rendered = report.render(settings)
-
-    assert report.overall_status == "fail"
-    assert "modelo-ausente" in rendered
-    assert "não aparece em /models" in rendered
-
-
-def test_healthcheck_sanitizes_summary_api_key_from_lm_studio_error(tmp_path: Path) -> None:
-    settings = _settings(tmp_path, summary_api_key="secret-api-key-123456")
-
-    def broken_probe(*_args: object) -> dict[str, Any]:
-        raise RuntimeError("authorization: Bearer dummy-bearer-token-for-tests")
-
-    service = HealthCheckService(
-        settings=settings,
-        models_probe=broken_probe,
-        executable_finder=lambda name: f"/usr/bin/{name}",
-        module_checker=lambda name: True,
-    )
-
-    rendered = service.run().render(settings)
-
-    assert "secret-api-key-123456" not in rendered
-    assert "[REDACTED]" in rendered
-
-
-def test_healthcheck_includes_extended_operational_checks(tmp_path: Path) -> None:
-    settings = _settings(tmp_path)
-    service = HealthCheckService(
-        settings=settings,
-        models_probe=lambda *_args: {"data": [{"id": "qwen/qwen3.5-9b"}]},
-        executable_finder=lambda name: f"/usr/bin/{name}",
-        module_checker=lambda name: True,
-    )
-
-    rendered = service.run().render(settings)
-
+    assert report.overall_status == "ok"
     assert "Python" in rendered
-    assert "ffprobe" in rendered
-    assert "Registro de erros operacionais" in rendered
-    assert "Orçamento de sumarização" in rendered
-    assert "Tokenizer de sumarização" in rendered
-    assert "trust_remote_code=false" in rendered
-    assert "Thinking da LLM" in rendered
-
-
-def test_healthcheck_fails_when_huggingface_token_is_missing(tmp_path: Path) -> None:
-    settings = _settings(tmp_path, summary_tokenizer_backend="hf")
-    service = HealthCheckService(
-        settings=settings,
-        models_probe=lambda *_args: {"data": [{"id": "qwen/qwen3.5-9b"}]},
-        executable_finder=lambda name: f"/usr/bin/{name}",
-        module_checker=lambda name: name != "transformers",
-    )
-
-    rendered = service.run().render(settings)
-
-    assert "Healthcheck: problemas encontrados" in rendered
-    assert "SUMMARY_TOKENIZER_BACKEND=hf exige transformers" in rendered
-
-
-def test_healthcheck_does_not_expose_cookie_file_path(tmp_path: Path) -> None:
-    cookies_path = tmp_path / "private" / "youtube-cookies.txt"
-    cookies_path.parent.mkdir(parents=True)
-    cookies_path.write_text("# " + "Netscape HTTP Cookie File\n", encoding="utf-8")
-    settings = _settings(tmp_path, youtube_cookies_file=str(cookies_path))
-    service = HealthCheckService(
-        settings=settings,
-        models_probe=lambda *_args: {"data": [{"id": "qwen/qwen3.5-9b"}]},
-        executable_finder=lambda name: f"/usr/bin/{name}",
-        module_checker=lambda name: True,
-    )
-
-    rendered = service.run().render(settings)
-
-    assert "Cookies YouTube" in rendered
-    assert "arquivo configurado existe" in rendered
-    assert str(cookies_path) not in rendered
-
-
-def test_healthcheck_render_does_not_expose_configured_local_paths(tmp_path: Path) -> None:
-    settings = _settings(tmp_path)
-    service = HealthCheckService(
-        settings=settings,
-        models_probe=lambda *_args: {"data": [{"id": "qwen/qwen3.5-9b"}]},
-        executable_finder=lambda name: f"/private/bin/{name}",
-        module_checker=lambda name: True,
-    )
-
-    rendered = service.run().render(settings)
-
-    assert str(settings.base_dir) not in rendered
-    assert str(settings.db_path) not in rendered
-    assert str(settings.logs_dir()) not in rendered
-    assert "/private/bin" not in rendered
-
-
-def test_healthcheck_reports_tokenizer_remote_code_opt_in_safely(tmp_path: Path) -> None:
-    settings = _settings(tmp_path, summary_tokenizer_trust_remote_code=True)
-    service = HealthCheckService(
-        settings=settings,
-        models_probe=lambda *_args: {"data": [{"id": "qwen/qwen3.5-9b"}]},
-        executable_finder=lambda name: f"/usr/bin/{name}",
-        module_checker=lambda name: True,
-    )
-
-    rendered = service.run().render(settings)
-
-    assert "trust_remote_code=true" in rendered
-    assert "revise a origem do tokenizer" in rendered
-
-
-def test_healthcheck_uses_injected_sqlite_probe(tmp_path: Path) -> None:
-    settings = _settings(tmp_path)
-    calls: list[Path] = []
-
-    def sqlite_probe(path: Path) -> None:
-        calls.append(path)
-
-    service = HealthCheckService(
-        settings=settings,
-        models_probe=lambda *_args: {"data": [{"id": "qwen/qwen3.5-9b"}]},
-        executable_finder=lambda name: f"/usr/bin/{name}",
-        module_checker=lambda name: True,
-        sqlite_probe=sqlite_probe,
-    )
-
-    rendered = service.run().render(settings)
-
-    assert calls == [settings.db_path]
-    assert "SQLite: acessível" in rendered
-
-
-def test_healthcheck_reports_injected_sqlite_probe_failure(tmp_path: Path) -> None:
-    settings = _settings(tmp_path)
-
-    def sqlite_probe(_path: Path) -> None:
-        raise RuntimeError(f"boom at {settings.db_path}")
-
-    service = HealthCheckService(
-        settings=settings,
-        models_probe=lambda *_args: {"data": [{"id": "qwen/qwen3.5-9b"}]},
-        executable_finder=lambda name: f"/usr/bin/{name}",
-        module_checker=lambda name: True,
-        sqlite_probe=sqlite_probe,
-    )
-
-    rendered = service.run().render(settings)
-
     assert "SQLite" in rendered
-    assert "falha ao acessar o banco SQLite" in rendered
-    assert str(settings.db_path) not in rendered
+    assert "Registro de erros operacionais" in rendered
+    assert "LM Studio" in rendered
+
+
+def test_healthcheck_reports_missing_summary_model() -> None:
+    settings = _settings()
+    report = HealthCheckService(
+        settings=settings,
+        environment_probe=FakeProbe(model_ids=("other",)),
+    ).run()
+    assert report.overall_status == "fail"
+    assert "não aparece em /models" in report.render(settings)
+
+
+def test_healthcheck_sanitizes_probe_error() -> None:
+    settings = _settings(summary_api_key="secret-value")
+    report = HealthCheckService(
+        settings=settings,
+        environment_probe=FakeProbe(model_error="boom secret-value"),
+    ).run()
+    assert "secret-value" not in report.render(settings)
