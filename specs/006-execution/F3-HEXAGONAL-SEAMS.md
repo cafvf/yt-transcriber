@@ -1,6 +1,6 @@
 # F3 — Hexagonal boundaries and provider seams
 
-Status: **In progress — TASK-P03-001..011 locally verified; TASK-P03-012 next**
+Status: **In progress — TASK-P03-001..012 locally verified; TASK-P03-013 next**
 Plan: `PLAN-003`
 Base revision: `f2e265acbcc8b2a4cef601e160ae13193f49d979`
 Started: 2026-08-15
@@ -533,9 +533,67 @@ c666305 refactor: remove obsolete generic file storage surface
 No frozen normative plan/task text is changed by this execution closure.
 
 
+### TASK-P03-012 — Mechanically enforced dependency direction
+
+Status: **Locally verified — REQ-ARC-001 closed**
+
+The temporary PLAN-003 dependency ratchet has converged into a permanent
+zero-violation architecture invariant.
+
+Implementation boundary:
+
+- removed `tests/conformance/f3_known_dependency_violations.txt`; no legacy
+  exception manifest remains;
+- `test_hexagonal_dependencies.py` now requires the forbidden dependency set to
+  be empty directly;
+- domain runtime code is mechanically prevented from importing application or
+  infrastructure modules;
+- application runtime code is mechanically prevented from importing concrete
+  infrastructure modules;
+- the architecture checks remain part of the default pytest gate;
+- representative regression coverage proves a newly introduced
+  `application -> infrastructure` import is detected;
+- direct application stdlib I/O is scanned separately from layer imports so it
+  cannot become a loophole around the dependency rule;
+- current direct-I/O hotspots are mechanically matched to their frozen
+  purpose-specific requirement/task owners; new ungoverned hotspots fail and
+  stale routing entries also fail.
+
+The direct-I/O governance metadata is not a dependency-exception allowlist.
+P03-012 changes no production behavior. Remaining purpose-specific I/O
+migrations stay with their frozen owners, including P03-013 for application
+capability closure and PLAN-004 operational-policy/I/O separation.
+
+#### P03-012 closure evidence
+
+```text
+conformance gate: 74 passed
+default gate: 842 passed / 36 deselected / 878 collected
+integration gate: 36 passed / 842 deselected / 878 collected
+mypy: 111 source files / zero issues
+Ruff auto-fix + format + strict lint: 213 files / green
+security scanner: clean
+Gitleaks: 45 commits / ~3.03 MB scanned / no leaks
+compileall: green
+pre-commit security hooks: green
+forbidden domain/application import scans: empty
+legacy dependency manifest: absent
+git diff --check: green
+```
+
+Integrated locally on `main` as:
+
+```text
+561e691 test: enforce dependency direction without legacy exceptions
+```
+
+`REQ-ARC-001` is closed. No frozen normative plan/task text is changed by this
+execution closure.
+
+
 ## Next task
 
-Proceed to `TASK-P03-012 — Mechanically enforced dependency direction`.
+Proceed to `TASK-P03-013 — Purpose-specific application-owned ports`.
 
 ## Gate state
 
