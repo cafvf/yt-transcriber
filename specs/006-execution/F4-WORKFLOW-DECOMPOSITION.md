@@ -17,7 +17,7 @@ boundaries without changing any frozen task dependency or PLAN exit gate:
 | Execution subphase | Approved task range | Purpose | State |
 |---|---|---|---|
 | A | `TASK-P04-001` | establish application workflow/admission seam | **Published / closed** |
-| B | `TASK-P04-002..003` | execution/queue/cancel/recovery plus completed-history workflow | **Active — P04-002 locally closed; P04-003 next** |
+| B | `TASK-P04-002..003` | execution/queue/cancel/recovery plus completed-history workflow | **Locally closed — convergence/push next** |
 | C | `TASK-P04-004..013` | derived data, search, summary and operational decomposition | Pending |
 | D | `TASK-P04-014..017` | thin-Telegram closure, reliability, convergence and PLAN-004 exit gate | Pending |
 
@@ -307,9 +307,119 @@ final Ruff/format/mypy: green
 No product capability was added and no frozen normative requirement, plan or task text
 was modified.
 
-## TASK-P04-003 — Next
+## TASK-P04-003 — Application-owned completed-history workflow
 
-Proceed to `TASK-P04-003`: move completed-history ordering, operator scoping,
-positional selection and canonical-Markdown retrieval decisions into an application
-capability. Keep command parsing, titles/formatting/buttons and send mechanics in
-Telegram, and keep textual search separate.
+Status: **Verified / locally closed — Subphase B ready for convergence and publication**
+
+Functional commit:
+
+```text
+bb7ccd9779cb7fffff731900f28719e29ae6115a
+refactor: move completed history workflow to application
+```
+
+### Implemented boundary
+
+P04-003 moved the portable completed-history policy to Application:
+
+- completed-only filtering;
+- per-user/operator scoping;
+- newest-first ordering;
+- one-based positional selection;
+- canonical-Markdown retrieval state.
+
+The Application workflow does not perform direct filesystem I/O. Markdown
+availability is supplied through an injected probe; Telegram keeps the concrete
+filesystem mechanism and maps application retrieval states to user-facing
+messages.
+
+Telegram retains:
+
+- command parsing;
+- title metadata lookup and prefetch;
+- history-line formatting;
+- user-facing error/help text;
+- document-send mechanics;
+- Telegram-specific presentation state.
+
+Textual search remains separate and is not merged into the completed-history
+workflow.
+
+### Characterization and TDD evidence
+
+The initial P04-003 characterization confirmed that completed-history filtering,
+ordering and positional selection still lived under
+`infrastructure.telegram.history`, and the adapter delegated those decisions to
+the Telegram-owned collaboration object.
+
+After the production boundary was moved, the first focused gate stopped during
+test collection because a brownfield Telegram command test still imported the
+removed `HistoryCollaboration` owner.
+
+The correction did not restore the old production owner:
+
+- the obsolete Telegram test that duplicated portable filtering/order/selection
+  was removed;
+- equivalent behavior remains covered in
+  `tests/unit/application/workflows/test_history.py`;
+- the Telegram presentation test was retargeted to `HistoryPresentation`.
+
+Final focused gate:
+
+```text
+82 passed
+mypy: 116 source files / zero issues
+Ruff: green
+ownership scans: green
+git diff --check: green
+```
+
+### Full local gate
+
+The final P04-003 worktree passed the explicit full repository gate:
+
+```text
+Ruff auto-fix / format / strict: green
+format check: 224 files
+mypy: 116 source files / zero issues
+local security scanner: clean
+Gitleaks: 56 commits / ~3.10 MB / no leaks
+
+default gate:
+  907 collected
+  35 deselected
+  872 passed
+
+integration gate:
+  907 collected
+  872 deselected
+  35 passed
+
+compileall: green
+pre-commit sensitive-file/token hooks: green
+final Ruff/format/mypy: green
+git diff --check: green
+```
+
+### REQ-ARC-002 acceptance contribution
+
+P04-003 advances the portable-workflow requirement by making completed-history
+selection/retrieval policy exerciseable without Telegram classes while leaving
+Telegram responsible for protocol parsing and presentation.
+
+No product capability was added. No frozen normative requirement, plan or task
+text was modified.
+
+## Subphase B — Local closure
+
+Subphase B (`TASK-P04-002..003`) is now locally complete:
+
+- `TASK-P04-002`: application-owned execution, queue, cancellation and recovery
+  coordination — locally closed;
+- `TASK-P04-003`: application-owned completed-history workflow — locally closed.
+
+Subphase B has not yet been published. The next operational step is a compact
+convergence gate over the combined P04-002/P04-003 state, followed by
+publication to `origin/main`.
+
+After publication, execution pauses before Subphase C for review/discussion.
