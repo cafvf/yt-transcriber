@@ -1,6 +1,6 @@
 # F4 — Application/Telegram workflow decomposition
 
-Status: **Active — execution subphase A / TASK-P04-001 locally closed**
+Status: **Active — execution subphase A / TASK-P04-001 published and closed; subphase B next**
 Plan: `PLAN-004`
 Base revision: `7c52c0d1d8682f4a1b59d8eeb57324171fa42fc7`
 Started: 2026-08-16
@@ -16,7 +16,7 @@ boundaries without changing any frozen task dependency or PLAN exit gate:
 
 | Execution subphase | Approved task range | Purpose | State |
 |---|---|---|---|
-| A | `TASK-P04-001` | establish application workflow/admission seam | **Locally closed; push pending** |
+| A | `TASK-P04-001` | establish application workflow/admission seam | **Published / closed** |
 | B | `TASK-P04-002..003` | execution/queue/cancel/recovery plus completed-history workflow | **Next** |
 | C | `TASK-P04-004..013` | derived data, search, summary and operational decomposition | Pending |
 | D | `TASK-P04-014..017` | thin-Telegram closure, reliability, convergence and PLAN-004 exit gate | Pending |
@@ -27,7 +27,7 @@ push boundaries inside PLAN-004.
 
 ## TASK-P04-001 — Establish application workflow boundary and extract submission/dedup/reprocess admission
 
-Status: **Locally verified / functional commit integrated**
+Status: **Verified / closed**
 
 Functional commit:
 
@@ -148,6 +148,42 @@ P04-001 added executable checks proving:
 
 No product capability was added. No frozen normative requirement, plan or task
 text was modified.
+
+### Post-push regression repair
+
+Remote review after the initial Subphase A publication found one
+behavior-preservation regression in the YouTube admission presentation:
+newline escapes had been double-escaped, producing a visible literal `\\n`
+instead of line breaks.
+
+The defect was routed back to its behavior owner, `TASK-P04-001`, and repaired
+in functional commit:
+
+```text
+8beea3d
+fix: preserve admission message newlines
+```
+
+Regression coverage now requires real line breaks in the `/redo` admission
+message and rejects literal backslash-n output.
+
+Verification recorded for the repair:
+
+```text
+focused /redo regression: 2 passed
+P04-001 regression set: 96 passed
+Ruff auto-fix / format / strict: green
+mypy: 113 source files / zero issues
+security scanner: clean
+Gitleaks: 52 commits / ~3.08 MB / no leaks
+default gate: 856 passed / 35 deselected
+integration gate: 35 passed / 856 deselected
+pre-commit security hooks: green
+git diff --check: green
+```
+
+This repair did not change the P04-001 architectural boundary or any frozen
+normative requirement.
 
 ## Next execution subphase
 
