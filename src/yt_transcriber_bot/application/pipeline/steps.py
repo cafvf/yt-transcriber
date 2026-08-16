@@ -35,7 +35,11 @@ from yt_transcriber_bot.application.ports.youtube_downloader import (
     SubtitleTrack,
     YouTubeDownloader,
 )
-from yt_transcriber_bot.application.runtime_selection import RuntimePlan, select_runtime
+from yt_transcriber_bot.application.runtime_selection import (
+    RuntimePlan,
+    select_runtime,
+    smaller_model_alternative,
+)
 from yt_transcriber_bot.domain.entities.job import JobStatus
 from yt_transcriber_bot.domain.entities.transcript import (
     Transcript,
@@ -53,7 +57,6 @@ from yt_transcriber_bot.domain.value_objects.compute_type import (
 from yt_transcriber_bot.domain.value_objects.device import Device
 from yt_transcriber_bot.domain.value_objects.duration import Duration
 from yt_transcriber_bot.domain.value_objects.language import Language, LanguageSource
-from yt_transcriber_bot.domain.value_objects.model_name import ModelName
 from yt_transcriber_bot.domain.value_objects.provenance import ProcessingProvenance
 from yt_transcriber_bot.domain.value_objects.slug import Slug
 from yt_transcriber_bot.infrastructure.text.normalization import (
@@ -119,11 +122,11 @@ class FetchMetadataStep(PipelineStep):
             raise PipelineRejectionError(
                 "Não foi possível estabelecer a duração da mídia antes do processamento caro."
             )
-        max_seconds = int(self._settings.max_video_duration_min) * 60
+        max_seconds = int(self._settings.media_processing.max_media_duration_min) * 60
         if not DurationWithinLimit(Duration(seconds=max_seconds)).is_satisfied_by(meta.duration):
             raise VideoTooLongError(
                 f"Duração {meta.duration.to_human()} excede o limite de "
-                f"{self._settings.max_video_duration_min} min"
+                f"{self._settings.media_processing.max_media_duration_min} min"
             )
 
         allowed = frozenset(Language(code=c) for c in self._settings.allowed_languages)
@@ -651,7 +654,7 @@ class TranscribeStep(PipelineStep):
             )
         except OutOfMemoryError as exc:
             ctx.add_diagnostic(f"OOM durante transcrição ({exc}); retentando menor.")
-            smaller = ModelName.smaller_alternative(plan.model)
+            smaller = smaller_model_alternative(plan.model)
             if smaller is None:
                 raise
             fallback_used = True
@@ -750,7 +753,6 @@ class DiarizeStep(PipelineStep):
         diar = self._engine.diarize(
             ctx.converted_audio_path,
             device=device_str,
-            hf_token=self._settings.hf_token,
             progress=self._progress.on_progress,
             cancel_event=ctx.cancel_event,
         )

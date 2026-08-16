@@ -37,7 +37,17 @@ def test_build_wires_summary_tokenizer_trust_remote_code(monkeypatch, tmp_path) 
 
     monkeypatch.setattr(composition_root, "_make_gpu_detector", lambda: object())
     monkeypatch.setattr(composition_root, "_make_transcription_engine", lambda: object())
-    monkeypatch.setattr(composition_root, "_make_diarization_engine", lambda: object())
+    captured_diarization: dict[str, str] = {}
+
+    def fake_make_diarization_engine(hf_token: str) -> object:
+        captured_diarization["hf_token"] = hf_token
+        return object()
+
+    monkeypatch.setattr(
+        composition_root,
+        "_make_diarization_engine",
+        fake_make_diarization_engine,
+    )
     monkeypatch.setattr(
         composition_root,
         "TranscriptSummaryService",
@@ -59,3 +69,4 @@ def test_build_wires_summary_tokenizer_trust_remote_code(monkeypatch, tmp_path) 
 
     assert isinstance(composition.summary_service, FakeTranscriptSummaryService)
     assert captured["tokenizer_trust_remote_code"] is True
+    assert captured_diarization["hf_token"] == "hf_test"

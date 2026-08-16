@@ -22,6 +22,35 @@ from yt_transcriber_bot.domain.value_objects.compute_type import (
 from yt_transcriber_bot.domain.value_objects.device import Device
 from yt_transcriber_bot.domain.value_objects.model_name import ModelName
 
+_STANDARD_MODEL_VRAM_GB: dict[str, float] = {
+    "tiny": 1.0,
+    "base": 1.0,
+    "small": 2.0,
+    "medium": 5.0,
+    "large-v2": 10.0,
+    "large-v3": 10.0,
+}
+_DEFAULT_CUSTOM_MODEL_VRAM_GB = 10.0
+_MODEL_SIZE_ORDER = ("tiny", "base", "small", "medium", "large-v2", "large-v3")
+
+
+def model_vram_requirement_gb(model: ModelName) -> float:
+    # Conservative runtime policy for unknown/custom model identities.
+    return _STANDARD_MODEL_VRAM_GB.get(
+        model.name,
+        _DEFAULT_CUSTOM_MODEL_VRAM_GB,
+    )
+
+
+def smaller_model_alternative(current: ModelName) -> ModelName | None:
+    # Runtime fallback policy is known only for the standard model ladder.
+    if current.name not in _MODEL_SIZE_ORDER:
+        return None
+    idx = _MODEL_SIZE_ORDER.index(current.name)
+    if idx == 0:
+        return None
+    return ModelName(name=_MODEL_SIZE_ORDER[idx - 1])
+
 
 @dataclass(frozen=True)
 class RuntimePlan:
@@ -81,11 +110,13 @@ def select_runtime(
             model=requested_model,
             reason=f"auto: GPU com CC {cc} obsoleta, usando CPU; {model_reason}",
         )
-    if not hardware.can_fit_model(requested_model.vram_requirement_gb()):
+    if not hardware.can_fit_model(model_vram_requirement_gb(requested_model)):
         # Iteramos para baixo ate achar um modelo que caiba na VRAM disponivel.
-        candidate: ModelName | None = ModelName.smaller_alternative(requested_model)
-        while candidate is not None and not hardware.can_fit_model(candidate.vram_requirement_gb()):
-            candidate = ModelName.smaller_alternative(candidate)
+        candidate: ModelName | None = smaller_model_alternative(requested_model)
+        while candidate is not None and not hardware.can_fit_model(
+            model_vram_requirement_gb(candidate)
+        ):
+            candidate = smaller_model_alternative(candidate)
         if candidate is not None:
             return RuntimePlan(
                 device=Device.cuda(),

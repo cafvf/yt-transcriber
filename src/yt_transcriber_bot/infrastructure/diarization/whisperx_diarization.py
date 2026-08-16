@@ -48,15 +48,20 @@ class WhisperXDiarizeBackend(Protocol):
 class WhisperXDiarizationEngine(DiarizationEngine):
     """Wrapper sobre ``whisperx.DiarizationPipeline``."""
 
-    def __init__(self, backend: WhisperXDiarizeBackend) -> None:
+    def __init__(
+        self,
+        backend: WhisperXDiarizeBackend,
+        *,
+        hf_token: str = "",
+    ) -> None:
         self._backend = backend
+        self._hf_token = hf_token
 
     def diarize(
         self,
         audio_path: Path,
         *,
         device: str,
-        hf_token: str,
         min_speakers: int | None = None,
         max_speakers: int | None = None,
         progress: Callable[[float, str], None] | None = None,
@@ -65,7 +70,7 @@ class WhisperXDiarizationEngine(DiarizationEngine):
         raise_if_cancelled(cancel_event)
         if not audio_path.exists():
             raise DiarizationError(f"Audio nao existe: {audio_path}")
-        if not hf_token:
+        if not self._hf_token:
             raise DiarizationUnavailableError("HF_TOKEN ausente")
         if progress:
             progress(0.10, "Preparando diarização WhisperX...")
@@ -74,7 +79,7 @@ class WhisperXDiarizationEngine(DiarizationEngine):
                 self._backend.diarize(
                     audio_path,
                     device=device,
-                    hf_token=hf_token,
+                    hf_token=self._hf_token,
                     min_speakers=min_speakers,
                     max_speakers=max_speakers,
                     progress=progress,

@@ -7,11 +7,14 @@ Parâmetros não-sensíveis podem vir de ``.env`` ou variáveis de ambiente.
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from pydantic import Field, field_validator
+from pydantic import Field, PrivateAttr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from yt_transcriber_bot.configuration.credentials import ProviderCredentials
 
 SETTINGS_ENV_FILE_ENV_VAR = "YT_TRANSCRIBER_ENV_FILE"
 PROJECT_NAME = "yt-transcriber-bot"
@@ -93,8 +96,22 @@ def resolve_settings_env_file() -> Path:
     return Path.cwd() / ".env"
 
 
+@dataclass(frozen=True, slots=True)
+class MediaProcessingSettings:
+    """Source-neutral settings used by generic media processing."""
+
+    max_media_duration_min: int
+    audio_bitrate_kbps: int
+    audio_sample_rate_hz: int
+    allowed_languages: tuple[str, ...]
+
+
 class AppSettings(BaseSettings):
-    """Configuração efetiva carregada na inicialização do bot."""
+    """Operator-facing compatibility loader for effective configuration.
+
+    Provider credentials have their own owner (``ProviderCredentials``).
+    Legacy flat constructor arguments and environment names remain accepted.
+    """
 
     model_config = SettingsConfigDict(
         env_file=None,
@@ -103,26 +120,29 @@ class AppSettings(BaseSettings):
         extra="ignore",
     )
 
+    _credentials: ProviderCredentials = PrivateAttr()
+
     def __init__(self, **values: Any) -> None:
         if "_env_file" not in values:
             values["_env_file"] = resolve_settings_env_file()
-        super().__init__(**values)
 
-    # ===== Segredos / autorização =====
-    telegram_bot_token: str = Field(default="", description="Token do Telegram BotFather")
+        env_file = values["_env_file"]
+        credential_values: dict[str, Any] = {}
+        for field_name in ProviderCredentials.model_fields:
+            if field_name in values:
+                credential_values[field_name] = values.pop(field_name)
+
+        super().__init__(**values)
+        # Pydantic Settings accepts _env_file dynamically at runtime; mypy does not expose it in the generated constructor signature.
+        credentials_factory: Any = ProviderCredentials
+        self._credentials = credentials_factory(
+            _env_file=env_file,
+            **credential_values,
+        )
+
+    # ===== Autorização =====
     telegram_allowed_user_id: int = Field(
         default=0, description="user_id numérico do único usuário autorizado"
-    )
-    hf_token: str = Field(default="", description="Token Hugging Face para pyannote")
-
-    # ===== Cookies do YouTube (members-only) =====
-    youtube_cookies_file: str = Field(
-        default="",
-        description="Caminho para arquivo de cookies (Netscape format)",
-    )
-    youtube_cookies_browser: str = Field(
-        default="",
-        description="Browser para extrair cookies (firefox|chrome|brave|...)",
     )
 
     # ===== Whisper / diarização =====
@@ -238,10 +258,6 @@ class AppSettings(BaseSettings):
     summary_model: str = Field(
         default="qwen3.5-9b",
         description="Modelo carregado/visível no servidor do LM Studio para sumarização",
-    )
-    summary_api_key: str = Field(
-        default="",
-        description="API key opcional para servidores OpenAI-compatible; LM Studio local normalmente não exige",
     )
     summary_temperature: float = Field(default=0.2, ge=0.0, le=2.0)
     summary_max_tokens: int = Field(
@@ -423,6 +439,43 @@ class AppSettings(BaseSettings):
             "ou um caminho local."
         )
 
+    @property
+    def credentials(self) -> ProviderCredentials:
+        """Provider authentication/configuration outside behavior policy."""
+
+        return self._credentials
+
+    @property
+    def telegram_bot_token(self) -> str:
+        return self._credentials.telegram_bot_token
+
+    @property
+    def hf_token(self) -> str:
+        return self._credentials.hf_token
+
+    @property
+    def summary_api_key(self) -> str:
+        return self._credentials.summary_api_key
+
+    @property
+    def youtube_cookies_file(self) -> str:
+        return self._credentials.youtube_cookies_file
+
+    @property
+    def youtube_cookies_browser(self) -> str:
+        return self._credentials.youtube_cookies_browser
+
+    @property
+    def media_processing(self) -> MediaProcessingSettings:
+        """Source-neutral internal view over generic media-processing policy."""
+
+        return MediaProcessingSettings(
+            max_media_duration_min=self.max_video_duration_min,
+            audio_bitrate_kbps=self.audio_bitrate_kbps,
+            audio_sample_rate_hz=self.audio_sample_rate_hz,
+            allowed_languages=self.allowed_languages,
+        )
+
     def downloads_dir(self) -> Path:
         return self.base_dir / self.downloads_dir_name
 
@@ -451,24 +504,9 @@ class AppSettings(BaseSettings):
         return compute_processing_fingerprint(self)
 
     def validate_runtime_secrets(self) -> list[str]:
-        """Devolve a lista de erros se segredos obrigatórios estiverem ausentes."""
-        problems: list[str] = []
-        if not self.telegram_bot_token:
-            problems.append(
-                "TELEGRAM_BOT_TOKEN ausente. Exporte com: "
-                "export TELEGRAM_BOT_TOKEN='123456:ABC...' (consulte o README)"
-            )
-        if self.telegram_allowed_user_id <= 0:
-            problems.append(
-                "TELEGRAM_ALLOWED_USER_ID ausente ou <= 0. "
-                "Exporte com: export TELEGRAM_ALLOWED_USER_ID=123456789"
-            )
-        if not self.hf_token:
-            problems.append(
-                "HF_TOKEN ausente. Exporte com: export HF_TOKEN='hf_xxxx' "
-                "(necessário para diarização; veja README)"
-            )
-        return problems
+        """Compatibility API delegating validation to the credential owner."""
+
+        return self._credentials.validation_problems(allowed_user_id=self.telegram_allowed_user_id)
 
 
 def _is_model_reference(value: str) -> bool:

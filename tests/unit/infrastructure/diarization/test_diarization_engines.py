@@ -125,12 +125,12 @@ class TestWhisperXDiarizationEngine:
     def test_missing_audio_raises(self, tmp_path: Path) -> None:
         eng = WhisperXDiarizationEngine(backend=FakeWxBackend())
         with pytest.raises(DiarizationError, match="nao existe"):
-            eng.diarize(tmp_path / "x.ogg", device="cpu", hf_token="hf")
+            eng.diarize(tmp_path / "x.ogg", device="cpu")
 
     def test_no_token_raises_unavailable(self, tmp_path: Path) -> None:
         eng = WhisperXDiarizationEngine(backend=FakeWxBackend())
         with pytest.raises(DiarizationUnavailableError):
-            eng.diarize(_audio(tmp_path), device="cpu", hf_token="")
+            eng.diarize(_audio(tmp_path), device="cpu")
 
     def test_happy_path(self, tmp_path: Path) -> None:
         backend = FakeWxBackend(
@@ -140,16 +140,18 @@ class TestWhisperXDiarizationEngine:
                 WxSeg(start=5.0, end=7.0, speaker="SPEAKER_00"),
             )
         )
-        eng = WhisperXDiarizationEngine(backend=backend)
-        result = eng.diarize(_audio(tmp_path), device="cuda", hf_token="hf")
+        eng = WhisperXDiarizationEngine(backend=backend, hf_token="hf")
+        result = eng.diarize(_audio(tmp_path), device="cuda")
         assert result.total_speakers == 2
         assert len(result.speaker_segments) == 3
+        assert backend.calls is not None
+        assert backend.calls[0]["hf_token"] == "hf"
 
     def test_empty_segments_triggers_fallback(self, tmp_path: Path) -> None:
         backend = FakeWxBackend(segs=())
-        eng = WhisperXDiarizationEngine(backend=backend)
+        eng = WhisperXDiarizationEngine(backend=backend, hf_token="hf")
         with pytest.raises(DiarizationUnavailableError, match="zero"):
-            eng.diarize(_audio(tmp_path), device="cpu", hf_token="hf")
+            eng.diarize(_audio(tmp_path), device="cpu")
 
     def test_invalid_segments_filtered(self, tmp_path: Path) -> None:
         backend = FakeWxBackend(
@@ -161,24 +163,23 @@ class TestWhisperXDiarizationEngine:
                 WxSeg(start=8.0, end=10.0, speaker="A"),
             )
         )
-        eng = WhisperXDiarizationEngine(backend=backend)
-        result = eng.diarize(_audio(tmp_path), device="cpu", hf_token="hf")
+        eng = WhisperXDiarizationEngine(backend=backend, hf_token="hf")
+        result = eng.diarize(_audio(tmp_path), device="cpu")
         assert len(result.speaker_segments) == 2
         assert result.total_speakers == 1
 
     def test_backend_exception_becomes_unavailable(self, tmp_path: Path) -> None:
         backend = FakeWxBackend(exc=RuntimeError("model load failed"))
-        eng = WhisperXDiarizationEngine(backend=backend)
+        eng = WhisperXDiarizationEngine(backend=backend, hf_token="hf")
         with pytest.raises(DiarizationUnavailableError, match="acionando fallback"):
-            eng.diarize(_audio(tmp_path), device="cpu", hf_token="hf")
+            eng.diarize(_audio(tmp_path), device="cpu")
 
     def test_passes_speaker_bounds(self, tmp_path: Path) -> None:
         backend = FakeWxBackend(segs=(WxSeg(start=0.0, end=2.0, speaker="A"),))
-        eng = WhisperXDiarizationEngine(backend=backend)
+        eng = WhisperXDiarizationEngine(backend=backend, hf_token="hf")
         eng.diarize(
             _audio(tmp_path),
             device="cpu",
-            hf_token="hf",
             min_speakers=2,
             max_speakers=4,
         )
@@ -197,13 +198,13 @@ class TestPyannoteDiarizationEngine:
     def test_missing_audio(self, tmp_path: Path) -> None:
         eng = PyannoteDiarizationEngine(backend=FakePyannoteBackend())
         with pytest.raises(DiarizationError):
-            eng.diarize(tmp_path / "x.ogg", device="cpu", hf_token="hf")
+            eng.diarize(tmp_path / "x.ogg", device="cpu")
 
     def test_no_token_hard_fails(self, tmp_path: Path) -> None:
         eng = PyannoteDiarizationEngine(backend=FakePyannoteBackend())
         # Pyannote exige token; sem ele é erro hard, não fallback
         with pytest.raises(DiarizationError, match="HF_TOKEN"):
-            eng.diarize(_audio(tmp_path), device="cpu", hf_token="")
+            eng.diarize(_audio(tmp_path), device="cpu")
 
     def test_happy_path(self, tmp_path: Path) -> None:
         backend = FakePyannoteBackend(
@@ -212,21 +213,21 @@ class TestPyannoteDiarizationEngine:
                 PyannoteSeg(start=3.0, end=6.0, speaker="SPEAKER_01"),
             )
         )
-        eng = PyannoteDiarizationEngine(backend=backend)
-        result = eng.diarize(_audio(tmp_path), device="cpu", hf_token="hf")
+        eng = PyannoteDiarizationEngine(backend=backend, hf_token="hf")
+        result = eng.diarize(_audio(tmp_path), device="cpu")
         assert result.total_speakers == 2
 
     def test_empty_segments_hard_error(self, tmp_path: Path) -> None:
         backend = FakePyannoteBackend(segs=())
-        eng = PyannoteDiarizationEngine(backend=backend)
+        eng = PyannoteDiarizationEngine(backend=backend, hf_token="hf")
         with pytest.raises(DiarizationError, match="zero"):
-            eng.diarize(_audio(tmp_path), device="cpu", hf_token="hf")
+            eng.diarize(_audio(tmp_path), device="cpu")
 
     def test_backend_exception_propagates(self, tmp_path: Path) -> None:
         backend = FakePyannoteBackend(exc=RuntimeError("connection error"))
-        eng = PyannoteDiarizationEngine(backend=backend)
+        eng = PyannoteDiarizationEngine(backend=backend, hf_token="hf")
         with pytest.raises(DiarizationError, match="pyannote diar falhou"):
-            eng.diarize(_audio(tmp_path), device="cpu", hf_token="hf")
+            eng.diarize(_audio(tmp_path), device="cpu")
 
 
 # ======================================================================
@@ -250,7 +251,6 @@ class _FakeEngine(DiarizationEngine):
         audio_path: Path,
         *,
         device: str,
-        hf_token: str,
         min_speakers: int | None = None,
         max_speakers: int | None = None,
         progress: Callable[[float, str], None] | None = None,
@@ -281,7 +281,7 @@ class TestCompositeDiarization:
         e1 = _FakeEngine(result=_ok_result())
         e2 = _FakeEngine(result=_ok_result())
         comp = CompositeDiarizationEngine(engines=(e1, e2))
-        comp.diarize(_audio(tmp_path), device="cpu", hf_token="hf")
+        comp.diarize(_audio(tmp_path), device="cpu")
         assert e1.called == 1
         assert e2.called == 0
 
@@ -289,7 +289,7 @@ class TestCompositeDiarization:
         e1 = _FakeEngine(exc=DiarizationUnavailableError("primary down"))
         e2 = _FakeEngine(result=_ok_result())
         comp = CompositeDiarizationEngine(engines=(e1, e2))
-        comp.diarize(_audio(tmp_path), device="cpu", hf_token="hf")
+        comp.diarize(_audio(tmp_path), device="cpu")
         assert e1.called == 1
         assert e2.called == 1
 
@@ -298,14 +298,14 @@ class TestCompositeDiarization:
         e2 = _FakeEngine(exc=DiarizationError("secondary boom"))
         comp = CompositeDiarizationEngine(engines=(e1, e2))
         with pytest.raises(DiarizationError, match="secondary boom"):
-            comp.diarize(_audio(tmp_path), device="cpu", hf_token="hf")
+            comp.diarize(_audio(tmp_path), device="cpu")
 
     def test_diarization_error_in_first_falls_back(self, tmp_path: Path) -> None:
         # Não só DiarizationUnavailableError aciona fallback, qualquer DiarizationError
         e1 = _FakeEngine(exc=DiarizationError("primary boom"))
         e2 = _FakeEngine(result=_ok_result())
         comp = CompositeDiarizationEngine(engines=(e1, e2))
-        comp.diarize(_audio(tmp_path), device="cpu", hf_token="hf")
+        comp.diarize(_audio(tmp_path), device="cpu")
         assert e2.called == 1
 
 

@@ -179,7 +179,7 @@ def _settings_private_paths(settings: AppSettings | None) -> tuple[Path, ...]:
         settings.summaries_dir(),
         settings.video_exports_dir(),
     }
-    cookie_file = settings.youtube_cookies_file.strip()
+    cookie_file = settings.credentials.youtube_cookies_file.strip()
     if cookie_file:
         paths.add(Path(cookie_file).expanduser())
     resolved: list[Path] = []
@@ -193,7 +193,7 @@ def _settings_private_paths(settings: AppSettings | None) -> tuple[Path, ...]:
 def _settings_secret_values(settings: AppSettings | None) -> Iterable[str]:
     if settings is None:
         return ()
-    values = [settings.telegram_bot_token, settings.hf_token, settings.summary_api_key]
+    values = settings.credentials.redaction_values()
     return tuple(value for value in values if isinstance(value, str) and len(value.strip()) >= 8)
 
 

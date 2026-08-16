@@ -6,9 +6,14 @@ import pytest
 
 from yt_transcriber_bot.application.config import AppSettings
 from yt_transcriber_bot.application.ports.gpu_detector import HardwareProfile
-from yt_transcriber_bot.application.runtime_selection import select_runtime
+from yt_transcriber_bot.application.runtime_selection import (
+    model_vram_requirement_gb,
+    select_runtime,
+    smaller_model_alternative,
+)
 from yt_transcriber_bot.domain.value_objects.compute_type import ComputeKind
 from yt_transcriber_bot.domain.value_objects.device import DeviceKind
+from yt_transcriber_bot.domain.value_objects.model_name import ModelName
 
 
 def _settings(**overrides: object) -> AppSettings:
@@ -56,6 +61,26 @@ def env_clean(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:  # type: ignor
     ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("YT_TRANSCRIBER_ENV_FILE", str(tmp_path / ".env"))
+
+
+class TestModelRuntimePolicy:
+    def test_vram_requirement_increases_with_standard_model_size(self) -> None:
+        tiny = model_vram_requirement_gb(ModelName("tiny"))
+        large = model_vram_requirement_gb(ModelName("large-v3"))
+        assert tiny < large
+
+    def test_unknown_custom_model_uses_conservative_vram_policy(self) -> None:
+        assert model_vram_requirement_gb(ModelName("provider/custom")) == 10.0
+
+    def test_smaller_alternative_for_medium_is_small(self) -> None:
+        result = smaller_model_alternative(ModelName("medium"))
+        assert result == ModelName("small")
+
+    def test_smaller_alternative_for_tiny_is_none(self) -> None:
+        assert smaller_model_alternative(ModelName("tiny")) is None
+
+    def test_custom_model_has_no_invented_smaller_alternative(self) -> None:
+        assert smaller_model_alternative(ModelName("provider/custom")) is None
 
 
 class TestForcedDevice:

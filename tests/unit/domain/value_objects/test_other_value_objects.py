@@ -88,21 +88,16 @@ class TestModelName:
     def test_accepts_supported_models(self, name: str) -> None:
         assert ModelName(name=name).name == name
 
-    def test_rejects_unsupported(self) -> None:
-        with pytest.raises(ValueError, match="não suportado"):
-            ModelName(name="huge")
+    def test_accepts_opaque_custom_identifier(self) -> None:
+        assert ModelName(name="provider/custom-model").name == "provider/custom-model"
 
-    def test_vram_requirement_increases_with_size(self) -> None:
-        tiny = ModelName(name="tiny").vram_requirement_gb()
-        large = ModelName(name="large-v3").vram_requirement_gb()
-        assert tiny < large
+    def test_rejects_empty_identifier(self) -> None:
+        with pytest.raises(ValueError, match="inválido"):
+            ModelName(name="")
 
-    def test_smaller_alternative_for_medium_is_small(self) -> None:
-        result = ModelName.smaller_alternative(ModelName(name="medium"))
-        assert result == ModelName(name="small")
-
-    def test_smaller_alternative_for_tiny_is_none(self) -> None:
-        assert ModelName.smaller_alternative(ModelName(name="tiny")) is None
+    def test_rejects_identifier_with_whitespace(self) -> None:
+        with pytest.raises(ValueError, match="inválido"):
+            ModelName(name="custom model")
 
 
 class TestDevice:

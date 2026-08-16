@@ -137,7 +137,7 @@ def _make_transcription_engine() -> TranscriptionEngine:
     return WhisperXTranscriptionEngine(RealWhisperXBackend())
 
 
-def _make_diarization_engine() -> DiarizationEngine:
+def _make_diarization_engine(hf_token: str) -> DiarizationEngine:
     """Engine composto: WhisperX (primário) → pyannote (fallback)."""
     from yt_transcriber_bot.infrastructure.diarization.pyannote_diarization import (
         PyannoteDiarizationEngine,
@@ -152,8 +152,14 @@ def _make_diarization_engine() -> DiarizationEngine:
         RealWhisperXDiarBackend,
     )
 
-    primary = WhisperXDiarizationEngine(RealWhisperXDiarBackend())
-    fallback = PyannoteDiarizationEngine(RealPyannoteBackend())
+    primary = WhisperXDiarizationEngine(
+        RealWhisperXDiarBackend(),
+        hf_token=hf_token,
+    )
+    fallback = PyannoteDiarizationEngine(
+        RealPyannoteBackend(),
+        hf_token=hf_token,
+    )
     return CompositeDiarizationEngine([primary, fallback])
 
 
@@ -181,15 +187,15 @@ def build(settings: AppSettings) -> Composition:
     downloader: YouTubeDownloader = YtDlpDownloader(
         ydl_factory=real_ydl_factory,
         subtitle_fetcher=real_subtitle_fetcher,
-        cookies_file=settings.youtube_cookies_file or None,
-        cookies_browser=settings.youtube_cookies_browser or None,
+        cookies_file=settings.credentials.youtube_cookies_file or None,
+        cookies_browser=settings.credentials.youtube_cookies_browser or None,
     )
     converter: AudioConverter = FfmpegAudioConverter()
 
     # Engines de ML (importação preguiçosa)
     gpu_detector = _make_gpu_detector()
     transcription_engine = _make_transcription_engine()
-    diarization_engine = _make_diarization_engine()
+    diarization_engine = _make_diarization_engine(settings.credentials.hf_token)
 
     # Renderer
     renderer = MarkdownTranscriptRenderer()
@@ -223,7 +229,7 @@ def build(settings: AppSettings) -> Composition:
             temperature=settings.summary_temperature,
             max_tokens=settings.summary_max_tokens,
             timeout_s=settings.summary_timeout_s,
-            api_key=settings.summary_api_key,
+            api_key=settings.credentials.summary_api_key,
             disable_thinking=settings.summary_disable_thinking,
             validate_model=settings.summary_validate_model,
             strict_model_match=settings.summary_strict_model_match,
@@ -252,8 +258,8 @@ def build(settings: AppSettings) -> Composition:
         transcript_exporter=export_service,
         ydl_factory=real_ydl_factory,
         output_dir=settings.video_exports_dir(),
-        cookies_file=settings.youtube_cookies_file or None,
-        cookies_browser=settings.youtube_cookies_browser or None,
+        cookies_file=settings.credentials.youtube_cookies_file or None,
+        cookies_browser=settings.credentials.youtube_cookies_browser or None,
         limits=VideoSubtitleExportLimits(
             max_duration_seconds=settings.max_video_subtitles_duration_min * 60,
             max_size_bytes=settings.max_video_subtitles_size_mb * 1024 * 1024,

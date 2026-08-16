@@ -254,7 +254,6 @@ class FakeDiarizationEngine(DiarizationEngine):
         audio_path: Path,
         *,
         device: str,
-        hf_token: str,
         min_speakers: int | None = None,
         max_speakers: int | None = None,
         progress: Callable[[float, str], None] | None = None,

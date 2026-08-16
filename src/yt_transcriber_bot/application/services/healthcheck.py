@@ -131,24 +131,22 @@ class HealthCheckService:
                 else "segredos mínimos definidos.",
             )
         )
-        token = self._settings.telegram_bot_token.strip()
-        token_shape_ok = bool(token and ":" in token and token.split(":", 1)[0].isdigit())
+        credential_status = self._settings.credentials.status()
         items.append(
             HealthCheckItem(
                 "Formato TELEGRAM_BOT_TOKEN",
-                "ok" if token_shape_ok else "warn",
+                "ok" if credential_status.telegram_token_shape_ok else "warn",
                 "aparenta ter formato do BotFather."
-                if token_shape_ok
+                if credential_status.telegram_token_shape_ok
                 else "não aparenta ter formato '<bot_id>:<secret>'.",
             )
         )
-        hf_token = self._settings.hf_token.strip()
         items.append(
             HealthCheckItem(
                 "Formato HF_TOKEN",
-                "ok" if hf_token.startswith("hf_") else "warn",
+                "ok" if credential_status.hf_token_shape_ok else "warn",
                 "prefixo hf_ detectado."
-                if hf_token.startswith("hf_")
+                if credential_status.hf_token_shape_ok
                 else "não começa com hf_; confirme se é um token Hugging Face válido.",
             )
         )
@@ -298,8 +296,8 @@ class HealthCheckService:
         )
 
     def _check_youtube_cookies(self) -> HealthCheckItem:
-        cookies_file = self._settings.youtube_cookies_file.strip()
-        cookies_browser = self._settings.youtube_cookies_browser.strip()
+        cookies_file = self._settings.credentials.youtube_cookies_file.strip()
+        cookies_browser = self._settings.credentials.youtube_cookies_browser.strip()
         if cookies_file:
             path = Path(cookies_file).expanduser()
             if path.is_file():

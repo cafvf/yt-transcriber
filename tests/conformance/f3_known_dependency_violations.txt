@@ -1,0 +1,9 @@
+# Temporary PLAN-003 migration manifest.
+# Format: <relative Python file>|<forbidden imported module>
+# TASK-P03-012 must remove this manifest after the set reaches zero.
+application/pipeline/steps.py|yt_transcriber_bot.infrastructure.persistence.filesystem.transcript_snapshot
+application/pipeline/steps.py|yt_transcriber_bot.infrastructure.rendering.markdown_renderer
+application/pipeline/steps.py|yt_transcriber_bot.infrastructure.text.normalization
+application/services/rename_speakers.py|yt_transcriber_bot.infrastructure.persistence.filesystem.transcript_snapshot
+application/services/rename_speakers.py|yt_transcriber_bot.infrastructure.rendering.markdown_renderer
+application/use_cases/transcribe_video.py|yt_transcriber_bot.infrastructure.persistence.filesystem.transcript_snapshot

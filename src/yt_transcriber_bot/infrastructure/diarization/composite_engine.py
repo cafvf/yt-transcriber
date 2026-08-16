@@ -37,7 +37,6 @@ class CompositeDiarizationEngine(DiarizationEngine):
         audio_path: Path,
         *,
         device: str,
-        hf_token: str,
         min_speakers: int | None = None,
         max_speakers: int | None = None,
         progress: Callable[[float, str], None] | None = None,
@@ -52,7 +51,6 @@ class CompositeDiarizationEngine(DiarizationEngine):
                 return engine.diarize(
                     audio_path,
                     device=device,
-                    hf_token=hf_token,
                     min_speakers=min_speakers,
                     max_speakers=max_speakers,
                     progress=progress,
