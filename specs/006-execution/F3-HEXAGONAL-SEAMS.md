@@ -1,6 +1,6 @@
 # F3 — Hexagonal boundaries and provider seams
 
-Status: **In progress — TASK-P03-001..013 locally verified; TASK-P03-014 next**
+Status: **Verified / Closed — TASK-P03-001..014 complete; PLAN-003 exit gate passed**
 Plan: `PLAN-003`
 Base revision: `f2e265acbcc8b2a4cef601e160ae13193f49d979`
 Started: 2026-08-15
@@ -653,12 +653,71 @@ Integrated locally on `main` as:
 execution closure.
 
 
+### TASK-P03-014 — PLAN-003 exit-gate verification
+
+Status: **Verified / Closed — PLAN-003 exit gate passed**
+
+The frozen PLAN-003 exit gate was executed on the synchronized closure revision
+`bce57ad3e15607f2c7e0a9347c960a68a1c58830`, with local `HEAD` and
+`origin/main` identical and a clean worktree. P03-014 introduced no product
+behavior and patched no failed criterion.
+
+#### Exit-gate evidence
+
+```text
+baseline HEAD == origin/main: bce57ad3e15607f2c7e0a9347c960a68a1c58830
+legacy dependency manifest: absent
+generic storage runtime scan: empty
+application -> infrastructure import scan: empty
+domain -> application/infrastructure import scan: empty
+obsolete split_for_telegram scan: empty
+
+PLAN-003 exit contract gate: 56 passed
+capability/composition evidence: 147 passed
+
+Ruff strict + format check: 213 files / green
+mypy: 111 source files / zero issues
+security scanner: clean
+Gitleaks: 49 commits / ~3.04 MB scanned / no leaks
+default gate: 840 passed / 35 deselected / 875 collected
+integration gate: 35 passed / 840 deselected / 875 collected
+compileall: green
+pre-commit security hooks: green
+documentation consistency: 8 passed
+final architecture gate: 56 passed
+git diff --check: green
+final worktree: clean
+```
+
+The gate therefore verifies the frozen PLAN-003 conditions:
+
+- dependency direction is mechanically enforced with no legacy exception list;
+- application ports carry no provider credentials and remain
+  application-owned/test-double implementable;
+- trusted external endpoint/provider selection remains configuration/composition
+  owned;
+- current ASR and diarization adapters satisfy their shared application
+  contracts;
+- canonical transcript consumers operate through explicit capabilities;
+- composition/capability tests run without requiring real network calls;
+- no generic replacement abstraction exists without a demonstrated approved
+  capability.
+
+No P03-014 criterion failed, so no owning task required reopening. No
+environment limitation blocks PLAN-003 closure; production-host and broader
+operational-readiness evidence remains governed by its later frozen plan/task
+owners.
+
+No frozen normative plan/task text is changed by this execution closure.
+
+
 ## Next task
 
-Proceed to `TASK-P03-014 — PLAN-003 exit-gate verification`.
+Proceed to `TASK-P04-001 — Establish application workflow boundary and extract
+submission/dedup/reprocess admission`.
 
 ## Gate state
 
-F3 remains **open**. TASK-P03-014 must verify the frozen PLAN-003 exit gate on
-the integrated closure revision. It is a verification task and must route any
-failed criterion back to its owning task rather than patching behavior itself.
+F3 / PLAN-003 is **Verified / Closed**. F4 begins with TASK-P04-001 and must
+preserve the closed PLAN-003 architecture invariants while extracting portable
+application workflows from Telegram infrastructure.

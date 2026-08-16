@@ -1,6 +1,6 @@
 # F3 — Application capability inventory
 
-Status: **Updated through TASK-P03-013 — REQ-ARC-012 closed; PLAN-003 exit gate remains**
+Status: **Final for PLAN-003 — REQ-ARC-012 closed; TASK-P03-014 exit gate passed**
 Date: **2026-08-16**
 Plan: **PLAN-003 — Hexagonal boundaries and provider seams**
 Primary support: **REQ-ARC-012**
@@ -79,8 +79,8 @@ Completed capability work reflected by this inventory:
 - complete purpose-specific port conformance and dead transport-surface cleanup — P03-013.
 
 TASK-P03-012 closed `REQ-ARC-001` and removed the legacy dependency-exception
-manifest. TASK-P03-013 closed `REQ-ARC-012`; TASK-P03-014 is now the
-PLAN-003 exit-gate verification task.
+manifest. TASK-P03-013 closed `REQ-ARC-012`; TASK-P03-014 verified the
+integrated PLAN-003 exit gate with no failed criterion or task reopening.
 
 This document does not authorize future product capabilities such as translation,
 semantic search, alternate ASR product behavior, Obsidian integration,
@@ -113,5 +113,6 @@ The provider-credential rule remains independently enforced by
 
 This I/O governance is not permission to retain generic filesystem capability
 surfaces. `REQ-ARC-012` is closed by TASK-P03-013 on the complete
-purpose-specific application-owned port boundary. PLAN-003 itself remains open
-until TASK-P03-014 verifies the frozen exit gate.
+purpose-specific application-owned port boundary. TASK-P03-014 verified the
+frozen PLAN-003 exit gate on the integrated closure revision; this inventory is
+therefore final for PLAN-003 and becomes the preserved boundary baseline for F4.
