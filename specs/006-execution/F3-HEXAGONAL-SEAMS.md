@@ -1,6 +1,6 @@
 # F3 — Hexagonal boundaries and provider seams
 
-Status: **In progress — TASK-P03-001..007 and TASK-P03-010 locally verified; TASK-P03-008 next**
+Status: **In progress — TASK-P03-001..008 and TASK-P03-010 locally verified; TASK-P03-009 next**
 Plan: `PLAN-003`
 Base revision: `f2e265acbcc8b2a4cef601e160ae13193f49d979`
 Started: 2026-08-15
@@ -358,9 +358,65 @@ combined main worktree: clean
 
 No frozen normative plan/task text is changed by this execution closure.
 
+
+### TASK-P03-008 — Diarization capability, fallback and credential isolation
+
+Status: **Locally verified — REQ-ARC-005 closed**
+
+The application-facing diarization seam now uses a provider-neutral
+`DiarizationRequest` carrying the audio input, an application processing target,
+speaker-count constraints, progress and cancellation. Provider credentials and
+provider API keywords remain confined to concrete infrastructure adapters and
+composition.
+
+Fallback semantics are explicit:
+
+- `DiarizationUnavailableError` means the current provider cannot serve the
+  request and permits the composite to try the next configured provider;
+- hard `DiarizationError` does not silently trigger another provider;
+- cancellation propagates as cancellation and is never translated into
+  provider failure/fallback;
+- zero usable speaker segments, including the case where all raw provider
+  segments are rejected by normalization, is treated as explicit provider
+  unavailability.
+
+Successful diarization reports observed execution facts through
+`DiarizationProvenance`. The pipeline persists the actual winning backend,
+explicit model identity and whether fallback was used instead of recording the
+composite orchestrator as if it were the concrete backend. The render context
+uses the observed diarization model when known, while its existing compatibility
+fallback remains in place until TASK-P03-009 owns the renderer/store contract
+migration.
+
+Composition explicitly configures the same approved
+`pyannote/speaker-diarization-community-1` model identity for the current
+WhisperX and direct pyannote adapters. Provider authentication remains
+constructor-owned at the infrastructure edge.
+
+#### P03-008 closure evidence
+
+```text
+Ruff auto-fix + format + strict lint: green
+mypy: 110 source files / zero issues
+security scanner: clean
+Gitleaks: no leaks
+default gate: 823 passed / 47 deselected / 870 collected
+diarization contract conformance: 6 passed
+diarization adapter/fallback suite: 27 passed
+real diarization backend compatibility: 3 passed
+snapshot/provenance regression: green
+composition/provider-secret/runtime/hexagonal conformance: green
+compileall: green
+pre-commit security hooks: green
+git diff --check: green
+```
+
+No frozen normative plan/task text is changed by this execution closure.
+
+
 ## Next task
 
-Proceed to `TASK-P03-008 — Diarization capability, fallback and credential isolation`.
+Proceed to `TASK-P03-009 — Canonical transcript store and renderer contracts`.
 
 ## Gate state
 
