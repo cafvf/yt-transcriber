@@ -26,3 +26,18 @@ environment-gated evidence is explicitly recorded rather than assumed.
 F4 and F5 deliberately split PLAN-004: F4 performs workflow-by-workflow
 migration; F5 verifies reliability, maintainability, reversibility and the
 PLAN-004 exit gate after the migration is complete.
+
+## PLAN-004 review/push subphases
+
+Within the existing F4/F5 grouping, PLAN-004 uses four smaller non-normative
+execution boundaries for review and push cadence. They do not alter frozen task
+dependencies, owners or gates:
+
+| Subphase | Approved task range | Purpose |
+|---|---|---|
+| A | `TASK-P04-001` | application workflow/admission seam |
+| B | `TASK-P04-002..003` | execution/queue/recovery plus history |
+| C | `TASK-P04-004..013` | derived data, search, summary and operations |
+| D | `TASK-P04-014..017` | thin Telegram, reliability, convergence and exit gate |
+
+Subphase A is locally closed at functional commit `a68ba1c`; Subphase B is next.
