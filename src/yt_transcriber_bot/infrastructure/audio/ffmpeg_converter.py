@@ -7,7 +7,6 @@ um ``CommandRunner`` injetável, permitindo testes determinísticos.
 
 from __future__ import annotations
 
-import json
 import subprocess
 import threading
 import time
@@ -97,11 +96,9 @@ class FfmpegAudioConverter(AudioConverter):
         runner: CommandRunner | None = None,
         *,
         ffmpeg_bin: str = "ffmpeg",
-        ffprobe_bin: str = "ffprobe",
     ) -> None:
         self._runner: CommandRunner = runner or SubprocessCommandRunner()
         self._ffmpeg = ffmpeg_bin
-        self._ffprobe = ffprobe_bin
 
     # ------------------------------------------------------------------
     # Conversão principal
@@ -170,91 +167,3 @@ class FfmpegAudioConverter(AudioConverter):
             container="ogg",
             size_bytes=dest.stat().st_size,
         )
-
-    # ------------------------------------------------------------------
-    # Particionamento para Telegram
-    # ------------------------------------------------------------------
-
-    def split_for_telegram(
-        self,
-        source: Path,
-        dest_dir: Path,
-        *,
-        max_size_bytes: int = 49 * 1024 * 1024,
-        cancel_event: threading.Event | None = None,
-    ) -> tuple[Path, ...]:
-        raise_if_cancelled(cancel_event)
-        if not source.exists():
-            raise AudioConversionError(f"Arquivo não existe: {source}")
-        size = source.stat().st_size
-        if size <= max_size_bytes:
-            return (source,)
-
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        duration = self._probe_duration_seconds(source)
-        if duration <= 0:
-            raise AudioConversionError("ffprobe não conseguiu obter duração do áudio")
-
-        ratio = size / max_size_bytes
-        parts = max(2, int(ratio) + 1)
-        chunk_seconds = duration / parts
-
-        out_pattern = dest_dir / f"{source.stem}_part%03d{source.suffix}"
-        args = [
-            self._ffmpeg,
-            "-y",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-i",
-            str(source),
-            "-c",
-            "copy",
-            "-f",
-            "segment",
-            "-segment_time",
-            f"{chunk_seconds:.3f}",
-            "-reset_timestamps",
-            "1",
-            str(out_pattern),
-        ]
-        try:
-            result = self._runner.run(args, cancel_event=cancel_event)
-        except OperationCanceledError:
-            for candidate in dest_dir.glob(f"{source.stem}_part*{source.suffix}"):
-                candidate.unlink(missing_ok=True)
-            raise
-        if result.returncode != 0:
-            raise AudioConversionError(f"ffmpeg segment falhou: {result.stderr.strip()[:500]}")
-        produced = sorted(dest_dir.glob(f"{source.stem}_part*{source.suffix}"))
-        if not produced:
-            raise AudioConversionError("Nenhuma parte foi produzida")
-        return tuple(produced)
-
-    # ------------------------------------------------------------------
-    # ffprobe
-    # ------------------------------------------------------------------
-
-    def _probe_duration_seconds(self, path: Path) -> float:
-        args = [
-            self._ffprobe,
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "json",
-            str(path),
-        ]
-        result = self._runner.run(args)
-        if result.returncode != 0:
-            return 0.0
-        try:
-            payload = json.loads(result.stdout or "{}")
-        except json.JSONDecodeError:
-            return 0.0
-        fmt = payload.get("format") or {}
-        try:
-            return float(fmt.get("duration") or 0.0)
-        except (TypeError, ValueError):
-            return 0.0

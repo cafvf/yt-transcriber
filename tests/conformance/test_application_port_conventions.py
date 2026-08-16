@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import ast
+import importlib
+import inspect
 import sys
 from pathlib import Path
 
@@ -34,6 +36,15 @@ _GENERIC_STORAGE_STEMS = {
     "filesystem",
     "generic_storage",
     "storage",
+}
+
+_TRANSPORT_SPECIFIC_OPERATION_TOKENS = {
+    "ffmpeg",
+    "pyannote",
+    "sqlalchemy",
+    "telegram",
+    "whisperx",
+    "yt_dlp",
 }
 
 
@@ -131,3 +142,65 @@ def test_obsolete_generic_file_storage_surface_is_absent() -> None:
                 violations.append(f"{path.relative_to(REPO_ROOT)} contains {symbol}")
 
     assert not violations, f"obsolete generic FileStorage runtime surface remains: {violations!r}"
+
+
+def test_generic_application_port_operation_names_are_transport_neutral() -> None:
+    # REQ-ARC-012 AC-02: generic operations must not name a transport/provider.
+    violations: list[str] = []
+
+    for path in sorted(PORTS_ROOT.glob("*.py")):
+        if path.name == "__init__.py":
+            continue
+
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if node.name.startswith("_"):
+                continue
+
+            lowered = node.name.lower()
+            for token in sorted(_TRANSPORT_SPECIFIC_OPERATION_TOKENS):
+                if token in lowered:
+                    violations.append(f"{path.name}:line {node.lineno}:{node.name}:{token}")
+
+    assert not violations, (
+        f"transport/provider-specific operation names leaked into application ports: {violations!r}"
+    )
+
+
+def test_application_port_abcs_are_plain_test_double_implementable() -> None:
+    # REQ-ARC-012 AC-01: each application-owned ABC can be faked without infrastructure.
+    failures: list[str] = []
+
+    def fake_method(*args: object, **kwargs: object) -> None:
+        return None
+
+    for filename in sorted(_manifest_modules()):
+        module_name = f"yt_transcriber_bot.application.ports.{Path(filename).stem}"
+        module = importlib.import_module(module_name)
+
+        abstract_classes = [
+            candidate
+            for candidate in vars(module).values()
+            if inspect.isclass(candidate)
+            and candidate.__module__ == module.__name__
+            and inspect.isabstract(candidate)
+        ]
+
+        for abstract_class in abstract_classes:
+            implementations = dict.fromkeys(abstract_class.__abstractmethods__, fake_method)
+            fake_type = type(
+                f"_P03Fake{abstract_class.__name__}",
+                (abstract_class,),
+                implementations,
+            )
+            try:
+                fake_type()
+            except TypeError as exc:
+                failures.append(f"{module_name}.{abstract_class.__name__}: {exc}")
+
+    assert not failures, (
+        "application port cannot be implemented by a plain infrastructure-free "
+        f"test double: {failures!r}"
+    )

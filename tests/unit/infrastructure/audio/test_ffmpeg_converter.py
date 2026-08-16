@@ -193,79 +193,6 @@ class TestConvertWithMockRunner:
 
 
 # ======================================================================
-# Particionamento
-# ======================================================================
-
-
-class TestSplit:
-    def test_no_split_when_under_threshold(self, tmp_path: Path) -> None:
-        src = tmp_path / "in.ogg"
-        _create_dummy_file(src, size=1000)
-        runner = FakeRunner()
-        result = FfmpegAudioConverter(runner=runner).split_for_telegram(
-            src, tmp_path / "out", max_size_bytes=2000
-        )
-        assert result == (src,)
-        assert runner.calls == []  # nenhum ffmpeg chamado
-
-    def test_split_called_when_over_threshold(self, tmp_path: Path) -> None:
-        src = tmp_path / "in.ogg"
-        _create_dummy_file(src, size=10_000_000)
-        out_dir = tmp_path / "split"
-
-        responses = [
-            # Resposta para ffprobe
-            CompletedRun(
-                returncode=0,
-                stdout='{"format": {"duration": "300.0"}}',
-                stderr="",
-            ),
-        ]
-
-        def on_segment(args: tuple[str, ...]) -> None:
-            # Quando o segment é chamado, criar dois arquivos de saída.
-            if "-f" in args and "segment" in args:
-                (out_dir / "in_part000.ogg").write_bytes(b"a")
-                (out_dir / "in_part001.ogg").write_bytes(b"b")
-
-        runner = FakeRunner(responses=responses, on_args=on_segment)
-        result = FfmpegAudioConverter(runner=runner).split_for_telegram(
-            src, out_dir, max_size_bytes=5_000_000
-        )
-        assert len(result) == 2
-        assert all(p.exists() for p in result)
-
-    def test_split_failure_raises(self, tmp_path: Path) -> None:
-        src = tmp_path / "in.ogg"
-        _create_dummy_file(src, size=10_000_000)
-        responses = [
-            CompletedRun(
-                returncode=0,
-                stdout='{"format": {"duration": "300.0"}}',
-                stderr="",
-            ),
-            CompletedRun(returncode=1, stdout="", stderr="segment failed"),
-        ]
-        runner = FakeRunner(responses=responses)
-        with pytest.raises(AudioConversionError, match="segment"):
-            FfmpegAudioConverter(runner=runner).split_for_telegram(
-                src, tmp_path / "out", max_size_bytes=5_000_000
-            )
-
-    def test_split_with_unknown_duration_raises(self, tmp_path: Path) -> None:
-        src = tmp_path / "in.ogg"
-        _create_dummy_file(src, size=10_000_000)
-        responses = [
-            CompletedRun(returncode=0, stdout='{"format": {}}', stderr=""),
-        ]
-        runner = FakeRunner(responses=responses)
-        with pytest.raises(AudioConversionError, match="duração"):
-            FfmpegAudioConverter(runner=runner).split_for_telegram(
-                src, tmp_path / "out", max_size_bytes=5_000_000
-            )
-
-
-# ======================================================================
 # Integração real com ffmpeg (executa o binário)
 # ======================================================================
 
@@ -335,11 +262,3 @@ class TestFfmpegRealIntegration:
         result = conv.convert_to_opus_mono(src, dest, bitrate_kbps=24)
         # WAV de 3s @ 44.1kHz mono deve ser bem maior que o ogg comprimido.
         assert result.size_bytes < src.stat().st_size
-
-    def test_real_probe_duration(self, tmp_path: Path) -> None:
-        src = tmp_path / "tone.wav"
-        self._make_wav(src, seconds=2)
-        conv = FfmpegAudioConverter()
-        # split_for_telegram com threshold gigante → não particiona
-        result = conv.split_for_telegram(src, tmp_path / "out", max_size_bytes=10**9)
-        assert result == (src,)

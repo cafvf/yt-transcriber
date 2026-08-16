@@ -37,13 +37,3 @@ class AudioConverter(ABC):
         sample_rate_hz: int = 16000,
         cancel_event: threading.Event | None = None,
     ) -> ConvertedAudio: ...
-
-    @abstractmethod
-    def split_for_telegram(
-        self,
-        source: Path,
-        dest_dir: Path,
-        *,
-        max_size_bytes: int = 49 * 1024 * 1024,
-        cancel_event: threading.Event | None = None,
-    ) -> tuple[Path, ...]: ...

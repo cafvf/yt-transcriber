@@ -158,16 +158,6 @@ class FakeAudioConverter(AudioConverter):
             size_bytes=dest.stat().st_size,
         )
 
-    def split_for_telegram(
-        self,
-        source: Path,
-        dest_dir: Path,
-        *,
-        max_size_bytes: int = 49 * 1024 * 1024,
-        cancel_event: threading.Event | None = None,
-    ) -> tuple[Path, ...]:
-        return (source,)
-
 
 # ----------------------------------------------------------------------
 # Fake GpuDetector
