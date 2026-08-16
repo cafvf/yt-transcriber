@@ -1,6 +1,6 @@
 # F3 — Hexagonal boundaries and provider seams
 
-Status: **In progress — TASK-P03-001..010 locally verified; TASK-P03-011 next**
+Status: **In progress — TASK-P03-001..011 locally verified; TASK-P03-012 next**
 Plan: `PLAN-003`
 Base revision: `f2e265acbcc8b2a4cef601e160ae13193f49d979`
 Started: 2026-08-15
@@ -473,9 +473,69 @@ Integrated locally on `main` as:
 No frozen normative plan/task text is changed by this execution closure.
 
 
+### TASK-P03-011 — Remove obsolete generic FileStorage surface
+
+Status: **Locally verified — support/convergence for REQ-ARC-012**
+
+Repository/reference characterization found no approved runtime consumer of the
+generic `FileStorage` capability. The remaining executable surface consisted
+only of the application port itself, its `LocalFileStorage` adapter, composition
+construction/exposure, the temporary port-inventory exception and 11 integration
+tests dedicated to that obsolete abstraction.
+
+P03-009 had already established the purpose-specific canonical transcript store
+and renderer contracts. Existing job/history persistence capabilities remain
+purpose-specific. No demonstrated storage need therefore required preservation
+of a generic filesystem port.
+
+Implementation boundary:
+
+- deleted `application/ports/file_storage.py`;
+- deleted the concrete `LocalFileStorage` filesystem adapter;
+- removed `LocalFileStorage` construction and `Composition.file_storage`
+  exposure from the composition root;
+- deleted the 11 integration tests that protected only the retired generic
+  abstraction;
+- removed `file_storage.py` from the executable application-port inventory;
+- replaced the temporary exception conformance rule with a post-P03-011 guard
+  that forbids generic storage modules and the retired `FileStorage` /
+  `LocalFileStorage` runtime symbols;
+- introduced no renamed generic storage abstraction.
+
+This task satisfies the generic-storage cleanup precondition for
+`REQ-ARC-012`; it does **not** close that requirement. Final capability-port
+closure remains owned by TASK-P03-013 after TASK-P03-012 closes the dependency
+direction invariant.
+
+#### P03-011 closure evidence
+
+```text
+focused architecture/canonical/composition gate: 36 passed
+default gate: 840 passed / 36 deselected / 876 collected
+integration gate: 36 passed / 840 deselected / 876 collected
+mypy: 111 source files / zero issues
+Ruff auto-fix + format + strict lint: 213 files / green
+security scanner: clean
+Gitleaks: 43 commits / ~3.02 MB scanned / no leaks
+compileall: green
+pre-commit security hooks: green
+runtime FileStorage/LocalFileStorage scan: empty
+known application -> infrastructure violation set: zero
+git diff --check: green
+```
+
+Integrated locally on `main` as:
+
+```text
+c666305 refactor: remove obsolete generic file storage surface
+```
+
+No frozen normative plan/task text is changed by this execution closure.
+
+
 ## Next task
 
-Proceed to `TASK-P03-011 — Remove obsolete generic FileStorage`.
+Proceed to `TASK-P03-012 — Mechanically enforced dependency direction`.
 
 ## Gate state
 

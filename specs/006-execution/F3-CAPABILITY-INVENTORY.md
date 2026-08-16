@@ -1,15 +1,15 @@
 # F3 — Application capability inventory
 
-Status: **TASK-P03-003 implemented / local gate pending**
-Date: **2026-08-15**
+Status: **Updated through TASK-P03-011 — generic FileStorage retired; REQ-ARC-012 remains open**
+Date: **2026-08-16**
 Plan: **PLAN-003 — Hexagonal boundaries and provider seams**
 Primary support: **REQ-ARC-012**
 
 ## Purpose
 
-This inventory records the application-facing capability/data-contract surfaces
-that exist at the start of PLAN-003. It is a migration guardrail, not permission
-to create speculative abstractions.
+This inventory records the current application-facing capability/data-contract
+surfaces after the PLAN-003 capability migrations through TASK-P03-011. It is a
+migration guardrail, not permission to create speculative abstractions.
 
 A new file under `application/ports/` must correspond to a demonstrated approved
 capability and must be added deliberately to the executable inventory. Provider
@@ -21,13 +21,14 @@ valid reasons to create a port.
 | Module | Current role | Classification | PLAN-003 disposition |
 |---|---|---|---|
 | `audio_converter.py` | Convert/split audio needed by approved workflows | Purpose-specific capability | Keep; no provider-specific API surface |
-| `diarization_engine.py` | Speaker diarization | Purpose-specific capability | P03-008 makes the contract fully provider-neutral |
-| `file_storage.py` | Generic filesystem CRUD/listing | **Known temporary generic exception** | Remove in P03-011 after replacement/no-consumer evidence |
-| `gpu_detector.py` | Detect hardware capability for runtime selection | Purpose-specific capability | P03-004 separates hardware/runtime policy cleanly |
+| `canonical_transcript.py` | Save/load structured canonical transcript evidence by explicit reference | Purpose-specific repository/data contract | Established by P03-009; keep |
+| `diarization_engine.py` | Speaker diarization | Purpose-specific capability | Provider-neutral contract established by P03-008 |
+| `gpu_detector.py` | Detect hardware capability for runtime selection | Purpose-specific capability | Runtime/hardware policy separated by P03-004 |
 | `history_search.py` | Search/refresh persisted textual history | Purpose-specific repository capability | Keep while approved history behavior exists |
 | `incoming_media.py` | Source-neutral inbound media description | Application data contract | Keep; workflow ownership changes belong to F4 |
 | `job_repository.py` | Persist/query jobs and request context | Purpose-specific repository capability | Keep |
-| `transcription_engine.py` | Speech-to-text / ASR | Purpose-specific capability | P03-007 replaces backend-shaped parameters |
+| `transcript_renderer.py` | Render structured transcript evidence to Markdown | Purpose-specific rendering capability | Established by P03-009; rendering owns no storage |
+| `transcription_engine.py` | Speech-to-text / ASR | Purpose-specific capability | Backend-neutral contract established by P03-007 |
 | `youtube_downloader.py` | YouTube-specific acquisition/subtitle capability | Approved source-specific capability | Keep provider implementation behind the port |
 
 `__init__.py` is package scaffolding and is not a capability.
@@ -45,26 +46,38 @@ Application-owned ports SHALL:
    provider API or generic filesystem surface;
 6. be implementable by a test double without importing infrastructure.
 
-## Generic filesystem exception
+## Generic filesystem cleanup
 
-`file_storage.py` is the only permitted generic storage abstraction during the
-PLAN-003 migration. It is not endorsed as a target architecture.
+TASK-P03-011 retired the temporary generic filesystem exception after repository
+and runtime reference evidence showed no approved consumer requiring it.
 
-Its removal is owned by **TASK-P03-011** after P03-009 establishes the canonical
-transcript capabilities and reference evidence proves there is no approved
-runtime consumer requiring generic `FileStorage`.
+The following obsolete surface was removed together:
+
+- `application/ports/file_storage.py`;
+- the concrete `LocalFileStorage` filesystem adapter;
+- composition construction/exposure of `file_storage`;
+- the 11 integration tests dedicated only to that abstraction;
+- the temporary `file_storage.py` entry in the executable port inventory.
 
 No renamed replacement such as `Storage`, `Filesystem`, `FileSystem`,
-`BlobStore`, `GenericStorage` or equivalent may be introduced to evade that
-cleanup.
+`BlobStore`, `GenericStorage` or equivalent was introduced.
 
-## Planned capability additions
+Purpose-specific storage/persistence capabilities remain explicit, including
+canonical transcript persistence and job/history repositories. P03-011 is
+support/convergence evidence for `REQ-ARC-012`; it does not close that
+requirement.
 
-PLAN-003 may add only capabilities already frozen by the plan, principally:
+## PLAN-003 capability evolution
 
-- backend-neutral ASR contract refinements — P03-007;
-- provider-neutral diarization contract refinements — P03-008;
-- canonical transcript store and renderer contracts — P03-009.
+Completed capability work reflected by this inventory:
+
+- backend-neutral ASR contract — P03-007;
+- provider-neutral diarization contract, fallback and provenance — P03-008;
+- canonical transcript store and renderer contracts — P03-009;
+- obsolete generic `FileStorage` retirement — P03-011.
+
+TASK-P03-012 next closes the mechanically enforced dependency-direction
+prerequisite. TASK-P03-013 remains the closure owner for `REQ-ARC-012`.
 
 This document does not authorize future product capabilities such as translation,
 semantic search, alternate ASR product behavior, Obsidian integration,
@@ -76,8 +89,9 @@ statistics or checkpoint resume.
 
 - the port module inventory does not drift silently;
 - application ports do not import concrete/provider packages;
-- `FileStorage` is the single known generic filesystem exception;
-- no additional generic storage abstraction appears.
+- generic storage port modules are forbidden after TASK-P03-011;
+- the retired `FileStorage` / `LocalFileStorage` runtime surface does not
+  reappear.
 
 The provider-credential rule remains independently enforced by
 `tests/conformance/test_provider_secret_boundary.py`.
