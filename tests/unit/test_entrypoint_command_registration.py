@@ -1,4 +1,4 @@
-"""Regressões de registro dos comandos no entrypoint real."""
+# Regressions for command registration and PTB lifecycle.
 
 from __future__ import annotations
 
@@ -48,6 +48,19 @@ def test_adapter_stops_before_ptb_shutdown() -> None:
     assert source.index("await adapter.stop()") < source.index("await application.stop()")
 
 
+def _runtime(
+    *,
+    application: object,
+    adapter: object,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        application=application,
+        adapter=adapter,
+        audience=SimpleNamespace(allows=lambda **_kwargs: True),
+        denied_audience_filter=entrypoint.filters.ALL,
+    )
+
+
 @pytest.mark.asyncio
 async def test_adapter_stops_before_ptb_context_exits_when_startup_fails(
     monkeypatch: pytest.MonkeyPatch,
@@ -80,58 +93,30 @@ async def test_adapter_stops_before_ptb_context_exits_when_startup_fails(
             events.append("application-start")
             raise RuntimeError("startup failed")
 
-    application = FakeApplication()
-
-    class FakeBuilder:
-        def token(self, _token: str) -> FakeBuilder:
-            return self
-
-        def build(self) -> FakeApplication:
-            return application
-
-    class FakeApplicationFactory:
-        @staticmethod
-        def builder() -> FakeBuilder:
-            return FakeBuilder()
-
     class FakeAdapter:
-        def __init__(self, **_kwargs: object) -> None:
-            pass
-
         async def start(self) -> None:
             events.append("adapter-start")
 
         async def stop(self) -> None:
             events.append("adapter-stop")
 
-    composition = SimpleNamespace(
-        use_case=object(),
-        repository=object(),
-        rename_service=object(),
-        export_service=object(),
-        plain_text_export_service=object(),
-        summary_service=object(),
-        video_subtitle_export_service=object(),
-        healthcheck_service=object(),
-        history_search_service=object(),
-        lasterror_service=object(),
-        retention_policy=object(),
-        audit_logger=object(),
-    )
+    application = FakeApplication()
+    adapter = FakeAdapter()
     settings = SimpleNamespace(
         logs_dir=lambda: Path("/tmp/logs"),
         telegram_allowed_user_id=1,
-        telegram_bot_token="token",
-        models_dir=Path("/tmp/models"),
+        credentials=SimpleNamespace(telegram_bot_token="token"),
     )
+    runtime = _runtime(application=application, adapter=adapter)
+
+    def fake_build_runtime(_settings: object, *, credentials: object) -> object:
+        assert credentials is settings.credentials
+        return runtime
+
     monkeypatch.setattr(entrypoint, "AppSettings", lambda: settings)
     monkeypatch.setattr(entrypoint, "_configure_logging", lambda _logs_dir: None)
     monkeypatch.setattr(entrypoint, "_validate_environment", lambda _settings: None)
-    monkeypatch.setattr(entrypoint, "build", lambda _settings: composition)
-    monkeypatch.setattr(entrypoint, "Application", FakeApplicationFactory)
-    monkeypatch.setattr(entrypoint, "PTBBotClient", lambda _bot: object())
-    monkeypatch.setattr(entrypoint, "TelegramBotAdapter", FakeAdapter)
-    monkeypatch.setattr(entrypoint, "FfprobeAudioDurationInspector", lambda: object())
+    monkeypatch.setattr(entrypoint, "build_runtime", fake_build_runtime)
 
     with pytest.raises(RuntimeError, match="startup failed"):
         await entrypoint._run()
@@ -174,24 +159,7 @@ async def test_unstarted_ptb_resources_are_not_stopped_when_adapter_start_fails(
         async def stop(self) -> None:
             events.append("application-stop")
 
-    application = FakeApplication()
-
-    class FakeBuilder:
-        def token(self, _token: str) -> FakeBuilder:
-            return self
-
-        def build(self) -> FakeApplication:
-            return application
-
-    class FakeApplicationFactory:
-        @staticmethod
-        def builder() -> FakeBuilder:
-            return FakeBuilder()
-
     class FakeAdapter:
-        def __init__(self, **_kwargs: object) -> None:
-            pass
-
         async def start(self) -> None:
             events.append("adapter-start")
             raise RuntimeError("recovery failed")
@@ -199,34 +167,23 @@ async def test_unstarted_ptb_resources_are_not_stopped_when_adapter_start_fails(
         async def stop(self) -> None:
             events.append("adapter-stop")
 
-    composition = SimpleNamespace(
-        use_case=object(),
-        repository=object(),
-        rename_service=object(),
-        export_service=object(),
-        plain_text_export_service=object(),
-        summary_service=object(),
-        video_subtitle_export_service=object(),
-        healthcheck_service=object(),
-        history_search_service=object(),
-        lasterror_service=object(),
-        retention_policy=object(),
-        audit_logger=object(),
-    )
+    application = FakeApplication()
+    adapter = FakeAdapter()
     settings = SimpleNamespace(
         logs_dir=lambda: Path("/tmp/logs"),
         telegram_allowed_user_id=1,
-        telegram_bot_token="token",
-        models_dir=Path("/tmp/models"),
+        credentials=SimpleNamespace(telegram_bot_token="token"),
     )
+    runtime = _runtime(application=application, adapter=adapter)
+
+    def fake_build_runtime(_settings: object, *, credentials: object) -> object:
+        assert credentials is settings.credentials
+        return runtime
+
     monkeypatch.setattr(entrypoint, "AppSettings", lambda: settings)
     monkeypatch.setattr(entrypoint, "_configure_logging", lambda _logs_dir: None)
     monkeypatch.setattr(entrypoint, "_validate_environment", lambda _settings: None)
-    monkeypatch.setattr(entrypoint, "build", lambda _settings: composition)
-    monkeypatch.setattr(entrypoint, "Application", FakeApplicationFactory)
-    monkeypatch.setattr(entrypoint, "PTBBotClient", lambda _bot: object())
-    monkeypatch.setattr(entrypoint, "TelegramBotAdapter", FakeAdapter)
-    monkeypatch.setattr(entrypoint, "FfprobeAudioDurationInspector", lambda: object())
+    monkeypatch.setattr(entrypoint, "build_runtime", fake_build_runtime)
 
     with pytest.raises(RuntimeError, match="recovery failed"):
         await entrypoint._run()

@@ -1,38 +1,29 @@
-"""Composition root — instancia e conecta todas as dependências do bot.
-
-Este módulo é o único lugar onde concretudes tocam abstratos. Mantém
-todas as escolhas de implementação centralizadas, facilitando substituir
-componentes em testes e em diferentes ambientes.
-"""
+# Single composition owner for concrete provider selection and construction.
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Any
 
 from yt_transcriber_bot.application.config import AppSettings
 from yt_transcriber_bot.application.ports.audio_converter import AudioConverter
 from yt_transcriber_bot.application.ports.diarization_engine import DiarizationEngine
 from yt_transcriber_bot.application.ports.gpu_detector import GpuDetector, HardwareProfile
 from yt_transcriber_bot.application.ports.job_repository import JobRepository
-from yt_transcriber_bot.application.ports.transcription_engine import (
-    TranscriptionEngine,
-)
+from yt_transcriber_bot.application.ports.transcription_engine import TranscriptionEngine
 from yt_transcriber_bot.application.ports.youtube_downloader import YouTubeDownloader
 from yt_transcriber_bot.application.services.healthcheck import HealthCheckService
 from yt_transcriber_bot.application.services.history_search import HistorySearchService
 from yt_transcriber_bot.application.services.last_error import LastErrorService
-from yt_transcriber_bot.application.services.rename_speakers import (
-    RenameSpeakersService,
-)
+from yt_transcriber_bot.application.services.rename_speakers import RenameSpeakersService
 from yt_transcriber_bot.application.services.retention_policy import RetentionPolicy
 from yt_transcriber_bot.application.use_cases.transcribe_video import (
     TranscribeVideoDependencies,
     TranscribeVideoUseCase,
 )
-from yt_transcriber_bot.infrastructure.audio.ffmpeg_converter import (
-    FfmpegAudioConverter,
-)
+from yt_transcriber_bot.configuration.credentials import ProviderCredentials
+from yt_transcriber_bot.infrastructure.audio.ffmpeg_converter import FfmpegAudioConverter
 from yt_transcriber_bot.infrastructure.diarization.composite_engine import (
     CompositeDiarizationEngine,
 )
@@ -47,6 +38,12 @@ from yt_transcriber_bot.infrastructure.exporting.video_subtitles_exporter import
     VideoSubtitleExportLimits,
 )
 from yt_transcriber_bot.infrastructure.logging.execution_audit import ExecutionAuditLogger
+from yt_transcriber_bot.infrastructure.operational.health_probes import (
+    find_executable,
+    local_disk_usage,
+    module_available,
+    probe_openai_compatible_models,
+)
 from yt_transcriber_bot.infrastructure.persistence.filesystem.local_file_storage import (
     LocalFileStorage,
 )
@@ -65,10 +62,18 @@ from yt_transcriber_bot.infrastructure.summarization.openai_compatible_client im
 )
 from yt_transcriber_bot.infrastructure.summarization.transcript_summarizer import (
     TranscriptSummaryService,
+    make_text_tokenizer,
 )
-from yt_transcriber_bot.infrastructure.youtube.yt_dlp_downloader import (
-    YtDlpDownloader,
+from yt_transcriber_bot.infrastructure.telegram.audience import (
+    DeniedAudienceFilter,
+    TelegramAudiencePolicy,
 )
+from yt_transcriber_bot.infrastructure.telegram.bot_adapter import TelegramBotAdapter
+from yt_transcriber_bot.infrastructure.telegram.ffprobe_duration_inspector import (
+    FfprobeAudioDurationInspector,
+)
+from yt_transcriber_bot.infrastructure.telegram.ptb_bot_client import PTBBotClient
+from yt_transcriber_bot.infrastructure.youtube.yt_dlp_downloader import YtDlpDownloader
 from yt_transcriber_bot.infrastructure.youtube.yt_dlp_real_factory import (
     real_subtitle_fetcher,
     real_ydl_factory,
@@ -96,10 +101,16 @@ class Composition:
     audit_logger: ExecutionAuditLogger
 
 
+@dataclass(frozen=True)
+class RuntimeComposition:
+    core: Composition
+    application: Any
+    adapter: TelegramBotAdapter
+    audience: TelegramAudiencePolicy
+    denied_audience_filter: Any
+
+
 def _make_gpu_detector() -> GpuDetector:
-    """Tenta criar o detector real (TorchGpuDetector); cai para um stub se torch
-    não estiver instalado (modo de teste sem ML).
-    """
     try:
         from yt_transcriber_bot.infrastructure.gpu.torch_gpu_detector import (
             TorchGpuDetector,
@@ -112,11 +123,7 @@ def _make_gpu_detector() -> GpuDetector:
 
 
 class _StubGpuDetector(GpuDetector):
-    """Detector que sempre devolve perfil de CPU."""
-
-    def detect(self) -> HardwareProfile:  # pragma: no cover - usado só em ambientes sem torch
-        from yt_transcriber_bot.application.ports.gpu_detector import HardwareProfile
-
+    def detect(self) -> HardwareProfile:  # pragma: no cover - host fallback
         return HardwareProfile(
             has_cuda=False,
             cuda_compute_capability=None,
@@ -126,7 +133,6 @@ class _StubGpuDetector(GpuDetector):
 
 
 def _make_transcription_engine() -> TranscriptionEngine:
-    """Engine real do WhisperX. Falha cedo se as dependências de ML faltarem."""
     from yt_transcriber_bot.infrastructure.transcription.whisperx_engine import (
         WhisperXTranscriptionEngine,
     )
@@ -138,7 +144,6 @@ def _make_transcription_engine() -> TranscriptionEngine:
 
 
 def _make_diarization_engine(hf_token: str) -> DiarizationEngine:
-    """Engine composto: WhisperX (primário) → pyannote (fallback)."""
     from yt_transcriber_bot.infrastructure.diarization.pyannote_diarization import (
         PyannoteDiarizationEngine,
     )
@@ -163,9 +168,59 @@ def _make_diarization_engine(hf_token: str) -> DiarizationEngine:
     return CompositeDiarizationEngine([primary, fallback])
 
 
-def build(settings: AppSettings) -> Composition:
-    """Wiring completo da aplicação."""
-    # Diretórios
+def _make_summary_service(
+    settings: AppSettings,
+    credentials: ProviderCredentials,
+    snapshots: TranscriptSnapshotRepository,
+) -> TranscriptSummaryService | None:
+    if settings.summary_backend == "disabled":
+        return None
+
+    summary_client = OpenAICompatibleChatClient(
+        base_url=settings.summary_base_url,
+        model=settings.summary_model,
+        temperature=settings.summary_temperature,
+        max_tokens=settings.summary_max_tokens,
+        timeout_s=settings.summary_timeout_s,
+        api_key=credentials.summary_api_key,
+        disable_thinking=settings.summary_disable_thinking,
+        validate_model=settings.summary_validate_model,
+        strict_model_match=settings.summary_strict_model_match,
+    )
+    tokenizer_model = settings.summary_tokenizer_model or settings.summary_model
+    tokenizer = make_text_tokenizer(
+        backend=settings.summary_tokenizer_backend,
+        model=tokenizer_model,
+        chars_per_token=settings.summary_chars_per_token,
+        trust_remote_code=settings.summary_tokenizer_trust_remote_code,
+    )
+    return TranscriptSummaryService(
+        snapshots=snapshots,
+        chat_client=summary_client,
+        output_dir=settings.summaries_dir(),
+        max_chars_per_chunk=settings.summary_max_chars_per_chunk,
+        max_input_tokens=settings.summary_max_input_tokens,
+        chars_per_token=settings.summary_chars_per_token,
+        partial_max_tokens=settings.summary_partial_max_tokens,
+        final_max_tokens=settings.summary_final_max_tokens,
+        timeout_split_retries=settings.summary_timeout_split_retries,
+        output_language=settings.summary_output_language,
+        disable_thinking=settings.summary_disable_thinking,
+        tokenizer_backend=settings.summary_tokenizer_backend,
+        tokenizer_model=settings.summary_tokenizer_model,
+        tokenizer_trust_remote_code=settings.summary_tokenizer_trust_remote_code,
+        tokenizer=tokenizer,
+        deduplicate_transcript=settings.summary_deduplicate_transcript,
+        merge_same_speaker_gap_s=settings.summary_merge_same_speaker_gap_s,
+        min_overlap_words=settings.summary_min_overlap_words,
+    )
+
+
+def build(
+    settings: AppSettings,
+    *,
+    credentials: ProviderCredentials,
+) -> Composition:
     settings.base_dir.mkdir(parents=True, exist_ok=True)
     settings.downloads_dir().mkdir(parents=True, exist_ok=True)
     settings.processed_dir().mkdir(parents=True, exist_ok=True)
@@ -178,29 +233,23 @@ def build(settings: AppSettings) -> Composition:
     settings.models_dir.mkdir(parents=True, exist_ok=True)
     settings.db_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Persistência
     repository = SqlAlchemyJobRepository.from_url(f"sqlite:///{settings.db_path}")
     file_storage = LocalFileStorage()
     snapshots = TranscriptSnapshotRepository(segments_dir)
 
-    # Adapters de I/O
     downloader: YouTubeDownloader = YtDlpDownloader(
         ydl_factory=real_ydl_factory,
         subtitle_fetcher=real_subtitle_fetcher,
-        cookies_file=settings.credentials.youtube_cookies_file or None,
-        cookies_browser=settings.credentials.youtube_cookies_browser or None,
+        cookies_file=credentials.youtube_cookies_file or None,
+        cookies_browser=credentials.youtube_cookies_browser or None,
     )
     converter: AudioConverter = FfmpegAudioConverter()
 
-    # Engines de ML (importação preguiçosa)
     gpu_detector = _make_gpu_detector()
     transcription_engine = _make_transcription_engine()
-    diarization_engine = _make_diarization_engine(settings.credentials.hf_token)
-
-    # Renderer
+    diarization_engine = _make_diarization_engine(credentials.hf_token)
     renderer = MarkdownTranscriptRenderer()
 
-    # Use case
     use_case = TranscribeVideoUseCase(
         TranscribeVideoDependencies(
             downloader=downloader,
@@ -215,65 +264,44 @@ def build(settings: AppSettings) -> Composition:
         )
     )
 
-    # Serviços auxiliares
     rename_service = RenameSpeakersService(snapshots, renderer)
     export_service = TranscriptExportService(snapshots)
     plain_text_export_service = PlainTextTranscriptExportService(snapshots)
-    summary_service: TranscriptSummaryService | None
-    if settings.summary_backend == "disabled":
-        summary_service = None
-    else:
-        summary_client = OpenAICompatibleChatClient(
-            base_url=settings.summary_base_url,
-            model=settings.summary_model,
-            temperature=settings.summary_temperature,
-            max_tokens=settings.summary_max_tokens,
-            timeout_s=settings.summary_timeout_s,
-            api_key=settings.credentials.summary_api_key,
-            disable_thinking=settings.summary_disable_thinking,
-            validate_model=settings.summary_validate_model,
-            strict_model_match=settings.summary_strict_model_match,
-        )
-        summary_service = TranscriptSummaryService(
-            snapshots=snapshots,
-            chat_client=summary_client,
-            output_dir=settings.summaries_dir(),
-            max_chars_per_chunk=settings.summary_max_chars_per_chunk,
-            max_input_tokens=settings.summary_max_input_tokens,
-            chars_per_token=settings.summary_chars_per_token,
-            partial_max_tokens=settings.summary_partial_max_tokens,
-            final_max_tokens=settings.summary_final_max_tokens,
-            timeout_split_retries=settings.summary_timeout_split_retries,
-            output_language=settings.summary_output_language,
-            disable_thinking=settings.summary_disable_thinking,
-            tokenizer_backend=settings.summary_tokenizer_backend,
-            tokenizer_model=settings.summary_tokenizer_model,
-            tokenizer_trust_remote_code=settings.summary_tokenizer_trust_remote_code,
-            deduplicate_transcript=settings.summary_deduplicate_transcript,
-            merge_same_speaker_gap_s=settings.summary_merge_same_speaker_gap_s,
-            min_overlap_words=settings.summary_min_overlap_words,
-        )
+    summary_service = _make_summary_service(settings, credentials, snapshots)
+
     video_subtitle_export_service = VideoSoftSubtitleExportService(
         snapshots=snapshots,
         transcript_exporter=export_service,
         ydl_factory=real_ydl_factory,
         output_dir=settings.video_exports_dir(),
-        cookies_file=settings.credentials.youtube_cookies_file or None,
-        cookies_browser=settings.credentials.youtube_cookies_browser or None,
+        cookies_file=credentials.youtube_cookies_file or None,
+        cookies_browser=credentials.youtube_cookies_browser or None,
         limits=VideoSubtitleExportLimits(
             max_duration_seconds=settings.max_video_subtitles_duration_min * 60,
             max_size_bytes=settings.max_video_subtitles_size_mb * 1024 * 1024,
         ),
     )
-    healthcheck_service = HealthCheckService(settings=settings, sqlite_probe=SqliteHealthProbe())
+    healthcheck_service = HealthCheckService(
+        settings=settings,
+        models_probe=probe_openai_compatible_models,
+        executable_finder=find_executable,
+        module_checker=module_available,
+        disk_usage=local_disk_usage,
+        sqlite_probe=SqliteHealthProbe(),
+    )
     history_search_service = HistorySearchService(repository)
     lasterror_service = LastErrorService(repository=repository, settings=settings)
     audit_logger = ExecutionAuditLogger(
-        settings.logs_dir() / "execution_audit.jsonl", settings=settings
+        settings.logs_dir() / "execution_audit.jsonl",
+        settings=settings,
     )
     retention_policy = RetentionPolicy(
         repository=repository,
-        owned_roots=(settings.downloads_dir(), settings.processed_dir(), settings.logs_dir()),
+        owned_roots=(
+            settings.downloads_dir(),
+            settings.processed_dir(),
+            settings.logs_dir(),
+        ),
         max_volatile_jobs=settings.retention_count,
     )
 
@@ -294,3 +322,54 @@ def build(settings: AppSettings) -> Composition:
         retention_policy=retention_policy,
         audit_logger=audit_logger,
     )
+
+
+def _make_telegram_application(bot_token: str) -> Any:
+    from telegram.ext import Application
+
+    return Application.builder().token(bot_token).build()
+
+
+def _make_telegram_runtime(
+    settings: AppSettings,
+    credentials: ProviderCredentials,
+    core: Composition,
+) -> RuntimeComposition:
+    application = _make_telegram_application(credentials.telegram_bot_token)
+    client = PTBBotClient(application.bot)
+    adapter = TelegramBotAdapter(
+        settings=settings,
+        client=client,
+        use_case=core.use_case,
+        repository=core.repository,
+        rename_service=core.rename_service,
+        export_service=core.export_service,
+        plain_text_export_service=core.plain_text_export_service,
+        summary_service=core.summary_service,
+        video_subtitle_export_service=core.video_subtitle_export_service,
+        healthcheck_service=core.healthcheck_service,
+        history_search_service=core.history_search_service,
+        lasterror_service=core.lasterror_service,
+        retention_policy=core.retention_policy,
+        models_dir=settings.models_dir,
+        audit_logger=core.audit_logger,
+        media_downloader=client,
+        duration_inspector=FfprobeAudioDurationInspector(),
+    )
+    audience = TelegramAudiencePolicy(settings.telegram_allowed_user_id)
+    return RuntimeComposition(
+        core=core,
+        application=application,
+        adapter=adapter,
+        audience=audience,
+        denied_audience_filter=DeniedAudienceFilter(audience),
+    )
+
+
+def build_runtime(
+    settings: AppSettings,
+    *,
+    credentials: ProviderCredentials,
+) -> RuntimeComposition:
+    core = build(settings, credentials=credentials)
+    return _make_telegram_runtime(settings, credentials, core)

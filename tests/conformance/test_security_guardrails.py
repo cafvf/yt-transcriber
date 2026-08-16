@@ -8,7 +8,7 @@ from pathlib import Path
 def test_entrypoint_blocks_unsupported_audience_before_product_handlers() -> None:
     source = Path("src/yt_transcriber_bot/__main__.py").read_text(encoding="utf-8")
 
-    guard = "MessageHandler(DeniedAudienceFilter(audience), on_unsupported_message)"
+    guard = "MessageHandler(runtime.denied_audience_filter, on_unsupported_message)"
     first_product_handler = 'CommandHandler("start", on_start)'
     assert guard in source
     assert source.index(guard) < source.index(first_product_handler)

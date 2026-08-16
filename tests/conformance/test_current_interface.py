@@ -1,9 +1,4 @@
-"""Characterize the frozen Telegram command surface before remediation.
-
-These tests intentionally protect the externally visible command/alias surface,
-not the current implementation structure. They exercise entrypoint registration
-through a fake PTB application and compare it with the public help surface.
-"""
+# Characterize the frozen Telegram command surface during remediation.
 
 from __future__ import annotations
 
@@ -62,7 +57,7 @@ ALIAS_GROUPS = (
 
 
 class _StopAfterRegistrationError(RuntimeError):
-    """Sentinel used to stop _run after handlers have been registered."""
+    pass
 
 
 @dataclass(frozen=True)
@@ -97,29 +92,7 @@ class _FakeApplication:
         raise AssertionError("updater.stop must not run in this characterization")
 
 
-class _FakeBuilder:
-    def __init__(self, application: _FakeApplication) -> None:
-        self._application = application
-
-    def token(self, _token: str) -> _FakeBuilder:
-        return self
-
-    def build(self) -> _FakeApplication:
-        return self._application
-
-
-class _FakeApplicationFactory:
-    application = _FakeApplication()
-
-    @classmethod
-    def builder(cls) -> _FakeBuilder:
-        return _FakeBuilder(cls.application)
-
-
 class _FakeAdapter:
-    def __init__(self, **_kwargs: object) -> None:
-        pass
-
     async def start(self) -> None:
         raise _StopAfterRegistrationError
 
@@ -127,7 +100,10 @@ class _FakeAdapter:
         return None
 
 
-def _fake_command_handler(commands: str | list[str], callback: object) -> _RegisteredCommand:
+def _fake_command_handler(
+    commands: str | list[str],
+    callback: object,
+) -> _RegisteredCommand:
     normalized = (commands,) if isinstance(commands, str) else tuple(commands)
     return _RegisteredCommand(normalized, callback)
 
@@ -137,39 +113,30 @@ def _ignore_handler(*_args: object, **_kwargs: object) -> object:
 
 
 @pytest.fixture
-async def registered_commands(monkeypatch: pytest.MonkeyPatch) -> list[_RegisteredCommand]:
+async def registered_commands(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[_RegisteredCommand]:
     application = _FakeApplication()
-    monkeypatch.setattr(_FakeApplicationFactory, "application", application)
-
-    composition = SimpleNamespace(
-        use_case=object(),
-        repository=object(),
-        rename_service=object(),
-        export_service=object(),
-        plain_text_export_service=object(),
-        summary_service=object(),
-        video_subtitle_export_service=object(),
-        healthcheck_service=object(),
-        history_search_service=object(),
-        lasterror_service=object(),
-        retention_policy=object(),
-        audit_logger=object(),
-    )
     settings = SimpleNamespace(
         logs_dir=lambda: Path("/tmp/yt-transcriber-f0/logs"),
         telegram_allowed_user_id=1,
-        telegram_bot_token="characterization-token",
-        models_dir=Path("/tmp/yt-transcriber-f0/models"),
+        credentials=SimpleNamespace(telegram_bot_token="characterization-token"),
     )
+    runtime = SimpleNamespace(
+        application=application,
+        adapter=_FakeAdapter(),
+        audience=SimpleNamespace(allows=lambda **_kwargs: True),
+        denied_audience_filter=object(),
+    )
+
+    def fake_build_runtime(_settings: object, *, credentials: object) -> object:
+        assert credentials is settings.credentials
+        return runtime
 
     monkeypatch.setattr(entrypoint, "AppSettings", lambda: settings)
     monkeypatch.setattr(entrypoint, "_configure_logging", lambda _logs_dir: None)
     monkeypatch.setattr(entrypoint, "_validate_environment", lambda _settings: None)
-    monkeypatch.setattr(entrypoint, "build", lambda _settings: composition)
-    monkeypatch.setattr(entrypoint, "Application", _FakeApplicationFactory)
-    monkeypatch.setattr(entrypoint, "PTBBotClient", lambda _bot: object())
-    monkeypatch.setattr(entrypoint, "TelegramBotAdapter", _FakeAdapter)
-    monkeypatch.setattr(entrypoint, "FfprobeAudioDurationInspector", lambda: object())
+    monkeypatch.setattr(entrypoint, "build_runtime", fake_build_runtime)
     monkeypatch.setattr(entrypoint, "CommandHandler", _fake_command_handler)
     monkeypatch.setattr(entrypoint, "CallbackQueryHandler", _ignore_handler)
     monkeypatch.setattr(entrypoint, "MessageHandler", _ignore_handler)
@@ -180,7 +147,9 @@ async def registered_commands(monkeypatch: pytest.MonkeyPatch) -> list[_Register
     return [handler for handler in application.handlers if isinstance(handler, _RegisteredCommand)]
 
 
-def _registered_command_set(handlers: list[_RegisteredCommand]) -> frozenset[str]:
+def _registered_command_set(
+    handlers: list[_RegisteredCommand],
+) -> frozenset[str]:
     return frozenset(command for handler in handlers for command in handler.commands)
 
 

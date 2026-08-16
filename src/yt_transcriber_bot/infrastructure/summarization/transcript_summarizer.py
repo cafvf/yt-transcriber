@@ -985,3 +985,19 @@ def _hms(seconds: float) -> str:
     m = (total % 3600) // 60
     s = total % 60
     return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+def make_text_tokenizer(
+    *,
+    backend: str,
+    model: str,
+    chars_per_token: float,
+    trust_remote_code: bool = False,
+) -> TextTokenizer:
+    # Public runtime factory; direct service construction keeps _make_tokenizer fallback.
+    return _make_tokenizer(
+        backend=backend,
+        model=model,
+        chars_per_token=chars_per_token,
+        trust_remote_code=trust_remote_code,
+    )

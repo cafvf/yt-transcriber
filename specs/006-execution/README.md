@@ -33,7 +33,7 @@ Current execution state:
 - F0 — executable baseline: **Verified / Closed**;
 - F1 — security guardrails: **Verified / Closed**;
 - F2 — domain and data truth: **Verified / Closed**;
-- F3 — hexagonal boundaries: **In progress — TASK-P03-001..005 locally verified; TASK-P03-006 next**.
+- F3 — hexagonal boundaries: **In progress — TASK-P03-001..006 locally verified; TASK-P03-007 next**.
 
 Detailed evidence is recorded in `F0-BASELINE.md`, `F1-SECURITY.md`,
 `F2-DOMAIN-DATA.md`, and `F3-HEXAGONAL-SEAMS.md`.

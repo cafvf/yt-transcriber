@@ -1,6 +1,6 @@
 # F3 — Hexagonal boundaries and provider seams
 
-Status: **In progress — TASK-P03-001..005 locally verified; TASK-P03-006 next**
+Status: **In progress — TASK-P03-001..006 locally verified; TASK-P03-007 next**
 Plan: `PLAN-003`
 Base revision: `f2e265acbcc8b2a4cef601e160ae13193f49d979`
 Started: 2026-08-15
@@ -200,10 +200,61 @@ git diff --check: green
 
 No stage, commit or push is part of this closure.
 
+### TASK-P03-006 — Composition-root ownership of concrete providers and credentials
+
+Status: **Locally verified — REQ-ARC-011 closed**
+
+Implementation boundary:
+
+- `build(..., credentials=...)` receives provider credentials explicitly at the
+  composition edge instead of resolving them from ordinary behavior settings;
+- YouTube cookies, Hugging Face authentication and the optional summary API key
+  are injected only into concrete providers;
+- `build_runtime(...)` owns the concrete Telegram provider graph: PTB
+  application, bot client, bot adapter, duration inspector and audience/filter;
+- `__main__.py` retains handler registration and PTB lifecycle orchestration,
+  but no longer selects or constructs project infrastructure adapters;
+- runtime summarization selects the tokenizer in composition and injects it into
+  `TranscriptSummaryService`;
+- `SUMMARY_BACKEND=disabled` exits before optional chat-client/tokenizer
+  construction and therefore requires no placeholder summary API credential;
+- healthcheck HTTP/models, executable discovery, module discovery, disk usage
+  and SQLite probes are explicitly selected by infrastructure/composition;
+- persistence, YouTube, conversion, ML, rendering, export and operational
+  adapters are wired by the same composition owner.
+
+Scope intentionally deferred:
+
+- backend-neutral ASR request/profile remains P03-007;
+- diarization capability/fallback/provenance remains P03-008;
+- canonical transcript contracts remain P03-009;
+- external-service disclosure minimization remains P03-010.
+
+Local closure evidence:
+
+```text
+provider-construction source audit: green
+P03-006 composition unit/smoke tests: green
+frozen Telegram interface/lifecycle tests: green
+F3 architecture/security conformance: green
+summarization/tokenizer regressions: green
+security/healthcheck regressions: green
+diarization regressions: green
+local secret scanner: clean
+Gitleaks: no leaks found
+default gate: 791 passed / 47 deselected / 838 collected
+compileall: green
+pre-commit security hooks: green
+Ruff strict + format check: green
+mypy strict: 109 source files / no issues
+git diff --check: green
+```
+
+No stage, commit or push is part of this local verification.
+
 ## Next task
 
-After the P03-005 local gate is green, proceed to
-`TASK-P03-006 — Composition-root ownership of concrete providers and credentials`.
+Proceed to `TASK-P03-007 — Backend-neutral ASR contract`.
 
 ## Gate state
 

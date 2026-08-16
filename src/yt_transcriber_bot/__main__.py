@@ -12,7 +12,6 @@ from pathlib import Path
 
 from telegram import Update
 from telegram.ext import (
-    Application,
     ApplicationHandlerStop,
     CallbackQueryHandler,
     CommandHandler,
@@ -30,16 +29,7 @@ from yt_transcriber_bot.application.services.filesystem_safety import (
     ensure_private_directory,
     ensure_private_file,
 )
-from yt_transcriber_bot.composition_root import build
-from yt_transcriber_bot.infrastructure.telegram.audience import (
-    DeniedAudienceFilter,
-    TelegramAudiencePolicy,
-)
-from yt_transcriber_bot.infrastructure.telegram.bot_adapter import TelegramBotAdapter
-from yt_transcriber_bot.infrastructure.telegram.ffprobe_duration_inspector import (
-    FfprobeAudioDurationInspector,
-)
-from yt_transcriber_bot.infrastructure.telegram.ptb_bot_client import PTBBotClient
+from yt_transcriber_bot.composition_root import build_runtime
 
 
 def _configure_logging(logs_dir: Path) -> None:
@@ -119,30 +109,11 @@ async def _run() -> None:
     logger = logging.getLogger("yt_transcriber_bot")
     logger.info("Iniciando bot. user_id=%s", settings.telegram_allowed_user_id)
 
-    composition = build(settings)
-
-    application = Application.builder().token(settings.telegram_bot_token).build()
-    client = PTBBotClient(application.bot)
-    adapter = TelegramBotAdapter(
-        settings=settings,
-        client=client,
-        use_case=composition.use_case,
-        repository=composition.repository,
-        rename_service=composition.rename_service,
-        export_service=composition.export_service,
-        plain_text_export_service=composition.plain_text_export_service,
-        summary_service=composition.summary_service,
-        video_subtitle_export_service=composition.video_subtitle_export_service,
-        healthcheck_service=composition.healthcheck_service,
-        history_search_service=composition.history_search_service,
-        lasterror_service=composition.lasterror_service,
-        retention_policy=composition.retention_policy,
-        models_dir=settings.models_dir,
-        audit_logger=composition.audit_logger,
-        media_downloader=client,
-        duration_inspector=FfprobeAudioDurationInspector(),
-    )
-    audience = TelegramAudiencePolicy(settings.telegram_allowed_user_id)
+    credentials = settings.credentials
+    runtime = build_runtime(settings, credentials=credentials)
+    application = runtime.application
+    adapter = runtime.adapter
+    audience = runtime.audience
 
     def _uid(update: Update) -> int:
         return update.effective_user.id if update.effective_user else 0
@@ -318,7 +289,7 @@ async def _run() -> None:
     # This first message handler matches only unsupported audiences. Allowed
     # private messages fall through to the existing command/text/media handlers
     # in the same PTB group; denied messages stop before any product work.
-    application.add_handler(MessageHandler(DeniedAudienceFilter(audience), on_unsupported_message))
+    application.add_handler(MessageHandler(runtime.denied_audience_filter, on_unsupported_message))
 
     application.add_handler(CommandHandler("start", on_start))
     application.add_handler(CommandHandler("help", on_help))
