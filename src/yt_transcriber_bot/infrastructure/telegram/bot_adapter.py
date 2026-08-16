@@ -30,7 +30,6 @@ from yt_transcriber_bot.application.ports.incoming_media import (
     AudioDurationInspector,
     IncomingMedia,
     IncomingMediaDownloader,
-    IncomingMediaKind,
 )
 from yt_transcriber_bot.application.ports.job_repository import JobRepository
 from yt_transcriber_bot.application.services.config_signature import (
@@ -51,12 +50,22 @@ from yt_transcriber_bot.application.services.startup_recovery import StartupReco
 from yt_transcriber_bot.application.use_cases.transcribe_video import (
     TranscribeVideoUseCase,
 )
+from yt_transcriber_bot.application.workflows.admission import (
+    AdmissionRejection,
+    AdmissionRejectionCode,
+    MediaAdmission,
+    PreparedMediaAdmission,
+    QueueAdmissionState,
+    QueuedSubmission,
+    YoutubeAdmission,
+    admit_youtube_submission,
+    commit_media_submission,
+    prepare_validated_media_submission,
+    validate_media_submission,
+)
 from yt_transcriber_bot.domain.entities.job import Job, JobStatus
 from yt_transcriber_bot.domain.value_objects.media_source import MediaSource, MediaSourceType
-from yt_transcriber_bot.domain.value_objects.video_id import (
-    InvalidYouTubeUrlError,
-    VideoId,
-)
+from yt_transcriber_bot.domain.value_objects.video_id import VideoId
 from yt_transcriber_bot.infrastructure.exporting.plain_text_exporter import (
     PlainTextTranscriptExportService,
 )
@@ -373,26 +382,34 @@ class TelegramBotAdapter:
         if self._repository is None:
             await self._send_text(chat_id, "Persistência de jobs indisponível no momento.")
             return
-        error = self._validate_incoming_media(media)
-        if error:
-            await self._send_text(chat_id, error)
+
+        media_rejection = validate_media_submission(
+            media,
+            max_media_size_bytes=self._settings.telegram_max_media_size_mb * 1024 * 1024,
+            max_duration_seconds=self._settings.max_video_duration_min * 60,
+        )
+        if media_rejection is not None:
+            await self._send_text(chat_id, self._media_admission_rejection_text(media_rejection))
             return
         if self._media_downloader is None:
             await self._send_text(chat_id, "Entrada de áudio indisponível no momento.")
             return
-        current, pending = self._queue.snapshot()
-        if (1 if current else 0) + len(pending) >= self._settings.telegram_max_queue_size:
-            await self._send_text(chat_id, "Fila cheia. Aguarde um job terminar.")
-            return
-        job = Job.new(
-            None,
-            user_id,
-            compute_processing_fingerprint(
-                self._settings, source_type=MediaSourceType.TELEGRAM_AUDIO.value
+
+        prepared = prepare_validated_media_submission(
+            queue_state=self._queue_admission_state(),
+            media=media,
+            user_id=user_id,
+            config_signature=compute_processing_fingerprint(
+                self._settings,
+                source_type=MediaSourceType.TELEGRAM_AUDIO.value,
             ),
-            artifact_policy="audio+markdown",
-            media_source=MediaSource.telegram_audio(media.file_id),
         )
+        if isinstance(prepared, AdmissionRejection):
+            await self._send_text(chat_id, self._media_admission_rejection_text(prepared))
+            return
+        assert isinstance(prepared, PreparedMediaAdmission)
+        job = prepared.job
+
         staging_dir = self._settings.downloads_dir() / job.job_id
         try:
             path = await self._media_downloader.download(media, staging_dir)
@@ -403,34 +420,24 @@ class TelegramBotAdapter:
                 duration_seconds = await asyncio.to_thread(
                     self._duration_inspector.duration_seconds, path
                 )
-            if duration_seconds is None or duration_seconds <= 0:
-                raise ValueError("Não foi possível validar a duração positiva do áudio.")
-            if duration_seconds > self._settings.max_video_duration_min * 60:
-                raise ValueError(
-                    f"Áudio excede o limite de {self._settings.max_video_duration_min} min."
-                )
         except (OSError, OverflowError, ValueError):
             _remove_staged_media(staging_dir)
             await self._send_text(chat_id, "Não foi possível validar o áudio recebido.")
             return
-        job.source_title = Path(media.file_name or "Áudio do Telegram").stem
-        job.source_duration_seconds = duration_seconds
+
         try:
-            self._save_job_if_possible(job)
-            self._save_request_context_if_possible(
-                JobRequestContext(
-                    job_id=job.job_id,
-                    delivery_chat_id=chat_id,
-                    source_locator=str(path),
-                )
+            committed = commit_media_submission(
+                repository=self._repository,
+                prepared=prepared,
+                delivery_chat_id=chat_id,
+                source_locator=str(path),
+                source_title=Path(media.file_name or "Áudio do Telegram").stem,
+                duration_seconds=duration_seconds,
+                max_duration_seconds=self._settings.max_video_duration_min * 60,
+                request_context_saver=self._save_request_context_if_possible,
             )
         except Exception as exc:
             _remove_staged_media(staging_dir)
-            if self._repository is not None:
-                delete_job = getattr(self._repository, "delete", None)
-                if callable(delete_job):
-                    with suppress(Exception):
-                        delete_job(job.job_id)
             logger.error(
                 "Falha ao persistir job de mídia Telegram antes do enqueue: %s",
                 type(exc).__name__,
@@ -440,6 +447,14 @@ class TelegramBotAdapter:
                 "Não foi possível enfileirar o áudio recebido. Tente novamente mais tarde.",
             )
             return
+
+        if isinstance(committed, AdmissionRejection):
+            _remove_staged_media(staging_dir)
+            await self._send_text(chat_id, "Não foi possível validar o áudio recebido.")
+            return
+        assert isinstance(committed, MediaAdmission)
+        job = committed.job
+
         message_id = await self._send_text(chat_id, "📥 Áudio recebido. Enfileirando…")
         item = await self._queue.enqueue(
             JobPayload(
@@ -452,7 +467,7 @@ class TelegramBotAdapter:
                 media=media,
                 media_source=job.media_source,
                 source_title=job.source_title,
-                source_duration_seconds=duration_seconds,
+                source_duration_seconds=job.source_duration_seconds,
             ),
             item_id=job.job_id,
         )
@@ -465,36 +480,25 @@ class TelegramBotAdapter:
             queue_position=item.enqueued_position,
         )
 
-    def _validate_incoming_media(self, media: IncomingMedia) -> str | None:
-        allowed_extensions = {".mp3", ".m4a", ".ogg", ".opus", ".wav", ".flac", ".webm"}
-        allowed_mimes = {
-            "audio/mpeg",
-            "audio/mp4",
-            "audio/ogg",
-            "audio/opus",
-            "audio/wav",
-            "audio/x-wav",
-            "audio/flac",
-            "audio/webm",
-        }
-        if not media.file_id:
+    def _media_admission_rejection_text(self, rejection: AdmissionRejection) -> str:
+        if rejection.code is AdmissionRejectionCode.QUEUE_FULL:
+            return "Fila cheia. Aguarde um job terminar."
+        if rejection.code is AdmissionRejectionCode.INVALID_MEDIA_FILE:
             return "Arquivo inválido."
-        if media.mime_type and media.mime_type.lower() not in allowed_mimes:
+        if rejection.code is AdmissionRejectionCode.UNSUPPORTED_MEDIA:
             return "Envie um arquivo de áudio suportado."
-        if media.kind is IncomingMediaKind.DOCUMENT and not media.file_name:
+        if rejection.code in {
+            AdmissionRejectionCode.MISSING_MEDIA_FILENAME,
+            AdmissionRejectionCode.UNSUPPORTED_MEDIA_EXTENSION,
+        }:
             return "Arquivo deve ter uma extensão de áudio suportada."
-        if media.file_name and Path(media.file_name).suffix.lower() not in allowed_extensions:
-            return "Arquivo deve ter uma extensão de áudio suportada."
-        if media.size_bytes is None or media.size_bytes <= 0:
+        if rejection.code is AdmissionRejectionCode.INVALID_MEDIA_SIZE:
             return "Não foi possível validar o tamanho do áudio."
-        if media.size_bytes > self._settings.telegram_max_media_size_mb * 1024 * 1024:
+        if rejection.code is AdmissionRejectionCode.MEDIA_TOO_LARGE:
             return f"Áudio excede o limite de {self._settings.telegram_max_media_size_mb} MB."
-        if (
-            media.duration_seconds is not None
-            and media.duration_seconds > self._settings.max_video_duration_min * 60
-        ):
+        if rejection.code is AdmissionRejectionCode.MEDIA_TOO_LONG:
             return f"Áudio excede o limite de {self._settings.max_video_duration_min} min."
-        return None
+        return "Não foi possível validar o áudio recebido."
 
     async def _handle_text_command(self, *, chat_id: int, user_id: int, text: str) -> bool:
         """Fallback defensivo para comandos que cheguem como texto comum.
@@ -576,49 +580,49 @@ class TelegramBotAdapter:
         redo: bool,
         requested_language: str | None = None,
     ) -> None:
-        """Valida URL, cria payload e enfileira um job novo.
-
-        ``redo=True`` não reaproveita histórico: sempre cria nova entrada na fila.
-        """
-        try:
-            video_id = VideoId.from_url(url)
-        except (InvalidYouTubeUrlError, ValueError) as exc:
-            await self._send_text(chat_id, f"Link inválido: {exc}")
-            return
-        if self._repository is None:
-            await self._send_text(chat_id, "Persistência de jobs indisponível no momento.")
-            return
-
-        if self._is_already_queued(video_id, requested_language):
-            await self._send_text(
-                chat_id,
-                "Esse vídeo já está em processamento ou na fila "
-                f"para o idioma {requested_language or 'automático'}.",
-            )
-            return
-        current, pending = self._queue.snapshot()
-        total_in_queue = (1 if current is not None else 0) + len(pending)
-        if total_in_queue >= self._settings.telegram_max_queue_size:
-            await self._send_text(
-                chat_id,
-                "Fila cheia. Aguarde um job terminar ou use /queue, /clearqueue ou /cancelall.",
-            )
-            return
-
-        prefix = "🔁 Reprocessando" if redo else "📥 Recebido"
-        lang_line = (
-            f"\n🌐 Idioma informado: {requested_language}"
-            if requested_language
-            else "\n🌐 Idioma: automático"
-        )
-        job = self._create_persisted_job(
-            video_id=video_id,
-            user_id=user_id,
-            chat_id=chat_id,
+        admission = admit_youtube_submission(
+            repository=self._repository,
+            queue_state=self._queue_admission_state(),
             url=url,
+            user_id=user_id,
+            delivery_chat_id=chat_id,
             requested_language=requested_language,
+            reprocess=redo,
+            config_signature=compute_processing_fingerprint(
+                self._settings,
+                requested_language=requested_language,
+                source_type=MediaSourceType.YOUTUBE.value,
+            ),
+            request_context_saver=self._save_request_context_if_possible,
         )
-        message_id = await self._send_text(chat_id, f"{prefix}: {url}{lang_line}\nEnfileirando…")
+        if isinstance(admission, AdmissionRejection):
+            if admission.code is AdmissionRejectionCode.INVALID_SOURCE:
+                await self._send_text(chat_id, f"Link inválido: {admission.detail or ''}")
+            elif admission.code is AdmissionRejectionCode.PERSISTENCE_UNAVAILABLE:
+                await self._send_text(chat_id, "Persistência de jobs indisponível no momento.")
+            elif admission.code is AdmissionRejectionCode.DUPLICATE:
+                await self._send_text(
+                    chat_id,
+                    "Esse vídeo já está em processamento ou na fila "
+                    f"para o idioma {requested_language or 'automático'}.",
+                )
+            elif admission.code is AdmissionRejectionCode.QUEUE_FULL:
+                await self._send_text(
+                    chat_id,
+                    "Fila cheia. Aguarde um job terminar ou use /queue, /clearqueue ou /cancelall.",
+                )
+            return
+
+        assert isinstance(admission, YoutubeAdmission)
+        video_id = admission.video_id
+        job = admission.job
+        prefix = "🔁 Reprocessando" if admission.is_reprocess else "📥 Recebido"
+        lang_line = (
+            f"\\n🌐 Idioma informado: {requested_language}"
+            if requested_language
+            else "\\n🌐 Idioma: automático"
+        )
+        message_id = await self._send_text(chat_id, f"{prefix}: {url}{lang_line}\\nEnfileirando…")
         payload = JobPayload(
             job_id=job.job_id,
             chat_id=chat_id,
@@ -656,13 +660,27 @@ class TelegramBotAdapter:
                 sanitize_text(str(exc), self._settings),
             )
 
-    def _is_already_queued(self, video_id: VideoId, requested_language: str | None) -> bool:
+    def _queue_admission_state(self) -> QueueAdmissionState:
         current, pending = self._queue.snapshot()
-        for item in ([current] if current is not None else []) + list(pending):
-            payload = item.payload
-            if payload.video_id == video_id and payload.requested_language == requested_language:
-                return True
-        return False
+        items: list[QueuedSubmission] = []
+        if current is not None:
+            items.append(
+                QueuedSubmission(
+                    video_id=current.payload.video_id,
+                    requested_language=current.payload.requested_language,
+                )
+            )
+        items.extend(
+            QueuedSubmission(
+                video_id=item.payload.video_id,
+                requested_language=item.payload.requested_language,
+            )
+            for item in pending
+        )
+        return QueueAdmissionState(
+            items=tuple(items),
+            capacity=self._settings.telegram_max_queue_size,
+        )
 
     async def handle_command_start(self, *, chat_id: int, user_id: int) -> None:
         if not self._is_authorized(user_id):
@@ -1821,32 +1839,6 @@ class TelegramBotAdapter:
                 source_locator=None,
             )
         )
-
-    def _create_persisted_job(
-        self,
-        *,
-        video_id: VideoId,
-        user_id: int,
-        chat_id: int,
-        url: str,
-        requested_language: str | None,
-    ) -> Job:
-        job = Job.new(
-            video_id=video_id,
-            user_id=user_id,
-            config_signature=compute_processing_fingerprint(
-                self._settings,
-                requested_language=requested_language,
-                source_type=MediaSourceType.YOUTUBE.value,
-            ),
-            requested_language=requested_language,
-            artifact_policy="audio+markdown",
-        )
-        self._save_job_if_possible(job)
-        self._save_request_context_if_possible(
-            JobRequestContext(job_id=job.job_id, delivery_chat_id=chat_id, source_locator=url)
-        )
-        return job
 
     def _load_or_create_job(self, payload: JobPayload) -> Job:
         if payload.job_id is not None and self._repository is not None:
