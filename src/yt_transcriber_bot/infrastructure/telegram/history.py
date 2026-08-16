@@ -1,58 +1,25 @@
-"""Colaboração de histórico compartilhada pelos comandos Telegram numerados.
-
-Mantém a consulta, ordenação, seleção e apresentação do histórico fora do
-``TelegramBotAdapter``. A camada ainda recebe mensagens e aplica autorização;
-esta colaboração apenas preserva as regras de dados usadas por esses fluxos.
-"""
+"""Telegram presentation helpers for numbered completed-history commands."""
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Protocol
 
-from yt_transcriber_bot.application.ports.job_repository import JobRepository
-from yt_transcriber_bot.domain.entities.job import Job, JobStatus
+from yt_transcriber_bot.domain.entities.job import Job
 from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
 
 
 class HistoryTitleSource(Protocol):
-    """Leitura opcional de metadados de snapshots para títulos do histórico."""
+    """Optional canonical metadata reader used only for presentation titles."""
 
     def metadata_for(self, slug: str) -> VideoMetadata | None: ...
 
 
-class HistoryCollaboration:
-    """Regras de histórico reutilizadas por ``/list`` e comandos com índice."""
+class HistoryPresentation:
+    """Title lookup and rendering kept at the Telegram presentation boundary."""
 
-    def __init__(
-        self,
-        repository: JobRepository | None,
-        title_source: HistoryTitleSource | None = None,
-    ) -> None:
-        self._repository = repository
+    def __init__(self, title_source: HistoryTitleSource | None = None) -> None:
         self._title_source = title_source
-
-    def completed_jobs_for_user(self, user_id: int, *, limit: int) -> list[Job]:
-        if self._repository is None:
-            return []
-        jobs = self._repository.list_recent_for_user(user_id, limit=max(limit * 3, limit))
-        completed = [
-            job
-            for job in jobs
-            if job.requested_by_user_id == user_id and job.status == JobStatus.COMPLETED
-        ]
-        completed.sort(key=lambda job: job.updated_at, reverse=True)
-        return completed[:limit]
-
-    def select_completed_job(self, user_id: int, *, index: int) -> Job | None:
-        jobs = self.completed_jobs_for_user(user_id, limit=max(index, 10))
-        return self.select_from_completed_jobs(jobs, index=index)
-
-    @staticmethod
-    def select_from_completed_jobs(jobs: list[Job], *, index: int) -> Job | None:
-        if index <= 0 or index > len(jobs):
-            return None
-        return jobs[index - 1]
 
     def prefetch_titles(self, jobs: list[Job]) -> dict[str, str]:
         if self._title_source is None:
@@ -72,7 +39,11 @@ class HistoryCollaboration:
                 titles[slug] = metadata.title
         return titles
 
-    def format_job(self, job: Job, prefetched_titles: dict[str, str] | None = None) -> str:
+    def format_job(
+        self,
+        job: Job,
+        prefetched_titles: dict[str, str] | None = None,
+    ) -> str:
         slug = self.snapshot_ref_for_job(job)
         title: str | None = None
         if slug is not None and prefetched_titles is not None:
@@ -98,17 +69,12 @@ class HistoryCollaboration:
 
     @staticmethod
     def snapshot_ref_for_job(job: Job) -> str | None:
-        """Retorna apenas a associação estruturada durável.
-
-        Jobs históricos recebem essa referência durante a migração SQLite; não
-        reconstruímos silenciosamente uma referência ausente a partir do Markdown.
-        """
-
         return job.canonical_transcript_ref
 
 
 def parse_history_index(text: str) -> int:
-    """Extrai o índice legado, usando 1 quando o argumento é omitido ou inválido."""
+    """Parse transport command index; omitted or invalid preserves legacy index 1."""
+
     parts = (text or "").strip().split()
     if len(parts) < 2:
         return 1

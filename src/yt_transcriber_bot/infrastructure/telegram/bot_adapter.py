@@ -73,6 +73,10 @@ from yt_transcriber_bot.application.workflows.execution_queue import (
     QueuedItem,
     SequentialJobQueue,
 )
+from yt_transcriber_bot.application.workflows.history import (
+    CompletedHistoryWorkflow,
+    MarkdownRetrievalState,
+)
 from yt_transcriber_bot.domain.entities.job import Job
 from yt_transcriber_bot.domain.value_objects.media_source import MediaSource, MediaSourceType
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
@@ -99,7 +103,7 @@ from yt_transcriber_bot.infrastructure.summarization.transcript_summarizer impor
     TranscriptSummaryService,
 )
 from yt_transcriber_bot.infrastructure.telegram.history import (
-    HistoryCollaboration,
+    HistoryPresentation,
     parse_history_index,
 )
 from yt_transcriber_bot.infrastructure.telegram.progress_reporter import (
@@ -300,7 +304,11 @@ class TelegramBotAdapter:
         self._use_case = use_case
         self._repository = repository
         self._rename_service = rename_service
-        self._history = HistoryCollaboration(repository, rename_service)
+        self._completed_history = CompletedHistoryWorkflow(
+            repository,
+            markdown_available=Path.is_file,
+        )
+        self._history = HistoryPresentation(rename_service)
         self._export_service = export_service
         self._plain_text_export_service = plain_text_export_service
         self._summary_service = summary_service
@@ -961,7 +969,7 @@ class TelegramBotAdapter:
         if self._repository is None:
             await self._send_text(chat_id, "Histórico indisponível neste bot.")
             return
-        jobs = self._history.completed_jobs_for_user(user_id, limit=10)
+        jobs = self._completed_history.list_completed(user_id, limit=10)
         if not jobs:
             await self._send_text(chat_id, "Nenhuma transcrição concluída registrada ainda.")
             return
@@ -1002,7 +1010,7 @@ class TelegramBotAdapter:
 
         # O índice deve continuar compatível com /last, /summary e exportações.
         # O backend limita o backfill pesquisável aos 200 mais recentes.
-        history = self._history.completed_jobs_for_user(user_id, limit=200)
+        history = self._completed_history.list_completed(user_id, limit=200)
         history_indexes = {job.job_id: index for index, job in enumerate(history, start=1)}
         lines = [f"Resultados para “{query}”: "]
         for result in results:
@@ -1032,14 +1040,15 @@ class TelegramBotAdapter:
         selected = await self._select_completed_job(chat_id=chat_id, user_id=user_id, index=index)
         if selected is None:
             return
-        if selected.md_path is None:
+        retrieval = self._completed_history.resolve_markdown(selected)
+        if retrieval.markdown_state is MarkdownRetrievalState.MISSING_REFERENCE:
             await self._send_text(chat_id, "O arquivo desse job não está mais disponível.")
             return
-        path = Path(selected.md_path)
-        if not path.is_file():
+        if retrieval.markdown_state is MarkdownRetrievalState.MISSING_FILE:
             await self._send_text(chat_id, "O Markdown desse job foi removido ou movido.")
             return
-        await self._send_document_with_retry(chat_id, path)
+        assert retrieval.markdown_path is not None
+        await self._send_document_with_retry(chat_id, retrieval.markdown_path)
 
     async def handle_command_rename(self, *, chat_id: int, user_id: int, text: str = "") -> None:
         if not self._is_authorized(user_id):
@@ -1123,7 +1132,7 @@ class TelegramBotAdapter:
         if index <= 0:
             await self._send_text(chat_id, "Use um número positivo. Exemplo: /last 2 ou /rename 2.")
             return None
-        jobs = self._history.completed_jobs_for_user(user_id, limit=max(index, 10))
+        jobs = self._completed_history.list_completed(user_id, limit=max(index, 10))
         if not jobs:
             await self._send_text(chat_id, "Sem transcrições concluídas ainda.")
             return None
@@ -1133,7 +1142,7 @@ class TelegramBotAdapter:
                 f"Não encontrei a transcrição #{index}. Use /list para ver as opções disponíveis.",
             )
             return None
-        return self._history.select_from_completed_jobs(jobs, index=index)
+        return self._completed_history.select_from_completed(jobs, index=index)
 
     async def handle_command_summary(self, *, chat_id: int, user_id: int, text: str = "") -> None:
         """Gera resumo estruturado em Markdown para uma transcrição concluída."""
@@ -1626,7 +1635,7 @@ class TelegramBotAdapter:
 
     @staticmethod
     def _slug_from_md_path(md_path: str | None) -> str | None:
-        return HistoryCollaboration.slug_from_md_path(md_path)
+        return HistoryPresentation.slug_from_md_path(md_path)
 
     @staticmethod
     def _snapshot_ref_for_job(job: Job) -> str | None:

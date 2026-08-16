@@ -48,7 +48,7 @@ from yt_transcriber_bot.infrastructure.telegram.bot_adapter import (
     TelegramBotAdapter,
     _parse_rename_mapping,
 )
-from yt_transcriber_bot.infrastructure.telegram.history import HistoryCollaboration
+from yt_transcriber_bot.infrastructure.telegram.history import HistoryPresentation
 
 # --------------------------------------------------------------------
 # Fakes
@@ -428,29 +428,7 @@ def _populate_snapshot(snapshots: TranscriptSnapshotRepository, slug: str) -> No
 # --------------------------------------------------------------------
 
 
-def test_history_collaboration_filters_scopes_sorts_and_limits_completed_jobs(
-    repo: FakeRepo, tmp_path: Path
-) -> None:
-    """Caracteriza a base comum de histórico usada pelos comandos numerados."""
-    older = _make_completed_job(42, tmp_path / "older.md", datetime(2026, 5, 1, 9, 0, tzinfo=UTC))
-    newer = _make_completed_job(42, tmp_path / "newer.md", datetime(2026, 5, 1, 11, 0, tzinfo=UTC))
-    foreign = _make_completed_job(
-        7, tmp_path / "foreign.md", datetime(2026, 5, 1, 12, 0, tzinfo=UTC)
-    )
-    pending = Job.new(VideoId("L9awVwLDH18"), 42)
-    repo.save(older)
-    repo.save(newer)
-    repo.save(foreign)
-    repo.save(pending)
-
-    history = HistoryCollaboration(repo)  # type: ignore[arg-type]
-
-    assert history.completed_jobs_for_user(42, limit=1) == [newer]
-    assert history.select_completed_job(42, index=2) == older
-    assert history.select_completed_job(42, index=3) is None
-
-
-def test_history_collaboration_prefers_batch_titles_and_falls_back_to_slug(
+def test_history_presentation_prefers_batch_titles_and_falls_back_to_slug(
     repo: FakeRepo, tmp_path: Path
 ) -> None:
     """Caracteriza o prefetch único para /list e o fallback textual legado."""
@@ -485,8 +463,8 @@ def test_history_collaboration_prefers_batch_titles_and_falls_back_to_slug(
     repo.save(named)
     repo.save(fallback)
     provider = TitleProvider()
-    history = HistoryCollaboration(repo, provider)  # type: ignore[arg-type]
-    jobs = history.completed_jobs_for_user(42, limit=10)
+    history = HistoryPresentation(provider)
+    jobs = [fallback, named]
 
     titles = history.prefetch_titles(jobs)
 
