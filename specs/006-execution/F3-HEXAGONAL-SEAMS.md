@@ -1,6 +1,6 @@
 # F3 — Hexagonal boundaries and provider seams
 
-Status: **In progress — TASK-P03-001..008 and TASK-P03-010 locally verified; TASK-P03-009 next**
+Status: **In progress — TASK-P03-001..010 locally verified; TASK-P03-011 next**
 Plan: `PLAN-003`
 Base revision: `f2e265acbcc8b2a4cef601e160ae13193f49d979`
 Started: 2026-08-15
@@ -414,9 +414,68 @@ git diff --check: green
 No frozen normative plan/task text is changed by this execution closure.
 
 
+### TASK-P03-009 — Canonical transcript store and renderer contracts
+
+Status: **Locally verified — REQ-ARC-006 closed**
+
+Application transcript workflows now depend on explicit, application-owned
+capabilities instead of concrete filesystem snapshot and Markdown renderer
+classes.
+
+Implementation boundary:
+
+- `application.ports.canonical_transcript` owns the canonical transcript
+  record/store contract and the explicit canonical reference used for durable
+  save/load;
+- `application.ports.transcript_renderer` owns the renderer request/contract;
+  rendering consumes structured transcript evidence, aliases and provenance and
+  returns Markdown without owning persistence;
+- the filesystem snapshot repository implements the canonical store capability
+  and preserves version-aware schema decoding;
+- missing or corrupt structured evidence is surfaced explicitly rather than
+  reconstructed from Markdown filenames or silently ignored;
+- `RenderMarkdownStep`, speaker rename and transcription orchestration no longer
+  import concrete snapshot/renderer infrastructure;
+- transcript text-integrity helpers are application-owned so transcript
+  consumers no longer cross the application/infrastructure boundary for
+  normalization;
+- exporters and summarization consume the canonical structured transcript
+  contract while concrete persistence/rendering remain infrastructure adapters;
+- composition injects the concrete canonical store and renderer implementations.
+
+The migration ratchet now reports zero known forbidden
+`application -> infrastructure` imports. The temporary
+`f3_known_dependency_violations.txt` manifest is intentionally retained as empty
+scaffolding because final removal remains owned by TASK-P03-012.
+
+#### P03-009 closure evidence
+
+```text
+canonical transcript contract conformance: 17 passed
+default gate: 840 passed / 47 deselected / 887 collected
+integration gate: 47 passed / 840 deselected / 887 collected
+mypy: 113 source files / zero issues
+Ruff auto-fix + format + strict lint: 225 files / green
+security scanner: clean
+Gitleaks: 41 commits / ~2.99 MB scanned / no leaks
+compileall: green
+pre-commit security hooks: green
+git diff --check: green
+known dependency violation set: zero
+```
+
+Integrated locally on `main` as:
+
+```text
+0d5d154 refactor: establish canonical transcript store and renderer contracts
+```
+
+No frozen normative plan/task text is changed by this execution closure.
+
+
 ## Next task
 
-Proceed to `TASK-P03-009 — Canonical transcript store and renderer contracts`.
+Proceed to `TASK-P03-011 — Remove obsolete generic FileStorage`.
 
 ## Gate state
 
