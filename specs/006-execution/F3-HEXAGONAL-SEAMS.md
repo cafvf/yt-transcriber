@@ -1,6 +1,6 @@
 # F3 — Hexagonal boundaries and provider seams
 
-Status: **In progress — TASK-P03-001..006 locally verified; TASK-P03-007 next**
+Status: **In progress — TASK-P03-001..007 and TASK-P03-010 locally verified; TASK-P03-008 next**
 Plan: `PLAN-003`
 Base revision: `f2e265acbcc8b2a4cef601e160ae13193f49d979`
 Started: 2026-08-15
@@ -252,9 +252,115 @@ git diff --check: green
 
 No stage, commit or push is part of this local verification.
 
+
+### TASK-P03-007 — Backend-neutral ASR contract
+
+Status: **Locally verified — REQ-ARC-013 closed**
+
+The application-facing ASR seam now accepts a backend-neutral
+`TranscriptionRequest` carrying audio input, language intent, cancellation,
+progress and a neutral processing profile. Provider/runtime-shaped
+`device`/`compute_type`/`model` arguments no longer define the application port.
+
+WhisperX remains the only concrete ASR backend in this remediation phase. Its
+adapter translates the neutral processing target, precision and opaque model id
+to WhisperX/CTranslate2-specific arguments internally. No alternative backend,
+multilingual expansion or translation feature is introduced by this task.
+
+The pre-task WhisperX behavioral test surface was preserved rather than
+replaced: all 19 selected baseline cases remain present and pass against the new
+request contract, including language normalization, requested-vs-observed
+language truth, OOM/generic error mapping, progress and segment filtering.
+
+#### P03-007 isolated closure evidence
+
+```text
+WhisperX behavioral inventory: 19 passed
+ASR/runtime/pipeline focused regressions: green
+F3 ASR/application-port conformance: green
+mypy: 109 source files / zero issues
+security scanner + Gitleaks: clean
+default gate: 795 passed / 47 deselected / 842 collected
+compileall: green
+pre-commit security hooks: green
+Ruff + format + diff-check: green
+```
+
+Integrated on `main` as:
+
+```text
+55aaa42 refactor: introduce backend-neutral ASR contract
+```
+
+### TASK-P03-010 — External-service disclosure boundary
+
+Status: **Locally verified — REQ-SEC-009 closed**
+
+Outbound text-generation endpoint/model selection is now composition/config
+owned. A non-loopback summary endpoint is accepted only when the operator
+explicitly configured `SUMMARY_BASE_URL`; loopback defaults remain usable
+without fabricated credentials or implicit remote disclosure.
+
+Provider-derived error detail is minimized before crossing operator-visible
+error/log boundaries:
+
+- arbitrary OpenAI-compatible HTTP response bodies are omitted rather than
+  echoed;
+- the established context-window diagnostic is retained only as a canonical
+  allowlisted message plus the existing operator hint, not as provider body
+  text;
+- YouTube/video-export provider detail passes through the shared sanitization
+  policy where it is surfaced or logged;
+- existing subtitle-fetch semantics remain frozen: non-transient `HTTPError`
+  and exhausted transient `URLError` keep their original exception types.
+
+#### P03-010 isolated closure evidence
+
+```text
+YouTube/video regression: 56 passed
+disclosure/text-generation regression: 55 passed
+composition regression: 10 passed
+mypy: 110 source files / zero issues
+security scanner + Gitleaks: clean
+default gate: 807 passed / 47 deselected / 854 collected
+compileall: green
+pre-commit security hooks: green
+Ruff + format + diff-check: green
+```
+
+Integrated on `main` as:
+
+```text
+df6d116 security: enforce external service disclosure boundary
+```
+
+### P03-007 + P03-010 combined integration evidence
+
+The two tasks were implemented and verified in independent Git worktrees, then
+integrated as separate commits into the same `main` tree. The combined gate is
+the closure evidence that the approved parallel execution did not introduce an
+integration conflict.
+
+```text
+F3 combined conformance: 34 passed
+ASR combined regression: 78 passed
+external-service combined regression: 104 passed
+default gate: 811 passed / 47 deselected / 858 collected
+mypy: 110 source files / zero issues
+Ruff: 220 files / green
+security scanner: clean
+Gitleaks: no leaks
+compileall: green
+pre-commit security hooks: green
+git diff --check: green
+combined main worktree: clean
+```
+
+No frozen normative plan/task text is changed by this execution closure.
+
 ## Next task
 
-Proceed to `TASK-P03-007 — Backend-neutral ASR contract`.
+Proceed to `TASK-P03-008 — Diarization capability, fallback and credential isolation`.
 
 ## Gate state
 
