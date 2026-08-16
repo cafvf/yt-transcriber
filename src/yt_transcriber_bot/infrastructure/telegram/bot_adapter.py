@@ -618,11 +618,11 @@ class TelegramBotAdapter:
         job = admission.job
         prefix = "🔁 Reprocessando" if admission.is_reprocess else "📥 Recebido"
         lang_line = (
-            f"\\n🌐 Idioma informado: {requested_language}"
+            f"\n🌐 Idioma informado: {requested_language}"
             if requested_language
-            else "\\n🌐 Idioma: automático"
+            else "\n🌐 Idioma: automático"
         )
-        message_id = await self._send_text(chat_id, f"{prefix}: {url}{lang_line}\\nEnfileirando…")
+        message_id = await self._send_text(chat_id, f"{prefix}: {url}{lang_line}\nEnfileirando…")
         payload = JobPayload(
             job_id=job.job_id,
             chat_id=chat_id,

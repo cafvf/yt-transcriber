@@ -919,7 +919,10 @@ async def test_redo_enqueues_fresh_processing(
         user_id=42,
         text="/redo https://youtu.be/dQw4w9WgXcQ",
     )
-    assert any("Reprocessando" in text and "Enfileirando" in text for _, text, *_ in client.sent)
+    redo_messages = [text for _, text, *_ in client.sent if "Reprocessando" in text]
+    assert redo_messages
+    assert any("\n🌐 Idioma: automático\nEnfileirando…" in text for text in redo_messages)
+    assert all("\\n" not in text for text in redo_messages)
 
 
 @pytest.mark.asyncio
