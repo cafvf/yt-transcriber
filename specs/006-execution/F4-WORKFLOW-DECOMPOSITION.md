@@ -1,6 +1,6 @@
 # F4 — Application/Telegram workflow decomposition
 
-Status: **Active — execution subphases A and B published and closed; execution paused before subphase C for review/discussion**
+Status: **Active — execution subphases A and B published/closed; Subphase C verified/closed at the functional revision below; Subphase D is next**
 Plan: `PLAN-004`
 Base revision: `7c52c0d1d8682f4a1b59d8eeb57324171fa42fc7`
 Started: 2026-08-16
@@ -18,7 +18,7 @@ boundaries without changing any frozen task dependency or PLAN exit gate:
 |---|---|---|---|
 | A | `TASK-P04-001` | establish application workflow/admission seam | **Published / closed** |
 | B | `TASK-P04-002..003` | execution/queue/cancel/recovery plus completed-history workflow | **Published / closed** |
-| C | `TASK-P04-004..013` | derived data, search, summary and operational decomposition | Pending |
+| C | `TASK-P04-004..013` | derived data, search, summary and operational decomposition | **Verified / closed at `0e2bb0a`** |
 | D | `TASK-P04-014..017` | thin-Telegram closure, reliability, convergence and PLAN-004 exit gate | Pending |
 
 The existing F4/F5 phase definitions remain authoritative as the execution
@@ -422,3 +422,99 @@ Subphase B passed its combined convergence gate and was published to
 `origin/main` at `b9f2eba7e005af87ec7a97ffe6c0e830fdeedbdc`.
 
 Execution is intentionally paused before Subphase C for review/discussion.
+
+
+## Subphase C — closure evidence
+
+Status: **Verified / closed**
+
+Functional commit:
+
+```text
+0e2bb0ae4cb4131a99be7e661309bb5dba16a894
+refactor: complete PLAN-004 Subphase C decomposition
+```
+
+Gate run recorded at: `20260816T230554Z`.
+
+### Implemented boundary
+
+Subphase C closes `TASK-P04-004..013` without changing frozen product scope.
+
+The functional revision establishes:
+
+- explicit derived-artifact association with `Job` and canonical transcript identity;
+- explicit textual-search document lifecycle and canonical-source association;
+- separation of Job lifecycle persistence from search indexing/query semantics;
+- application-owned textual-search orchestration;
+- application-owned transcript edit/export/video-derivative orchestration;
+- application-owned summary selection, chunking/reduction, prompt/output and retry policy,
+  with text-generation transport and concrete tokenizer integration remaining infrastructure;
+- bounded private application/audit/operational-error logging;
+- explicit reconstructible-cache ownership and safe cleanup;
+- purpose-specific operational probes/stores/cleanup capabilities instead of direct
+  external I/O in application policy;
+- application-owned health, last-error, cache-clear and retention orchestration.
+
+The runtime composition delegates these portable workflows through Application-owned
+capabilities. Residual Telegram migration scaffolding is intentionally left for the
+single thin-transport closure owner, `TASK-P04-014`, rather than being removed early.
+
+No translation semantics, semantic search, checkpoint resume, multi-user behavior or
+knowledge-system integration was introduced.
+
+### TDD / characterization and gate evidence
+
+The Subphase C gate runner executed the focused characterization/regression groups,
+repository quality checks, security checks, default and integration pytest gates,
+compileall, pre-commit coverage for tracked plus newly created files, and final
+immutable Ruff/format/mypy/diff checks.
+
+Recorded command outcomes:
+
+- `focused_application` — exit `0`
+- `focused_persistence_search` — exit `0`
+- `focused_operational_storage` — exit `0`
+- `focused_existing_regressions` — exit `0`
+- `ruff_fix` — exit `0`
+- `ruff_format` — exit `0`
+- `ruff_strict` — exit `0`
+- `format_check` — exit `0`
+- `mypy` — exit `0`
+- `secret_scan` — exit `0`
+- `gitleaks` — exit `0`
+- `pytest_default` — exit `0`
+- `pytest_integration` — exit `0`
+- `compileall` — exit `0`
+- `benchmark_compile` — exit `0`
+- `precommit` — exit `0`
+- `final_ruff` — exit `0`
+- `final_format` — exit `0`
+- `final_mypy` — exit `0`
+- `diff_check` — exit `0`
+
+The complete command output was written to temporary local gate logs by the gate
+runner. Long-lived execution evidence is this versioned closure record plus the Git
+history; readiness evidence does not depend on indefinite runtime-log retention.
+
+### Requirement/task closure map
+
+- `TASK-P04-004` / `REQ-DATA-005`: derived artifact association and authority.
+- `TASK-P04-005` / `REQ-DATA-011`: textual-search index data and lifecycle.
+- `TASK-P04-006` / `REQ-ARC-007`: lifecycle persistence, indexing and search separation.
+- `TASK-P04-007`: textual-search application workflow.
+- `TASK-P04-008`: transcript edit/export/video-derivative orchestration.
+- `TASK-P04-009` / `REQ-ARC-008`: application summary policy and infrastructure
+  text-generation/tokenizer mechanisms.
+- `TASK-P04-010` / `REQ-DATA-006`: bounded private operational logs.
+- `TASK-P04-011` / `REQ-DATA-007`: reconstructible cache lifecycle.
+- `TASK-P04-012` / `REQ-ARC-009`: operational policy separated from external I/O.
+- `TASK-P04-013`: operational-command orchestration and retention invocation.
+
+## Next execution subphase after C
+
+Proceed to **Subphase D — `TASK-P04-014..017`** only after this documentation closure
+has been committed and the Subphase C publication boundary has been pushed/verified.
+
+Subphase D owns thin-Telegram closure, deterministic reliability/failure isolation,
+final cohesive-refactor convergence and the PLAN-004 exit gate.
