@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import shutil
 import threading
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -18,6 +17,7 @@ from yt_transcriber_bot.application.ports.audio_converter import (
 )
 from yt_transcriber_bot.application.ports.diarization_engine import (
     DiarizationEngine,
+    DiarizationRequest,
     DiarizationResult,
     DiarizedSpeakerSegment,
 )
@@ -239,22 +239,14 @@ class FakeDiarizationEngine(DiarizationEngine):
     raise_on_call: Exception | None = None
     calls: list[dict[str, object]] = field(default_factory=list)
 
-    def diarize(
-        self,
-        audio_path: Path,
-        *,
-        device: str,
-        min_speakers: int | None = None,
-        max_speakers: int | None = None,
-        progress: Callable[[float, str], None] | None = None,
-        cancel_event: threading.Event | None = None,
-    ) -> DiarizationResult:
+    def diarize(self, request: DiarizationRequest) -> DiarizationResult:
         self.calls.append(
             {
-                "audio_path": audio_path,
-                "device": device,
-                "min_speakers": min_speakers,
-                "max_speakers": max_speakers,
+                "request": request,
+                "audio_path": request.audio_path,
+                "processing_target": request.processing_target,
+                "min_speakers": request.min_speakers,
+                "max_speakers": request.max_speakers,
             }
         )
         if self.raise_on_call is not None:

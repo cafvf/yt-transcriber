@@ -19,6 +19,7 @@ from yt_transcriber_bot.application.config import AppSettings
 from yt_transcriber_bot.application.pipeline.context import PipelineContext
 from yt_transcriber_bot.application.ports.diarization_engine import (
     DiarizationError,
+    DiarizationProvenance,
     DiarizationResult,
     DiarizedSpeakerSegment,
 )
@@ -361,6 +362,57 @@ class TestHappyPath:
         assert snap.transcript.speaker_labels()
         assert snap.context.diarization_model == "custom/diarization-v1"
         assert snap.processing_provenance.diarization_model == "custom/diarization-v1"
+
+    def test_pipeline_persists_actual_diarization_backend_model_and_fallback(
+        self,
+        settings: AppSettings,
+        fake_repo: FakeJobRepository,
+        fake_downloader: FakeYouTubeDownloader,
+        fake_converter: FakeAudioConverter,
+        fake_gpu_cpu: FakeGpuDetector,
+        fake_transcription: FakeTranscriptionEngine,
+        fake_diarization: FakeDiarizationEngine,
+    ) -> None:
+        snapshots = TranscriptSnapshotRepository(settings.base_dir / "segments")
+        fake_diarization.result = DiarizationResult(
+            speaker_segments=(
+                DiarizedSpeakerSegment(
+                    start_seconds=0.0,
+                    end_seconds=10.0,
+                    speaker_label="SPEAKER_00",
+                ),
+            ),
+            total_speakers=1,
+            provenance=DiarizationProvenance(
+                backend="pyannote",
+                model="actual/diarization-model",
+                fallback_used=True,
+            ),
+        )
+        uc = _make_uc(
+            settings,
+            fake_repo=fake_repo,
+            fake_downloader=fake_downloader,
+            fake_converter=fake_converter,
+            fake_gpu_cpu=fake_gpu_cpu,
+            fake_transcription=fake_transcription,
+            fake_diarization=fake_diarization,
+            snapshot_repository=snapshots,
+            diarization_model_name="compatibility/model-must-not-win",
+        )
+
+        result = uc.execute(_job())
+
+        assert result.job.canonical_transcript_ref is not None
+        snapshot = snapshots.load(result.job.canonical_transcript_ref)
+        assert snapshot is not None
+        assert snapshot.processing_provenance.diarization_backend == "pyannote"
+        assert snapshot.processing_provenance.diarization_model == ("actual/diarization-model")
+        assert snapshot.processing_provenance.diarization_fallback_used is True
+        assert snapshot.context.diarization_model == "actual/diarization-model"
+        assert any(
+            "Fallback de diarização utilizado" in diagnostic for diagnostic in result.diagnostics
+        )
 
 
 # ======================================================================

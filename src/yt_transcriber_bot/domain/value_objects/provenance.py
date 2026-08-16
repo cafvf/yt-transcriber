@@ -15,6 +15,7 @@ class ProcessingProvenance:
     asr_fallback_used: bool | None = None
     diarization_backend: str | None = None
     diarization_model: str | None = None
+    diarization_fallback_used: bool | None = None
     language_source: str | None = None
 
     @classmethod
@@ -33,15 +34,19 @@ class ProcessingProvenance:
             raw = value.get(key)
             return str(raw) if isinstance(raw, str) and raw else None
 
-        fallback = value.get("asr_fallback_used")
+        asr_fallback = value.get("asr_fallback_used")
+        diarization_fallback = value.get("diarization_fallback_used")
         return cls(
             processing_path=text("processing_path"),
             transcription_backend=text("transcription_backend"),
             transcription_model=text("transcription_model"),
             device=text("device"),
             compute_type=text("compute_type"),
-            asr_fallback_used=fallback if isinstance(fallback, bool) else None,
+            asr_fallback_used=(asr_fallback if isinstance(asr_fallback, bool) else None),
             diarization_backend=text("diarization_backend"),
             diarization_model=text("diarization_model"),
+            diarization_fallback_used=(
+                diarization_fallback if isinstance(diarization_fallback, bool) else None
+            ),
             language_source=text("language_source"),
         )

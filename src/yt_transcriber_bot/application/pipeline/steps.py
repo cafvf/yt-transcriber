@@ -22,11 +22,13 @@ from yt_transcriber_bot.application.pipeline.runner import PipelineStep
 from yt_transcriber_bot.application.ports.audio_converter import AudioConverter
 from yt_transcriber_bot.application.ports.diarization_engine import (
     DiarizationEngine,
+    DiarizationRequest,
     assign_speakers_to_segments,
 )
 from yt_transcriber_bot.application.ports.gpu_detector import GpuDetector
 from yt_transcriber_bot.application.ports.transcription_engine import (
     OutOfMemoryError,
+    ProcessingTarget,
     TranscribedSegment,
     TranscriptionEngine,
     TranscriptionRequest,
@@ -726,7 +728,7 @@ class TranscribeStep(PipelineStep):
 
 
 class DiarizeStep(PipelineStep):
-    """Identifica falantes e cria a entidade Transcript final."""
+    """Identifies speakers and records the actual winning diarization provider."""
 
     @property
     def name(self) -> str:
@@ -752,34 +754,42 @@ class DiarizeStep(PipelineStep):
         if ctx.converted_audio_path is None:
             raise RuntimeError("DiarizeStep sem converted_audio_path")
 
-        device_str = "cpu"
-        if ctx.runtime_plan is not None:
-            device_str = str(ctx.runtime_plan.device)
-
-        if self._progress.on_progress:
-            self._progress.on_progress(0.10, "Preparando diarização...")
-        diar = self._engine.diarize(
-            ctx.converted_audio_path,
-            device=device_str,
-            progress=self._progress.on_progress,
-            cancel_event=ctx.cancel_event,
+        target = (
+            ctx.runtime_plan.processing_target()
+            if ctx.runtime_plan is not None
+            else ProcessingTarget.CPU
         )
         if self._progress.on_progress:
+            self._progress.on_progress(0.10, "Preparando diarização...")
+
+        diarization = self._engine.diarize(
+            DiarizationRequest(
+                audio_path=ctx.converted_audio_path,
+                processing_target=target,
+                progress=self._progress.on_progress,
+                cancel_event=ctx.cancel_event,
+            )
+        )
+
+        if self._progress.on_progress:
             self._progress.on_progress(0.75, "Associando falantes aos segmentos...")
-        assigned = assign_speakers_to_segments(ctx.transcribed_segments, diar)
+        assigned = assign_speakers_to_segments(
+            ctx.transcribed_segments,
+            diarization,
+        )
 
         segments: list[TranscriptSegment] = []
-        for seg, label in assigned:
-            if not seg.text.strip():
+        for segment, label in assigned:
+            if not segment.text.strip():
                 continue
-            end = max(seg.end_seconds, seg.start_seconds)
-            if end <= seg.start_seconds:
+            end = max(segment.end_seconds, segment.start_seconds)
+            if end <= segment.start_seconds:
                 continue
             segments.append(
                 TranscriptSegment(
-                    start_seconds=seg.start_seconds,
+                    start_seconds=segment.start_seconds,
                     end_seconds=end,
-                    text=seg.text,
+                    text=segment.text,
                     speaker_label=label or "UNKNOWN",
                 )
             )
@@ -790,11 +800,20 @@ class DiarizeStep(PipelineStep):
         if self._progress.on_progress:
             self._progress.on_progress(0.90, "Diarização concluída.")
 
+        observed = diarization.provenance
+        actual_model = observed.model or self._diarization_model_name
         ctx.processing_provenance = replace(
             ctx.processing_provenance,
-            diarization_backend="composite",
-            diarization_model=self._diarization_model_name,
+            diarization_backend=observed.backend,
+            diarization_model=actual_model,
+            diarization_fallback_used=observed.fallback_used,
         )
+        if observed.fallback_used:
+            ctx.add_diagnostic(
+                "Fallback de diarização utilizado"
+                + (f": backend efetivo={observed.backend}." if observed.backend else ".")
+            )
+
         source = "whisperx"
         if ctx.youtube_subtitle_used:
             source = "youtube_manual" if ctx.youtube_subtitle_kind == "manual" else "youtube_auto"
@@ -868,7 +887,9 @@ class RenderMarkdownStep(PipelineStep):
         render_context = RenderContext(
             rendered_at=datetime.now(UTC),
             whisper_model=whisper_model,
-            diarization_model=self._diar_model_name,
+            diarization_model=(
+                ctx.processing_provenance.diarization_model or self._diar_model_name
+            ),
             transcription_source=ctx.transcript.source,
         )
         rendered = self._renderer.render(  # type: ignore[attr-defined]

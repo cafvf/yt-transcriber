@@ -66,15 +66,16 @@ class RuntimePlan:
     model: ModelName
     reason: str
 
+    def processing_target(self) -> ProcessingTarget:
+        """Expose the selected application execution target without provider syntax."""
+        if self.device.is_cpu():
+            return ProcessingTarget.CPU
+        if self.device.is_cuda():
+            return ProcessingTarget.GPU
+        raise ValueError("RuntimePlan cannot expose unresolved device=auto")
+
     def to_transcription_profile(self) -> TranscriptionProcessingProfile:
         """Translate selected runtime facts to the neutral ASR profile."""
-        if self.device.is_cpu():
-            target = ProcessingTarget.CPU
-        elif self.device.is_cuda():
-            target = ProcessingTarget.GPU
-        else:
-            raise ValueError("RuntimePlan cannot expose unresolved device=auto to ASR")
-
         precision = {
             ComputeKind.AUTO: ProcessingPrecision.AUTOMATIC,
             ComputeKind.FLOAT32: ProcessingPrecision.FULL,
@@ -83,7 +84,7 @@ class RuntimePlan:
             ComputeKind.INT8_FLOAT16: ProcessingPrecision.EIGHT_BIT_HALF,
         }[self.compute_type.kind]
         return TranscriptionProcessingProfile(
-            target=target,
+            target=self.processing_target(),
             precision=precision,
             model_id=self.model.name,
         )

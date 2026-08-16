@@ -72,7 +72,11 @@ def test_real_whisperx_backend_uses_token_keyword(monkeypatch: Any, tmp_path: Pa
         )
     )
 
-    assert seen == {"token": "hf_x", "device": "cpu"}
+    assert seen == {
+        "model_name": "pyannote/speaker-diarization-community-1",
+        "token": "hf_x",
+        "device": "cpu",
+    }
     assert segs[0].speaker == "SPEAKER_00"
 
 

@@ -18,12 +18,15 @@ if TYPE_CHECKING:
         _RawDiarSegment,
     )
 
+DEFAULT_DIARIZATION_MODEL = "pyannote/speaker-diarization-community-1"
+
 
 class RealWhisperXDiarBackend:
-    """Wrapper preguiçoso sobre ``whisperx.diarize.DiarizationPipeline``."""
-
-    def __init__(self) -> None:
-        self._cache: dict[tuple[str, str], Any] = {}
+    def __init__(self, model_name: str = DEFAULT_DIARIZATION_MODEL) -> None:
+        if not model_name.strip():
+            raise ValueError("model_name cannot be empty")
+        self._model_name = model_name
+        self._cache: dict[tuple[str, str, str], Any] = {}
 
     def diarize(
         self,
@@ -42,13 +45,16 @@ class RealWhisperXDiarBackend:
             _RawDiarSegment,
         )
 
-        cache_key = (device, hf_token[:8])
+        cache_key = (self._model_name, device, hf_token[:8])
         raise_if_cancelled(cancel_event)
         if progress:
             progress(0.25, "Carregando modelo de diarização WhisperX/pyannote...")
         if cache_key not in self._cache:
             self._cache[cache_key] = call_with_hf_token(
-                DiarizationPipeline, hf_token=hf_token, device=device
+                DiarizationPipeline,
+                model_name=self._model_name,
+                hf_token=hf_token,
+                device=device,
             )
         pipeline = self._cache[cache_key]
         if progress:
@@ -62,7 +68,7 @@ class RealWhisperXDiarBackend:
         raise_if_cancelled(cancel_event)
         if progress:
             progress(0.75, "Coletando trechos por falante...")
-        out: list[_RawDiarSegment] = []
-        for start, end, speaker in iter_speaker_turns(annotation):
-            out.append(_RawDiarSegment(start=start, end=end, speaker=speaker))
-        return out
+        return [
+            _RawDiarSegment(start=start, end=end, speaker=speaker)
+            for start, end, speaker in iter_speaker_turns(annotation)
+        ]

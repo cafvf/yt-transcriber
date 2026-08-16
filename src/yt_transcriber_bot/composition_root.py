@@ -86,6 +86,8 @@ from yt_transcriber_bot.infrastructure.youtube.yt_dlp_real_factory import (
 
 logger = logging.getLogger(__name__)
 
+_DIARIZATION_MODEL_NAME = "pyannote/speaker-diarization-community-1"
+
 
 def _bound_error_sanitizer(settings: AppSettings) -> Callable[[str], str]:
     def sanitize(detail: str) -> str:
@@ -170,12 +172,14 @@ def _make_diarization_engine(hf_token: str) -> DiarizationEngine:
     )
 
     primary = WhisperXDiarizationEngine(
-        RealWhisperXDiarBackend(),
+        RealWhisperXDiarBackend(model_name=_DIARIZATION_MODEL_NAME),
         hf_token=hf_token,
+        model_id=_DIARIZATION_MODEL_NAME,
     )
     fallback = PyannoteDiarizationEngine(
-        RealPyannoteBackend(),
+        RealPyannoteBackend(model_name=_DIARIZATION_MODEL_NAME),
         hf_token=hf_token,
+        model_id=_DIARIZATION_MODEL_NAME,
     )
     return CompositeDiarizationEngine([primary, fallback])
 

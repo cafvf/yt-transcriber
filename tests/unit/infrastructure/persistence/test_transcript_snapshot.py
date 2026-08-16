@@ -63,8 +63,9 @@ def _make_snapshot() -> TranscriptSnapshot:
             device="cpu",
             compute_type="int8",
             asr_fallback_used=False,
-            diarization_backend="composite",
+            diarization_backend="pyannote",
             diarization_model="pyannote/speaker-diarization-community-1",
+            diarization_fallback_used=True,
             language_source="asr",
         ),
     )
@@ -83,6 +84,8 @@ def test_round_trip_v2_preserves_canonical_facts(tmp_path: Path) -> None:
     assert loaded is not None
     assert loaded.processing_fingerprint == "fingerprint-v1"
     assert loaded.processing_provenance.transcription_model == "small"
+    assert loaded.processing_provenance.diarization_backend == "pyannote"
+    assert loaded.processing_provenance.diarization_fallback_used is True
 
 
 def test_youtube_snapshot_round_trip_preserves_video_identity(tmp_path: Path) -> None:
