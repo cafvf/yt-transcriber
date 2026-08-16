@@ -26,6 +26,7 @@ from yt_transcriber_bot.application.ports.gpu_detector import HardwareProfile
 from yt_transcriber_bot.application.ports.transcription_engine import (
     OutOfMemoryError,
     TranscribedSegment,
+    TranscriptionRequest,
     TranscriptionResult,
 )
 from yt_transcriber_bot.application.ports.youtube_downloader import (
@@ -708,16 +709,9 @@ class _BlockingTranscriptionEngine(FakeTranscriptionEngine):
 
     def transcribe(
         self,
-        audio_path,
-        *,
-        device,
-        compute_type,
-        model,
-        allowed_languages,
-        language_hint=None,
-        progress=None,
-        cancel_event=None,
-    ):
+        request: TranscriptionRequest,
+    ) -> TranscriptionResult:
+        cancel_event = request.cancel_event
         self.started.set()
         while True:
             if cancel_event is not None and cancel_event.is_set():
@@ -965,20 +959,18 @@ class TestOomRetry:
         result = uc.execute(_job())
         assert result.job.status == JobStatus.DELIVERING
         assert len(fake_transcription.calls) == 2
-        # Segundo call deve ter modelo menor e device CPU
-        first = fake_transcription.calls[0]
-        second = fake_transcription.calls[1]
-        first_model = first["model"]
-        second_model = second["model"]
-        from yt_transcriber_bot.domain.value_objects.model_name import ModelName
+        # Segundo call deve usar perfil menor e CPU.
+        first_profile = fake_transcription.calls[0]["profile"]
+        second_profile = fake_transcription.calls[1]["profile"]
+        from yt_transcriber_bot.application.ports.transcription_engine import (
+            ProcessingTarget,
+            TranscriptionProcessingProfile,
+        )
 
-        assert isinstance(first_model, ModelName)
-        assert isinstance(second_model, ModelName)
-        assert second_model.name != first_model.name
-        from yt_transcriber_bot.domain.value_objects.device import Device
-
-        assert isinstance(second["device"], Device)
-        assert second["device"].is_cpu()
+        assert isinstance(first_profile, TranscriptionProcessingProfile)
+        assert isinstance(second_profile, TranscriptionProcessingProfile)
+        assert second_profile.model_id != first_profile.model_id
+        assert second_profile.target is ProcessingTarget.CPU
 
 
 # ======================================================================
@@ -1322,12 +1314,15 @@ class TestRuntimeSelection:
         )
         result = uc.execute(_job())
         assert result.job.status == JobStatus.DELIVERING
-        # Engine deve ter sido chamado com device CUDA
-        from yt_transcriber_bot.domain.value_objects.device import Device
+        # Engine deve receber perfil de execução GPU.
+        from yt_transcriber_bot.application.ports.transcription_engine import (
+            ProcessingTarget,
+            TranscriptionProcessingProfile,
+        )
 
-        d = fake_transcription.calls[0]["device"]
-        assert isinstance(d, Device)
-        assert d.is_cuda()
+        profile = fake_transcription.calls[0]["profile"]
+        assert isinstance(profile, TranscriptionProcessingProfile)
+        assert profile.target is ProcessingTarget.GPU
 
 
 class TestAutoSubtitleQualityGate:

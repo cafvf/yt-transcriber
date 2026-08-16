@@ -1,4 +1,4 @@
-"""Porta ``TranscriptionEngine`` — contrato source-neutral de transcrição."""
+"""Application-owned, backend-neutral ASR capability contract."""
 
 from __future__ import annotations
 
@@ -6,20 +6,44 @@ import threading
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
-from yt_transcriber_bot.domain.value_objects.compute_type import ComputeType
-from yt_transcriber_bot.domain.value_objects.device import Device
 from yt_transcriber_bot.domain.value_objects.language import Language, LanguageSource
-from yt_transcriber_bot.domain.value_objects.model_name import ModelName
 
 
 class TranscriptionError(Exception):
-    """Erro durante a transcrição."""
+    """Failure while executing ASR."""
 
 
 class OutOfMemoryError(TranscriptionError):
-    """Erro específico de OOM (CUDA/CPU)."""
+    """Backend reported an out-of-memory execution failure."""
+
+
+class ProcessingTarget(StrEnum):
+    CPU = "cpu"
+    GPU = "gpu"
+
+
+class ProcessingPrecision(StrEnum):
+    AUTOMATIC = "automatic"
+    FULL = "full"
+    HALF = "half"
+    EIGHT_BIT = "eight_bit"
+    EIGHT_BIT_HALF = "eight_bit_half"
+
+
+@dataclass(frozen=True, slots=True)
+class TranscriptionProcessingProfile:
+    """Backend-neutral execution facts selected by application runtime policy."""
+
+    target: ProcessingTarget
+    precision: ProcessingPrecision
+    model_id: str
+
+    def __post_init__(self) -> None:
+        if not self.model_id.strip():
+            raise ValueError("model_id cannot be empty")
 
 
 @dataclass(frozen=True)
@@ -31,13 +55,7 @@ class TranscribedSegment:
 
 @dataclass(frozen=True)
 class TranscriptionResult:
-    """Resultado da transcrição sem inventar observação/confiança.
-
-    ``detected_language`` é o idioma efetivo usado pela transcrição por
-    compatibilidade de API. Quando um idioma foi forçado, ``language_confidence``
-    é ``None`` e a observação independente do backend, quando utilizável, fica
-    separada em ``observed_language``/``observed_language_confidence``.
-    """
+    """Structured ASR result with requested and independently observed language."""
 
     segments: tuple[TranscribedSegment, ...]
     detected_language: Language | None
@@ -51,17 +69,18 @@ class TranscriptionResult:
 ProgressCallback = Callable[[float, str], None]
 
 
+@dataclass(frozen=True)
+class TranscriptionRequest:
+    """Everything the application asks of an ASR capability."""
+
+    audio_path: Path
+    processing_profile: TranscriptionProcessingProfile
+    allowed_languages: tuple[Language, ...]
+    requested_language: Language | None = None
+    progress: ProgressCallback | None = None
+    cancel_event: threading.Event | None = None
+
+
 class TranscriptionEngine(ABC):
     @abstractmethod
-    def transcribe(
-        self,
-        audio_path: Path,
-        *,
-        device: Device,
-        compute_type: ComputeType,
-        model: ModelName,
-        allowed_languages: tuple[str, ...],
-        language_hint: str | None = None,
-        progress: ProgressCallback | None = None,
-        cancel_event: threading.Event | None = None,
-    ) -> TranscriptionResult: ...
+    def transcribe(self, request: TranscriptionRequest) -> TranscriptionResult: ...

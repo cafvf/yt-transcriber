@@ -29,6 +29,7 @@ from yt_transcriber_bot.application.ports.job_repository import JobRepository
 from yt_transcriber_bot.application.ports.transcription_engine import (
     TranscribedSegment,
     TranscriptionEngine,
+    TranscriptionRequest,
     TranscriptionResult,
 )
 from yt_transcriber_bot.application.ports.youtube_downloader import (
@@ -39,13 +40,8 @@ from yt_transcriber_bot.application.ports.youtube_downloader import (
 )
 from yt_transcriber_bot.domain.entities.job import Job, JobStatus
 from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
-from yt_transcriber_bot.domain.value_objects.compute_type import (
-    ComputeType,
-)
-from yt_transcriber_bot.domain.value_objects.device import Device
 from yt_transcriber_bot.domain.value_objects.duration import Duration
 from yt_transcriber_bot.domain.value_objects.language import Language
-from yt_transcriber_bot.domain.value_objects.model_name import ModelName
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
 
 # ----------------------------------------------------------------------
@@ -204,34 +200,28 @@ class FakeTranscriptionEngine(TranscriptionEngine):
     raise_on_call: Exception | None = None
     calls: list[dict[str, object]] = field(default_factory=list)
 
-    def transcribe(
-        self,
-        audio_path: Path,
-        *,
-        device: Device,
-        compute_type: ComputeType,
-        model: ModelName,
-        allowed_languages: tuple[str, ...],
-        language_hint: str | None = None,
-        progress: Callable[[float, str], None] | None = None,
-        cancel_event: threading.Event | None = None,
-    ) -> TranscriptionResult:
+    def transcribe(self, request: TranscriptionRequest) -> TranscriptionResult:
         self.calls.append(
             {
-                "audio_path": audio_path,
-                "device": device,
-                "compute_type": compute_type,
-                "model": model,
-                "allowed_languages": allowed_languages,
-                "language_hint": language_hint,
+                "request": request,
+                "audio_path": request.audio_path,
+                "profile": request.processing_profile,
+                "allowed_languages": request.allowed_languages,
+                "requested_language": request.requested_language,
             }
         )
         if self.raise_on_call is not None:
-            exc, self.raise_on_call = self.raise_on_call, None  # raise once
+            exc, self.raise_on_call = self.raise_on_call, None
             raise exc
         if self.result is None:
             return TranscriptionResult(
-                segments=(TranscribedSegment(start_seconds=0.0, end_seconds=2.0, text="Olá."),),
+                segments=(
+                    TranscribedSegment(
+                        start_seconds=0.0,
+                        end_seconds=2.0,
+                        text="Olá.",
+                    ),
+                ),
                 detected_language=Language(code="pt"),
                 language_confidence=0.95,
             )

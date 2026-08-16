@@ -29,6 +29,7 @@ from yt_transcriber_bot.application.ports.transcription_engine import (
     OutOfMemoryError,
     TranscribedSegment,
     TranscriptionEngine,
+    TranscriptionRequest,
 )
 from yt_transcriber_bot.application.ports.youtube_downloader import (
     NoAudioStreamError,
@@ -612,6 +613,27 @@ class TranscriptionStepProgress:
     on_progress: Callable[[float, str], None] | None = None
 
 
+def _transcription_request(
+    ctx: PipelineContext,
+    plan: RuntimePlan,
+    settings: AppSettings,
+    progress: TranscriptionStepProgress,
+) -> TranscriptionRequest:
+    if ctx.converted_audio_path is None:
+        raise RuntimeError("TranscribeStep sem áudio convertido")
+    requested_language = (
+        Language(code=ctx.requested_language) if ctx.requested_language is not None else None
+    )
+    return TranscriptionRequest(
+        audio_path=ctx.converted_audio_path,
+        processing_profile=plan.to_transcription_profile(),
+        allowed_languages=tuple(Language(code=code) for code in settings.allowed_languages),
+        requested_language=requested_language,
+        progress=progress.on_progress,
+        cancel_event=ctx.cancel_event,
+    )
+
+
 class TranscribeStep(PipelineStep):
     """Transcreve o áudio com retry automático em caso de OOM."""
 
@@ -643,14 +665,7 @@ class TranscribeStep(PipelineStep):
         fallback_used = False
         try:
             result = self._engine.transcribe(
-                ctx.converted_audio_path,
-                device=plan.device,
-                compute_type=plan.compute_type,
-                model=plan.model,
-                allowed_languages=tuple(self._settings.allowed_languages),
-                language_hint=ctx.requested_language,
-                progress=self._progress.on_progress,
-                cancel_event=ctx.cancel_event,
+                _transcription_request(ctx, plan, self._settings, self._progress)
             )
         except OutOfMemoryError as exc:
             ctx.add_diagnostic(f"OOM durante transcrição ({exc}); retentando menor.")
@@ -666,14 +681,7 @@ class TranscribeStep(PipelineStep):
             )
             ctx.runtime_plan = new_plan
             result = self._engine.transcribe(
-                ctx.converted_audio_path,
-                device=new_plan.device,
-                compute_type=new_plan.compute_type,
-                model=new_plan.model,
-                allowed_languages=tuple(self._settings.allowed_languages),
-                language_hint=ctx.requested_language,
-                progress=self._progress.on_progress,
-                cancel_event=ctx.cancel_event,
+                _transcription_request(ctx, new_plan, self._settings, self._progress)
             )
 
         ctx.transcribed_segments = result.segments

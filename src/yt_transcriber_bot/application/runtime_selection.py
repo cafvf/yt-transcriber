@@ -15,6 +15,11 @@ from dataclasses import dataclass
 
 from yt_transcriber_bot.application.config import AppSettings
 from yt_transcriber_bot.application.ports.gpu_detector import HardwareProfile
+from yt_transcriber_bot.application.ports.transcription_engine import (
+    ProcessingPrecision,
+    ProcessingTarget,
+    TranscriptionProcessingProfile,
+)
 from yt_transcriber_bot.domain.value_objects.compute_type import (
     ComputeKind,
     ComputeType,
@@ -60,6 +65,28 @@ class RuntimePlan:
     compute_type: ComputeType
     model: ModelName
     reason: str
+
+    def to_transcription_profile(self) -> TranscriptionProcessingProfile:
+        """Translate selected runtime facts to the neutral ASR profile."""
+        if self.device.is_cpu():
+            target = ProcessingTarget.CPU
+        elif self.device.is_cuda():
+            target = ProcessingTarget.GPU
+        else:
+            raise ValueError("RuntimePlan cannot expose unresolved device=auto to ASR")
+
+        precision = {
+            ComputeKind.AUTO: ProcessingPrecision.AUTOMATIC,
+            ComputeKind.FLOAT32: ProcessingPrecision.FULL,
+            ComputeKind.FLOAT16: ProcessingPrecision.HALF,
+            ComputeKind.INT8: ProcessingPrecision.EIGHT_BIT,
+            ComputeKind.INT8_FLOAT16: ProcessingPrecision.EIGHT_BIT_HALF,
+        }[self.compute_type.kind]
+        return TranscriptionProcessingProfile(
+            target=target,
+            precision=precision,
+            model_id=self.model.name,
+        )
 
 
 def select_runtime(

@@ -1,8 +1,9 @@
-"""Testes do WhisperXTranscriptionEngine com backend falso."""
+"""WhisperX adapter tests preserving the pre-P03-007 behavioral surface."""
 
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -10,11 +11,13 @@ import pytest
 
 from yt_transcriber_bot.application.ports.transcription_engine import (
     OutOfMemoryError,
+    ProcessingPrecision,
+    ProcessingTarget,
     TranscriptionError,
+    TranscriptionProcessingProfile,
+    TranscriptionRequest,
 )
-from yt_transcriber_bot.domain.value_objects.compute_type import ComputeType
-from yt_transcriber_bot.domain.value_objects.device import Device
-from yt_transcriber_bot.domain.value_objects.model_name import ModelName
+from yt_transcriber_bot.domain.value_objects.language import Language
 from yt_transcriber_bot.infrastructure.transcription.whisperx_engine import (
     WhisperXBackend,
     WhisperXTranscriptionEngine,
@@ -81,9 +84,9 @@ class FakeBackend(WhisperXBackend):
 
 
 def _make_audio(tmp_path: Path) -> Path:
-    p = tmp_path / "audio.ogg"
-    p.write_bytes(b"\x00" * 16)
-    return p
+    path = tmp_path / "audio.ogg"
+    path.write_bytes(b"\x00" * 16)
+    return path
 
 
 def _ok_aligned() -> _AlignedTranscription:
@@ -97,9 +100,34 @@ def _ok_aligned() -> _AlignedTranscription:
 
 def _ok_raw(lang: str = "en", prob: float = 0.97) -> _RawTranscription:
     return _RawTranscription(
-        segments=(),  # ignorados — usamos os do aligned
+        segments=(),
         language=lang,
         language_probability=prob,
+    )
+
+
+def _request(
+    audio_path: Path,
+    *,
+    target: ProcessingTarget = ProcessingTarget.CPU,
+    precision: ProcessingPrecision = ProcessingPrecision.EIGHT_BIT,
+    model_id: str = "small",
+    allowed_languages: tuple[str, ...] = ("pt", "en"),
+    requested_language: str | None = None,
+    progress: Callable[[float, str], None] | None = None,
+) -> TranscriptionRequest:
+    return TranscriptionRequest(
+        audio_path=audio_path,
+        processing_profile=TranscriptionProcessingProfile(
+            target=target,
+            precision=precision,
+            model_id=model_id,
+        ),
+        allowed_languages=tuple(Language(code=code) for code in allowed_languages),
+        requested_language=(
+            Language(code=requested_language) if requested_language is not None else None
+        ),
+        progress=progress,
     )
 
 
@@ -107,23 +135,16 @@ class TestInputValidation:
     def test_missing_audio_raises(self, tmp_path: Path) -> None:
         engine = WhisperXTranscriptionEngine(backend=FakeBackend())
         with pytest.raises(TranscriptionError, match="nao existe"):
-            engine.transcribe(
-                tmp_path / "missing.ogg",
-                device=Device.cpu(),
-                compute_type=ComputeType.from_string("int8"),
-                model=ModelName(name="small"),
-                allowed_languages=("pt", "en"),
-            )
+            engine.transcribe(_request(tmp_path / "missing.ogg"))
 
     def test_empty_allowed_languages_raises(self, tmp_path: Path) -> None:
         engine = WhisperXTranscriptionEngine(backend=FakeBackend())
         with pytest.raises(TranscriptionError, match="allowed_languages"):
             engine.transcribe(
-                _make_audio(tmp_path),
-                device=Device.cpu(),
-                compute_type=ComputeType.from_string("int8"),
-                model=ModelName(name="small"),
-                allowed_languages=(),
+                _request(
+                    _make_audio(tmp_path),
+                    allowed_languages=(),
+                )
             )
 
 
@@ -132,14 +153,9 @@ class TestHappyPath:
         backend = FakeBackend(raw=_ok_raw("en", 0.97), aligned=_ok_aligned())
         engine = WhisperXTranscriptionEngine(backend=backend)
 
-        result = engine.transcribe(
-            _make_audio(tmp_path),
-            device=Device.cpu(),
-            compute_type=ComputeType.from_string("int8"),
-            model=ModelName(name="small"),
-            allowed_languages=("pt", "en"),
-        )
+        result = engine.transcribe(_request(_make_audio(tmp_path)))
 
+        assert result.detected_language is not None
         assert result.detected_language.code == "en"
         assert result.language_confidence == pytest.approx(0.97)
         assert len(result.segments) == 2
@@ -147,17 +163,18 @@ class TestHappyPath:
         assert result.segments[0].start_seconds == 0.0
         assert result.segments[0].end_seconds == 2.5
 
-    def test_passes_correct_args_to_backend(self, tmp_path: Path) -> None:
+    def test_translates_neutral_profile_to_backend_arguments(self, tmp_path: Path) -> None:
         backend = FakeBackend(raw=_ok_raw("pt"), aligned=_ok_aligned())
         engine = WhisperXTranscriptionEngine(backend=backend)
         audio = _make_audio(tmp_path)
 
         engine.transcribe(
-            audio,
-            device=Device.cuda(),
-            compute_type=ComputeType.from_string("float16"),
-            model=ModelName(name="medium"),
-            allowed_languages=("pt", "en"),
+            _request(
+                audio,
+                target=ProcessingTarget.GPU,
+                precision=ProcessingPrecision.HALF,
+                model_id="medium",
+            )
         )
 
         call = backend.transcribe_calls[0]
@@ -173,16 +190,13 @@ class TestHappyPath:
         engine = WhisperXTranscriptionEngine(backend=backend)
 
         engine.transcribe(
-            _make_audio(tmp_path),
-            device=Device.cpu(),
-            compute_type=ComputeType.from_string("int8"),
-            model=ModelName(name="small"),
-            allowed_languages=("pt", "en"),
-            progress=lambda p, m: events.append((p, m)),
+            _request(
+                _make_audio(tmp_path),
+                progress=lambda percent, message: events.append((percent, message)),
+            )
         )
 
-        # Esperamos pelo menos 3 callbacks: 0.10, 0.50, 0.90
-        percents = [p for p, _ in events]
+        percents = [percent for percent, _ in events]
         assert 0.10 in percents
         assert 0.50 in percents
         assert 0.90 in percents
@@ -209,41 +223,35 @@ class TestLanguageEnforcement:
         backend = FakeBackend(raw=_ok_raw(detected), aligned=_ok_aligned())
         engine = WhisperXTranscriptionEngine(backend=backend)
         result = engine.transcribe(
-            _make_audio(tmp_path),
-            device=Device.cpu(),
-            compute_type=ComputeType.from_string("int8"),
-            model=ModelName(name="small"),
-            allowed_languages=allowed,
+            _request(
+                _make_audio(tmp_path),
+                allowed_languages=allowed,
+            )
         )
+        assert result.detected_language is not None
         assert result.detected_language.code == expected
 
     @pytest.mark.parametrize("detected", ["es", "fr", "ja"])
     def test_unsupported_observed_language_is_explicit_error(
-        self, tmp_path: Path, detected: str
+        self,
+        tmp_path: Path,
+        detected: str,
     ) -> None:
         backend = FakeBackend(raw=_ok_raw(detected), aligned=_ok_aligned())
         engine = WhisperXTranscriptionEngine(backend=backend)
 
         with pytest.raises(TranscriptionError, match="não suportado"):
-            engine.transcribe(
-                _make_audio(tmp_path),
-                device=Device.cpu(),
-                compute_type=ComputeType.from_string("int8"),
-                model=ModelName(name="small"),
-                allowed_languages=("pt", "en"),
-            )
+            engine.transcribe(_request(_make_audio(tmp_path)))
 
     def test_forced_language_is_not_reported_as_detector_confidence(self, tmp_path: Path) -> None:
         backend = FakeBackend(raw=_ok_raw("es", 0.88), aligned=_ok_aligned())
         engine = WhisperXTranscriptionEngine(backend=backend)
 
         result = engine.transcribe(
-            _make_audio(tmp_path),
-            device=Device.cpu(),
-            compute_type=ComputeType.from_string("int8"),
-            model=ModelName(name="small"),
-            allowed_languages=("pt", "en"),
-            language_hint="pt",
+            _request(
+                _make_audio(tmp_path),
+                requested_language="pt",
+            )
         )
 
         assert result.detected_language is not None
@@ -262,11 +270,12 @@ class TestErrorMapping:
         engine = WhisperXTranscriptionEngine(backend=backend)
         with pytest.raises(OutOfMemoryError):
             engine.transcribe(
-                _make_audio(tmp_path),
-                device=Device.cuda(),
-                compute_type=ComputeType.from_string("float16"),
-                model=ModelName(name="large-v3"),
-                allowed_languages=("pt", "en"),
+                _request(
+                    _make_audio(tmp_path),
+                    target=ProcessingTarget.GPU,
+                    precision=ProcessingPrecision.HALF,
+                    model_id="large-v3",
+                )
             )
 
     def test_oom_during_align_mapped(self, tmp_path: Path) -> None:
@@ -277,24 +286,19 @@ class TestErrorMapping:
         engine = WhisperXTranscriptionEngine(backend=backend)
         with pytest.raises(OutOfMemoryError):
             engine.transcribe(
-                _make_audio(tmp_path),
-                device=Device.cuda(),
-                compute_type=ComputeType.from_string("float16"),
-                model=ModelName(name="medium"),
-                allowed_languages=("pt", "en"),
+                _request(
+                    _make_audio(tmp_path),
+                    target=ProcessingTarget.GPU,
+                    precision=ProcessingPrecision.HALF,
+                    model_id="medium",
+                )
             )
 
     def test_generic_error_mapped(self, tmp_path: Path) -> None:
         backend = FakeBackend(transcribe_exc=ValueError("model not found"))
         engine = WhisperXTranscriptionEngine(backend=backend)
         with pytest.raises(TranscriptionError, match="model not found"):
-            engine.transcribe(
-                _make_audio(tmp_path),
-                device=Device.cpu(),
-                compute_type=ComputeType.from_string("int8"),
-                model=ModelName(name="small"),
-                allowed_languages=("pt", "en"),
-            )
+            engine.transcribe(_request(_make_audio(tmp_path)))
 
 
 class TestSegmentFiltering:
@@ -302,37 +306,33 @@ class TestSegmentFiltering:
         aligned = _AlignedTranscription(
             segments=(
                 {"start": 0.0, "end": 2.0, "text": "Valid"},
-                {"start": 2.0, "end": 2.0, "text": "zero duration"},  # invalido
-                {"start": 5.0, "end": 4.0, "text": "negative duration"},  # invalido
-                {"start": 6.0, "end": 8.0, "text": ""},  # texto vazio
-                {"start": 9.0, "end": 11.0, "text": "  "},  # texto whitespace
+                {"start": 2.0, "end": 2.0, "text": "zero duration"},
+                {"start": 5.0, "end": 4.0, "text": "negative duration"},
+                {"start": 6.0, "end": 8.0, "text": ""},
+                {"start": 9.0, "end": 11.0, "text": "  "},
                 {"start": 12.0, "end": 14.0, "text": "Also valid"},
             )
         )
         backend = FakeBackend(raw=_ok_raw("en"), aligned=aligned)
         engine = WhisperXTranscriptionEngine(backend=backend)
-        result = engine.transcribe(
-            _make_audio(tmp_path),
-            device=Device.cpu(),
-            compute_type=ComputeType.from_string("int8"),
-            model=ModelName(name="small"),
-            allowed_languages=("pt", "en"),
-        )
+        result = engine.transcribe(_request(_make_audio(tmp_path)))
+
         assert len(result.segments) == 2
         assert result.segments[0].text == "Valid"
         assert result.segments[1].text == "Also valid"
 
     def test_segments_text_is_stripped(self, tmp_path: Path) -> None:
         aligned = _AlignedTranscription(
-            segments=({"start": 0.0, "end": 2.0, "text": "  Hello world  "},)
+            segments=(
+                {
+                    "start": 0.0,
+                    "end": 2.0,
+                    "text": "  Hello world  ",
+                },
+            )
         )
         backend = FakeBackend(raw=_ok_raw("en"), aligned=aligned)
         engine = WhisperXTranscriptionEngine(backend=backend)
-        result = engine.transcribe(
-            _make_audio(tmp_path),
-            device=Device.cpu(),
-            compute_type=ComputeType.from_string("int8"),
-            model=ModelName(name="small"),
-            allowed_languages=("pt", "en"),
-        )
+        result = engine.transcribe(_request(_make_audio(tmp_path)))
+
         assert result.segments[0].text == "Hello world"

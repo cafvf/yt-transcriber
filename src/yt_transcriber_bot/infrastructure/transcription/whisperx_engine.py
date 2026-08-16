@@ -1,4 +1,4 @@
-"""Implementação de ``TranscriptionEngine`` baseada em WhisperX/faster-whisper."""
+"""WhisperX adapter for the backend-neutral application ASR contract."""
 
 from __future__ import annotations
 
@@ -15,16 +15,15 @@ from yt_transcriber_bot.application.cancellation import (
 )
 from yt_transcriber_bot.application.ports.transcription_engine import (
     OutOfMemoryError,
-    ProgressCallback,
+    ProcessingPrecision,
+    ProcessingTarget,
     TranscribedSegment,
     TranscriptionEngine,
     TranscriptionError,
+    TranscriptionRequest,
     TranscriptionResult,
 )
-from yt_transcriber_bot.domain.value_objects.compute_type import ComputeType
-from yt_transcriber_bot.domain.value_objects.device import Device
 from yt_transcriber_bot.domain.value_objects.language import Language, LanguageSource
-from yt_transcriber_bot.domain.value_objects.model_name import ModelName
 
 
 @dataclass(frozen=True)
@@ -62,41 +61,46 @@ class WhisperXBackend(Protocol):
     ) -> _AlignedTranscription: ...
 
 
+_BACKEND_PRECISION = {
+    ProcessingPrecision.AUTOMATIC: "auto",
+    ProcessingPrecision.FULL: "float32",
+    ProcessingPrecision.HALF: "float16",
+    ProcessingPrecision.EIGHT_BIT: "int8",
+    ProcessingPrecision.EIGHT_BIT_HALF: "int8_float16",
+}
+
+
 class WhisperXTranscriptionEngine(TranscriptionEngine):
     def __init__(self, backend: WhisperXBackend) -> None:
         self._backend = backend
 
-    def transcribe(
-        self,
-        audio_path: Path,
-        *,
-        device: Device,
-        compute_type: ComputeType,
-        model: ModelName,
-        allowed_languages: tuple[str, ...],
-        language_hint: str | None = None,
-        progress: ProgressCallback | None = None,
-        cancel_event: threading.Event | None = None,
-    ) -> TranscriptionResult:
+    def transcribe(self, request: TranscriptionRequest) -> TranscriptionResult:
+        cancel_event = request.cancel_event
         raise_if_cancelled(cancel_event)
-        if not audio_path.exists():
-            raise TranscriptionError(f"Arquivo de audio nao existe: {audio_path}")
-        if not allowed_languages:
+        if not request.audio_path.exists():
+            raise TranscriptionError(f"Arquivo de audio nao existe: {request.audio_path}")
+        if not request.allowed_languages:
             raise TranscriptionError("allowed_languages nao pode ser vazio")
 
-        hint = _normalize_language_code(language_hint) if language_hint else None
-        if language_hint and hint not in allowed_languages:
-            raise TranscriptionError(f"idioma solicitado não permitido: {language_hint}")
+        allowed_languages = tuple(language.code for language in request.allowed_languages)
+        hint = request.requested_language.code if request.requested_language is not None else None
+        if hint is not None and hint not in allowed_languages:
+            raise TranscriptionError(f"idioma solicitado não permitido: {hint}")
 
-        if progress:
-            progress(0.10, "Preparando transcrição WhisperX...")
-            progress(0.25, "Carregando modelo e áudio...")
+        profile = request.processing_profile
+        device = "cuda" if profile.target is ProcessingTarget.GPU else "cpu"
+        compute_type = _BACKEND_PRECISION[profile.precision]
+        model = profile.model_id
+
+        if request.progress:
+            request.progress(0.10, "Preparando transcrição WhisperX...")
+            request.progress(0.25, "Carregando modelo e áudio...")
         try:
             raw = self._backend.transcribe(
-                audio_path,
-                device=str(device),
-                compute_type=str(compute_type),
-                model=model.name,
+                request.audio_path,
+                device=device,
+                compute_type=compute_type,
+                model=model,
                 allowed_languages=allowed_languages,
                 language_hint=hint,
                 cancel_event=cancel_event,
@@ -105,22 +109,22 @@ class WhisperXTranscriptionEngine(TranscriptionEngine):
             raise self._map_exception(exc) from exc
 
         raise_if_cancelled(cancel_event)
-        if progress:
-            progress(0.50, "Transcrição bruta concluída.")
-            progress(0.75, "Alinhando timestamps...")
+        if request.progress:
+            request.progress(0.50, "Transcrição bruta concluída.")
+            request.progress(0.75, "Alinhando timestamps...")
         try:
             aligned = self._backend.align(
                 raw,
-                audio_path,
-                device=str(device),
+                request.audio_path,
+                device=device,
                 cancel_event=cancel_event,
             )
         except Exception as exc:
             raise self._map_exception(exc) from exc
 
         raise_if_cancelled(cancel_event)
-        if progress:
-            progress(0.90, "Alinhamento concluído.")
+        if request.progress:
+            request.progress(0.90, "Alinhamento concluído.")
 
         observed_code = _normalize_language_code(raw.language)
         observed_language = Language(observed_code) if observed_code else None
@@ -149,7 +153,7 @@ class WhisperXTranscriptionEngine(TranscriptionEngine):
             detected_language=effective_language,
             language_confidence=confidence,
             language_source=source,
-            requested_language=Language(hint) if hint else None,
+            requested_language=request.requested_language,
             observed_language=observed_language,
             observed_language_confidence=observed_confidence,
         )
