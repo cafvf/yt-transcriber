@@ -17,7 +17,7 @@ boundaries without changing any frozen task dependency or PLAN exit gate:
 | Execution subphase | Approved task range | Purpose | State |
 |---|---|---|---|
 | A | `TASK-P04-001` | establish application workflow/admission seam | **Published / closed** |
-| B | `TASK-P04-002..003` | execution/queue/cancel/recovery plus completed-history workflow | **Next** |
+| B | `TASK-P04-002..003` | execution/queue/cancel/recovery plus completed-history workflow | **Active — P04-002 locally closed; P04-003 next** |
 | C | `TASK-P04-004..013` | derived data, search, summary and operational decomposition | Pending |
 | D | `TASK-P04-014..017` | thin-Telegram closure, reliability, convergence and PLAN-004 exit gate | Pending |
 
@@ -194,3 +194,122 @@ Proceed to **Subphase B — TASK-P04-002..003**:
 
 Subphase B must preserve the admission seam established by P04-001 and the
 closed PLAN-003 architecture invariants.
+
+## TASK-P04-002 — Application-owned execution, queue, cancellation and recovery coordination
+
+Status: **Verified / locally closed — Subphase B not yet published**
+
+Functional commit:
+
+```text
+d8055251f83f6fc400f6fe07b0f1e71425d9c289
+refactor: move execution coordination to application
+```
+
+### Implemented boundary
+
+P04-002 moved these portable responsibilities to Application:
+
+- sequential queue implementation and queue state;
+- creation and propagation of one cooperative cancellation token per queued item;
+- Job lifecycle transitions for execution start, unexpected failure, pending cancellation and primary-delivery outcome;
+- recoverable-pending startup result pairing `Job` with the validated `JobRequestContext`.
+
+Telegram keeps queue/status rendering, progress-message editing, send/retry mechanics,
+transport-facing recovery notifications and the current Telegram-specific execution payload.
+
+`infrastructure.telegram.job_queue` remains temporarily as a compatibility re-export;
+it no longer defines `SequentialJobQueue`. Final migration-scaffolding removal remains
+owned by `TASK-P04-014`.
+
+No checkpoint/resume behavior was introduced.
+
+### Characterization and TDD evidence
+
+Brownfield characterization showed that, before P04-002:
+
+- `SequentialJobQueue` was implemented under `infrastructure.telegram`;
+- `JobPayload` owned a `threading.Event` while the queue owned a separate cancellation event;
+- the pipeline received cancellation from the Telegram payload;
+- primary-delivery terminal lifecycle helpers were private methods on `TelegramBotAdapter`;
+- recoverable startup results returned `Job` values without carrying the validated request context.
+
+The first focused Green exposed one surviving brownfield test coupled to the old owner:
+
+```text
+1 failed / 122 passed / 3 deselected
+test_terminal_persistence_failure_is_not_silently_suppressed
+```
+
+The production behavior was not restored to Telegram. The same invariant was moved to
+`ExecutionLifecycleService`: a terminal persistence failure must propagate rather than
+being silently suppressed.
+
+After that ownership correction:
+
+```text
+focused tests: 123 passed / 3 deselected
+Ruff: green
+format: green
+```
+
+The focused support script then stopped because it invoked `uv run mypy` without a
+target. This was a support-script defect, not a source failure. The repository command
+was run explicitly:
+
+```text
+uv run mypy src
+Success: no issues found in 115 source files
+```
+
+Ownership scans were verified:
+
+```text
+SequentialJobQueue definition under infrastructure.telegram: absent
+cancel_event=payload.cancel_event in Telegram adapter: absent
+cancel_event=item.cancel_event in Telegram adapter: present
+ExecutionLifecycleService delegation in Telegram adapter: present
+git diff --cached --check: green
+```
+
+### Full local gate
+
+The final P04-002 worktree passed the standard PLAN-004 full gate:
+
+```text
+Ruff auto-fix / format / strict: green
+format check: 221 files formatted
+mypy: 115 source files / zero issues
+security scanner: clean
+Gitleaks: 54 commits / ~3.08 MB / no leaks
+
+default gate:
+  899 collected
+  35 deselected
+  864 passed
+
+integration gate:
+  899 collected
+  864 deselected
+  35 passed
+
+pre-commit sensitive-file/token hooks: green
+final Ruff/format/mypy: green
+```
+
+### REQ-ARC-003 acceptance evidence
+
+- **AC-01:** queue behavior is exercised by Application tests without Telegram classes.
+- **AC-02:** application lifecycle tests cover persisted start, cancellation, unexpected failure and primary-delivery terminal outcomes.
+- **AC-03:** the queue-owned application cancellation token is the same token passed into the transcription use case.
+- **AC-04:** startup recovery returns a recoverable `Job` together with its validated `JobRequestContext`, rather than requiring reconstruction from a Telegram payload.
+
+No product capability was added and no frozen normative requirement, plan or task text
+was modified.
+
+## TASK-P04-003 — Next
+
+Proceed to `TASK-P04-003`: move completed-history ordering, operator scoping,
+positional selection and canonical-Markdown retrieval decisions into an application
+capability. Keep command parsing, titles/formatting/buttons and send mechanics in
+Telegram, and keep textual search separate.

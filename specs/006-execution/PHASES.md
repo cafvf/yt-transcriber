@@ -40,4 +40,4 @@ dependencies, owners or gates:
 | C | `TASK-P04-004..013` | derived data, search, summary and operations |
 | D | `TASK-P04-014..017` | thin Telegram, reliability, convergence and exit gate |
 
-Subphase A is published and closed (`a68ba1c`, with post-push regression repair `8beea3d`); Subphase B is next.
+Subphase A is published and closed (`a68ba1c`, with post-push regression repair `8beea3d`). Subphase B is active: `TASK-P04-002` is locally closed at `d805525`; `TASK-P04-003` is next. Subphase B remains unpublished until both tasks are closed.
