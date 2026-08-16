@@ -29,8 +29,9 @@ _PROVIDER_OR_CONCRETE_ROOTS = {
 _GENERIC_STORAGE_STEMS = {
     "blob_store",
     "blob_storage",
-    "filesystem",
+    "file_storage",
     "file_system",
+    "filesystem",
     "generic_storage",
     "storage",
 }
@@ -103,31 +104,30 @@ def test_application_ports_do_not_import_known_provider_sdks() -> None:
     assert not violations, f"provider SDK imports in application ports: {violations!r}"
 
 
-def test_file_storage_is_the_only_temporary_generic_storage_surface() -> None:
-    generic_modules: list[str] = []
-
-    for path in PORTS_ROOT.glob("*.py"):
-        if path.name in {"__init__.py", "file_storage.py"}:
-            continue
-        if path.stem.lower() in _GENERIC_STORAGE_STEMS:
-            generic_modules.append(path.name)
+def test_obsolete_generic_file_storage_surface_is_absent() -> None:
+    generic_modules = sorted(
+        path.name
+        for path in PORTS_ROOT.glob("*.py")
+        if path.name != "__init__.py" and path.stem.lower() in _GENERIC_STORAGE_STEMS
+    )
 
     assert not generic_modules, (
-        "new generic storage ports are forbidden; FileStorage is the only "
-        f"temporary PLAN-003 exception: {sorted(generic_modules)!r}"
+        f"generic storage ports are forbidden after TASK-P03-011: {generic_modules!r}"
     )
 
-    file_storage = PORTS_ROOT / "file_storage.py"
-    assert file_storage.is_file(), (
-        "FileStorage disappeared before TASK-P03-011 could record replacement/no-consumer evidence"
+    obsolete_paths = (
+        PACKAGE_ROOT / "application" / "ports" / "file_storage.py",
+        PACKAGE_ROOT / "infrastructure" / "persistence" / "filesystem" / "local_file_storage.py",
     )
+    existing = [str(path.relative_to(REPO_ROOT)) for path in obsolete_paths if path.exists()]
+    assert not existing, f"obsolete generic storage files remain: {existing!r}"
 
-    tree = ast.parse(
-        file_storage.read_text(encoding="utf-8"),
-        filename=str(file_storage),
-    )
-    classes = {node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)}
-    assert "FileStorage" in classes, (
-        "temporary FileStorage exception changed shape; update P03-011 "
-        "migration evidence deliberately"
-    )
+    forbidden_symbols = ("FileStorage", "LocalFileStorage")
+    violations: list[str] = []
+    for path in sorted(PACKAGE_ROOT.rglob("*.py")):
+        text = path.read_text(encoding="utf-8")
+        for symbol in forbidden_symbols:
+            if symbol in text:
+                violations.append(f"{path.relative_to(REPO_ROOT)} contains {symbol}")
+
+    assert not violations, f"obsolete generic FileStorage runtime surface remains: {violations!r}"

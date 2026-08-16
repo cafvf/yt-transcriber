@@ -50,9 +50,6 @@ from yt_transcriber_bot.infrastructure.operational.health_probes import (
     module_available,
     probe_openai_compatible_models,
 )
-from yt_transcriber_bot.infrastructure.persistence.filesystem.local_file_storage import (
-    LocalFileStorage,
-)
 from yt_transcriber_bot.infrastructure.persistence.filesystem.transcript_snapshot import (
     TranscriptSnapshotRepository,
 )
@@ -101,7 +98,6 @@ def _bound_error_sanitizer(settings: AppSettings) -> Callable[[str], str]:
 class Composition:
     settings: AppSettings
     repository: JobRepository
-    file_storage: LocalFileStorage
     snapshots: TranscriptSnapshotRepository
     use_case: TranscribeVideoUseCase
     rename_service: RenameSpeakersService
@@ -260,7 +256,6 @@ def build(
     settings.db_path.parent.mkdir(parents=True, exist_ok=True)
 
     repository = SqlAlchemyJobRepository.from_url(f"sqlite:///{settings.db_path}")
-    file_storage = LocalFileStorage()
     snapshots = TranscriptSnapshotRepository(segments_dir)
 
     error_sanitizer = _bound_error_sanitizer(settings)
@@ -337,7 +332,6 @@ def build(
     return Composition(
         settings=settings,
         repository=repository,
-        file_storage=file_storage,
         snapshots=snapshots,
         use_case=use_case,
         rename_service=rename_service,
