@@ -3,12 +3,19 @@ from __future__ import annotations
 import threading
 import time
 
+CancellationToken = threading.Event
+
+
+def new_cancellation_token() -> CancellationToken:
+    """Cria o token cooperativo único usado pela fila e pelo pipeline."""
+    return threading.Event()
+
 
 class OperationCanceledError(Exception):
     """Operação abortada por cancelamento externo."""
 
 
-def raise_if_cancelled(cancel_event: threading.Event | None) -> None:
+def raise_if_cancelled(cancel_event: CancellationToken | None) -> None:
     if cancel_event is not None and cancel_event.is_set():
         raise OperationCanceledError("Operação cancelada pelo usuário")
 
@@ -16,7 +23,7 @@ def raise_if_cancelled(cancel_event: threading.Event | None) -> None:
 def sleep_with_cancel(
     delay_s: float,
     *,
-    cancel_event: threading.Event | None,
+    cancel_event: CancellationToken | None,
     poll_interval_s: float = 0.05,
 ) -> None:
     if delay_s <= 0:

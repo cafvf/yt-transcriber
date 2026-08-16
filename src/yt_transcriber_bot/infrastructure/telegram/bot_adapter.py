@@ -17,7 +17,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-import threading
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -46,7 +45,10 @@ from yt_transcriber_bot.application.services.retention_policy import (
     RetentionPolicy,
 )
 from yt_transcriber_bot.application.services.sanitization import sanitize_text
-from yt_transcriber_bot.application.services.startup_recovery import StartupRecoveryService
+from yt_transcriber_bot.application.services.startup_recovery import (
+    RecoveredPendingJob,
+    StartupRecoveryService,
+)
 from yt_transcriber_bot.application.use_cases.transcribe_video import (
     TranscribeVideoUseCase,
 )
@@ -63,7 +65,15 @@ from yt_transcriber_bot.application.workflows.admission import (
     prepare_validated_media_submission,
     validate_media_submission,
 )
-from yt_transcriber_bot.domain.entities.job import Job, JobStatus
+from yt_transcriber_bot.application.workflows.execution import (
+    ExecutionLifecycleService,
+    PrimaryDeliveryOutcome,
+)
+from yt_transcriber_bot.application.workflows.execution_queue import (
+    QueuedItem,
+    SequentialJobQueue,
+)
+from yt_transcriber_bot.domain.entities.job import Job
 from yt_transcriber_bot.domain.value_objects.media_source import MediaSource, MediaSourceType
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
 from yt_transcriber_bot.infrastructure.exporting.plain_text_exporter import (
@@ -91,10 +101,6 @@ from yt_transcriber_bot.infrastructure.summarization.transcript_summarizer impor
 from yt_transcriber_bot.infrastructure.telegram.history import (
     HistoryCollaboration,
     parse_history_index,
-)
-from yt_transcriber_bot.infrastructure.telegram.job_queue import (
-    QueuedItem,
-    SequentialJobQueue,
 )
 from yt_transcriber_bot.infrastructure.telegram.progress_reporter import (
     ProgressReporter,
@@ -246,7 +252,6 @@ class JobPayload:
     media_source: MediaSource | None = None
     source_title: str | None = None
     source_duration_seconds: int | None = None
-    cancel_event: threading.Event = field(default_factory=threading.Event)
 
 
 @dataclass
@@ -308,6 +313,7 @@ class TelegramBotAdapter:
         self._audit_logger = audit_logger
         self._media_downloader = media_downloader
         self._duration_inspector = duration_inspector
+        self._execution_lifecycle = ExecutionLifecycleService(repository)
         self._rename_session: RenameSession | None = None
         self._queue: SequentialJobQueue[JobPayload] = SequentialJobQueue(self._process_job)
         self._startup_recovery_service = (
@@ -833,8 +839,7 @@ class TelegramBotAdapter:
         removed = await self._queue.clear_pending()
         for item in pending:
             job = self._load_or_create_job(item.payload)
-            job.transition_to(JobStatus.CANCELLED, error="cancelado pelo usuário")
-            self._save_job_if_possible(job)
+            self._execution_lifecycle.cancel_pending(job, error="cancelado pelo usuário")
             self._cleanup_telegram_source(job)
         if removed == 0:
             await self._send_text(chat_id, "Não havia jobs pendentes para remover da fila.")
@@ -846,18 +851,12 @@ class TelegramBotAdapter:
     async def handle_command_cancelall(self, *, chat_id: int, user_id: int) -> None:
         if not self._is_authorized(user_id):
             return
-        current, pending = self._queue.snapshot()
-        if current is not None:
-            current.payload.cancel_event.set()
+        _, pending = self._queue.snapshot()
         current_cancelled, pending_cancelled = await self._queue.cancel_all()
         for item in pending:
             job = self._load_or_create_job(item.payload)
-            job.transition_to(JobStatus.CANCELLED, error="cancelado pelo usuário")
-            self._save_job_if_possible(job)
+            self._execution_lifecycle.cancel_pending(job, error="cancelado pelo usuário")
             self._cleanup_telegram_source(job)
-        current, _ = self._queue.snapshot()
-        if current is not None:
-            current.payload.cancel_event.set()
         if not current_cancelled and pending_cancelled == 0:
             await self._send_text(chat_id, "Nada para cancelar.")
             return
@@ -882,8 +881,7 @@ class TelegramBotAdapter:
         if current is None:
             await self._send_text(chat_id, "Nada para cancelar.")
             return
-        # Sinaliza ao runner do use case + ao loop da queue.
-        current.payload.cancel_event.set()
+        # A fila application-owned sinaliza o mesmo token recebido pelo pipeline.
         cancelled = await self._queue.cancel_current()
         if cancelled:
             await self._send_text(
@@ -1675,8 +1673,7 @@ class TelegramBotAdapter:
             asyncio.run_coroutine_threadsafe(progress.fixed_progress(fraction), loop)
 
         job = self._load_or_create_job(payload)
-        job.transition_to(JobStatus.ACQUIRING)
-        self._save_job_if_possible(job)
+        self._execution_lifecycle.start(job)
         self._audit(
             "job_started",
             job_id=job.job_id,
@@ -1703,7 +1700,7 @@ class TelegramBotAdapter:
                     progress_transcribe=progress_transcribe_cb,
                     progress_diarize=progress_diarize_cb,
                     audit=audit_cb,
-                    cancel_event=payload.cancel_event,
+                    cancel_event=item.cancel_event,
                     requested_language=payload.requested_language,
                     source_locator=payload.url,
                 ),
@@ -1714,8 +1711,7 @@ class TelegramBotAdapter:
                 type(exc).__name__,
             )
             failure_reason = f"Erro inesperado no pipeline: {type(exc).__name__}"
-            job.transition_to(JobStatus.FAILED, error=failure_reason)
-            self._save_job_if_possible(job)
+            self._execution_lifecycle.fail_unexpected(job, error=failure_reason)
             await self._record_operational_error(
                 user_id=payload.user_id,
                 operation="transcribe",
@@ -1763,7 +1759,7 @@ class TelegramBotAdapter:
             self._cleanup_telegram_source(result.job)
             return
 
-        self._mark_job_delivering(result.job)
+        self._execution_lifecycle.begin_primary_delivery(result.job)
 
         # Sucesso: envia áudio + markdown com retry.
         self._audit(
@@ -1791,7 +1787,9 @@ class TelegramBotAdapter:
         if delivery_failed:
             await self._mark_delivery_failed(payload, result.job)
             return
-        self._mark_job_completed_after_delivery(result.job)
+        self._execution_lifecycle.finish_primary_delivery(
+            result.job, PrimaryDeliveryOutcome(delivered=True)
+        )
         self._audit(
             "job_completed",
             job_id=result.job.job_id,
@@ -1896,8 +1894,8 @@ class TelegramBotAdapter:
         for job in result.interrupted_delivery_failed:
             self._cleanup_telegram_source(job)
             await self._notify_recovery_delivery_failure(job)
-        for job in result.pending_to_requeue:
-            await self._requeue_recovered_job(job)
+        for recovered in result.pending_to_requeue:
+            await self._requeue_recovered_job(recovered)
 
     async def _notify_recovery_failure(self, job: Job) -> None:
         request_context = self._request_context_for(job)
@@ -1921,8 +1919,9 @@ class TelegramBotAdapter:
             "para recuperar os caminhos locais quando disponíveis.",
         )
 
-    async def _requeue_recovered_job(self, job: Job) -> None:
-        request_context = self._request_context_for(job)
+    async def _requeue_recovered_job(self, recovered: RecoveredPendingJob) -> None:
+        job = recovered.job
+        request_context = recovered.request_context
         if (
             request_context is None
             or request_context.delivery_chat_id is None
@@ -1966,19 +1965,13 @@ class TelegramBotAdapter:
                 f"⏳ Posição na fila após recovery: {item.enqueued_position}.",
             )
 
-    def _mark_job_delivering(self, job: Job) -> None:
-        job.transition_to(JobStatus.DELIVERING)
-        self._save_job_if_possible(job)
-
-    def _mark_job_completed_after_delivery(self, job: Job) -> None:
-        job.transition_to(JobStatus.COMPLETED)
-        self._save_job_if_possible(job)
-
     async def _mark_delivery_failed(self, payload: JobPayload, job: Job) -> None:
         self._cleanup_telegram_source(job)
         message = "Falha na entrega dos artefatos pelo Telegram; arquivos preservados localmente."
-        job.transition_to(JobStatus.DELIVERY_FAILED, error=message)
-        self._save_job_if_possible(job)
+        self._execution_lifecycle.finish_primary_delivery(
+            job,
+            PrimaryDeliveryOutcome(delivered=False, error=message),
+        )
         context: dict[str, object] = {
             "job_id": job.job_id,
             "video_id": _video_id_value(job.video_id),

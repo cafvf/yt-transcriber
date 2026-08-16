@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from yt_transcriber_bot.infrastructure.telegram.job_queue import (
+from yt_transcriber_bot.application.workflows.execution_queue import (
     QueuedItem,
     SequentialJobQueue,
 )

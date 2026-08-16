@@ -14,9 +14,11 @@ import pytest
 
 from yt_transcriber_bot.application.config import AppSettings
 from yt_transcriber_bot.application.job_request_context import JobRequestContext
+from yt_transcriber_bot.application.services.startup_recovery import RecoveredPendingJob
 from yt_transcriber_bot.application.use_cases.transcribe_video import (
     TranscribeVideoResult,
 )
+from yt_transcriber_bot.application.workflows.execution_queue import QueuedItem
 from yt_transcriber_bot.domain.entities.job import Job, JobStatus
 from yt_transcriber_bot.domain.value_objects.media_source import MediaSource
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
@@ -31,7 +33,6 @@ from yt_transcriber_bot.infrastructure.telegram.bot_adapter import (
     TelegramBotAdapter,
     _make_editor,
 )
-from yt_transcriber_bot.infrastructure.telegram.job_queue import QueuedItem
 
 # --------------------------------------------------------------------
 # Fakes
@@ -507,30 +508,6 @@ async def test_pipeline_exception_marks_persisted_downloading_job_failed(
     assert stored.error_message == "Erro inesperado no pipeline: RuntimeError"
 
 
-def test_terminal_persistence_failure_is_not_silently_suppressed(
-    settings: AppSettings, client: FakeBotClient
-) -> None:
-    adapter = TelegramBotAdapter(
-        settings=settings,
-        client=client,
-        use_case=MagicMock(),
-        repository=FailingSaveRepo(),  # type: ignore[arg-type]
-    )
-    job = Job.new(VideoId("dQw4w9WgXcQ"), 42)
-    for status in (
-        JobStatus.ACQUIRING,
-        JobStatus.CONVERTING,
-        JobStatus.TRANSCRIBING,
-        JobStatus.DIARIZING,
-        JobStatus.RENDERING,
-        JobStatus.DELIVERING,
-    ):
-        job.transition_to(status)
-
-    with pytest.raises(OSError, match="database password"):
-        adapter._mark_job_completed_after_delivery(job)
-
-
 @pytest.mark.asyncio
 async def test_job_is_persisted_as_active_before_pipeline_execution(
     settings: AppSettings, client: FakeBotClient
@@ -709,43 +686,6 @@ async def test_cancelall_signals_active_use_case_cancel_event(
         await adapter.stop()
 
 
-@pytest.mark.asyncio
-async def test_cancelall_resnapshots_current_payload_after_queue_cancel(
-    settings: AppSettings, client: FakeBotClient, fake_use_case: FakeUseCase
-) -> None:
-    payload = JobPayload(
-        job_id=None,
-        chat_id=10,
-        user_id=42,
-        url="https://youtu.be/dQw4w9WgXcQ",
-        video_id=VideoId("dQw4w9WgXcQ"),
-        progress_message_id=100,
-    )
-
-    @dataclass
-    class CurrentItem:
-        payload: JobPayload
-
-    class RaceQueue:
-        def __init__(self) -> None:
-            self.current: CurrentItem | None = None
-
-        def snapshot(self) -> tuple[CurrentItem | None, tuple[object, ...]]:
-            return self.current, ()
-
-        async def cancel_all(self) -> tuple[bool, int]:
-            self.current = CurrentItem(payload=payload)
-            return True, 0
-
-    adapter = TelegramBotAdapter(settings=settings, client=client, use_case=fake_use_case)  # type: ignore[arg-type]
-    adapter._queue = RaceQueue()  # type: ignore[assignment]
-
-    await adapter.handle_command_cancelall(chat_id=10, user_id=42)
-
-    assert payload.cancel_event.is_set()
-    assert any("Cancelamento geral solicitado" in m.text for m in client.sent)
-
-
 # --------------------------------------------------------------------
 # Retry de envio
 # --------------------------------------------------------------------
@@ -766,7 +706,7 @@ async def test_send_message_retries_on_transient_error(
 # --------------------------------------------------------------------
 
 
-def test_job_payload_has_cancel_event() -> None:
+def test_job_payload_does_not_own_cancellation_token() -> None:
     p = JobPayload(
         job_id=None,
         chat_id=1,
@@ -775,8 +715,7 @@ def test_job_payload_has_cancel_event() -> None:
         video_id=VideoId("aaaaaaaaaaa"),
         progress_message_id=100,
     )
-    assert isinstance(p.cancel_event, threading.Event)
-    assert not p.cancel_event.is_set()
+    assert not hasattr(p, "cancel_event")
 
 
 @pytest.mark.asyncio
@@ -796,13 +735,12 @@ async def test_recovery_requeues_telegram_media_without_exposing_staging_path(
         source_duration_seconds=37,
         requested_language="pt",
     )
-    adapter._save_request_context_if_possible(
-        JobRequestContext(
-            job.job_id, delivery_chat_id=10, source_locator="/private/staging/private-file-id.ogg"
-        )
+    request_context = JobRequestContext(
+        job.job_id, delivery_chat_id=10, source_locator="/private/staging/private-file-id.ogg"
     )
+    adapter._save_request_context_if_possible(request_context)
 
-    await adapter._requeue_recovered_job(job)
+    await adapter._requeue_recovered_job(RecoveredPendingJob(job, request_context))
 
     _, pending = adapter._queue.snapshot()
     assert len(pending) == 1

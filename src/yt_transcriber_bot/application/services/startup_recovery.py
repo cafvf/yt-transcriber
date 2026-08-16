@@ -23,8 +23,14 @@ _INTERRUPTED_ACTIVE_STATES = frozenset(
 
 
 @dataclass(frozen=True)
+class RecoveredPendingJob:
+    job: Job
+    request_context: JobRequestContext
+
+
+@dataclass(frozen=True)
 class StartupRecoveryResult:
-    pending_to_requeue: tuple[Job, ...]
+    pending_to_requeue: tuple[RecoveredPendingJob, ...]
     interrupted_failed: tuple[Job, ...]
     interrupted_delivery_failed: tuple[Job, ...]
 
@@ -36,14 +42,17 @@ class StartupRecoveryService:
         self._repository = repository
 
     def recover(self) -> StartupRecoveryResult:
-        pending_to_requeue: list[Job] = []
+        pending_to_requeue: list[RecoveredPendingJob] = []
         interrupted_failed: list[Job] = []
         interrupted_delivery_failed: list[Job] = []
 
         for job in self._repository.list_by_statuses_oldest_first({JobStatus.PENDING}):
             request_context = self._repository.get_request_context(job.job_id)
             if self._has_restart_payload(job, request_context):
-                pending_to_requeue.append(job)
+                assert request_context is not None
+                pending_to_requeue.append(
+                    RecoveredPendingJob(job=job, request_context=request_context)
+                )
                 continue
             job.transition_to(
                 JobStatus.FAILED,

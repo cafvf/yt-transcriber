@@ -5,7 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from yt_transcriber_bot.application.job_request_context import JobRequestContext
-from yt_transcriber_bot.application.services.startup_recovery import StartupRecoveryService
+from yt_transcriber_bot.application.services.startup_recovery import (
+    RecoveredPendingJob,
+    StartupRecoveryService,
+)
 from yt_transcriber_bot.domain.entities.job import Job, JobStatus
 from yt_transcriber_bot.domain.value_objects.media_source import MediaSource
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
@@ -62,7 +65,7 @@ def test_pending_youtube_with_valid_request_context_is_requeued() -> None:
 
     result = StartupRecoveryService(repo).recover()  # type: ignore[arg-type]
 
-    assert result.pending_to_requeue == (job,)
+    assert result.pending_to_requeue == (RecoveredPendingJob(job, context),)
     assert job.status is JobStatus.PENDING
 
 
@@ -99,7 +102,7 @@ def test_pending_telegram_requires_existing_staged_media(tmp_path: Path) -> None
 
     result = StartupRecoveryService(repo).recover()  # type: ignore[arg-type]
 
-    assert result.pending_to_requeue == (job,)
+    assert result.pending_to_requeue == (RecoveredPendingJob(job, repo.contexts[job.job_id]),)
 
 
 def test_interrupted_active_job_becomes_failed() -> None:
