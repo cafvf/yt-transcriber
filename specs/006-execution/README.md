@@ -35,7 +35,7 @@ Current execution state:
 - F2 — domain and data truth: **Verified / Closed**;
 - F3 — hexagonal boundaries and provider seams: **Verified / Closed — TASK-P03-001..014 complete; PLAN-003 exit gate passed**;
 - F4/F5 — PLAN-004 workflow decomposition, reliability and convergence: **Verified / Closed at `095abd4` — PLAN-004 exit gate passed**;
-- Post-PLAN-004 roadmap: **Active — Package 1 (Product execution acceptance) is next**.
+- Post-PLAN-004 roadmap: **Active — Package 1 (Product execution acceptance) closed at `0f2e656`; Package 2 (Operator workflow acceptance) is next**.
 
 Detailed evidence is recorded in `F0-BASELINE.md`, `F1-SECURITY.md`,
 `F2-DOMAIN-DATA.md`, `F3-HEXAGONAL-SEAMS.md`, and

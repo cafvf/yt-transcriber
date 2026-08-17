@@ -40,7 +40,7 @@ dependencies, owners or gates:
 | C | `TASK-P04-004..013` | derived data, search, summary and operations |
 | D | `TASK-P04-014..017` | thin Telegram, reliability, convergence and exit gate |
 
-Subphases A, B and C are published/closed at their recorded revisions. Subphase D (`TASK-P04-014..017`) is verified/closed at functional revision `095abd4`; PLAN-004 has passed its exit gate. Post-PLAN-004 tracking now uses the five packages in `POST-PLAN-004-EXECUTION-ROADMAP.md`, with Package 1 next.
+Subphases A, B and C are published/closed at their recorded revisions. Subphase D (`TASK-P04-014..017`) is verified/closed at functional revision `095abd4`; PLAN-004 has passed its exit gate. Post-PLAN-004 tracking now uses the five packages in `POST-PLAN-004-EXECUTION-ROADMAP.md`; Package 1 is closed at `0f2e656` and Package 2 is next.
 
 ## Post-PLAN-004 tracking decision
 

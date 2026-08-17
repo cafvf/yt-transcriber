@@ -195,5 +195,36 @@ using frozen task IDs internally for dependencies, TDD ownership and evidence.
 
 PLAN-004 closed at functional revision `095abd4` after `TASK-P04-017` passed the
 Subphase D exit gate. The transition condition recorded at the top of this file is therefore
-satisfied. Package 1 — **Product execution acceptance** — is the next default execution
-boundary; frozen PLAN-005 tasks remain authoritative underneath it.
+satisfied. Package 1 — **Product execution acceptance** — subsequently closed at functional revision `0f2e656`; Package 2 — **Operator workflow acceptance** — is the next default execution boundary. Frozen PLAN-005 tasks remain authoritative underneath the package view.
+
+## Package 1 closure evidence
+
+Status: **Verified / closed — Product execution acceptance**
+
+Functional commit:
+
+```text
+0f2e656d9661e72c30cf75b7daecbadbfa4ee468
+fix: complete PLAN-005 Package 1 acceptance
+```
+
+Package-level gate summary: `/home/christiano/Downloads/yt-transcriber-plan005-package1-gate-summary-v3.txt`.
+
+The closure revision satisfies the Package 1 mapping to `TASK-P05-001..007`:
+
+- bounded queue/media/summary/storage behavior remains characterized and yt-dlp metadata/
+  subtitle-listing network waits now carry a finite socket timeout;
+- privacy-aware audit/health/error behavior retains the shared sanitizer boundary;
+- representative slow duration inspection is proven not to monopolize an independent
+  Telegram event-loop tick;
+- terminal history does not block fresh admission and explicit reprocessing remains a
+  fresh-Job operation under the active/pending duplicate guard;
+- subtitle/ASR/diarization duration/language/canonical paths retain their frozen behavior;
+- failed non-primary history/summary/export/video sends are recorded as operational
+  delivery errors without mutating an already-completed Job;
+- pending Telegram cancellation retains cooperative state semantics and clears no-longer-
+  needed private staging source references/files.
+
+The real host/environment evidence intentionally owned by PLAN-006 remains outside this
+Package 1 closure. Package 2 — **Operator workflow acceptance** — is next.
+
