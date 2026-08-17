@@ -195,7 +195,7 @@ using frozen task IDs internally for dependencies, TDD ownership and evidence.
 
 PLAN-004 closed at functional revision `095abd4` after `TASK-P04-017` passed the
 Subphase D exit gate. The transition condition recorded at the top of this file is therefore
-satisfied. Package 1 — **Product execution acceptance** — closed at functional revision `0f2e656` and received post-publication baseline repair `0fa6a04`. Package 2 — **Operator workflow acceptance** — subsequently closed at functional revision `ee8a8e4`; Package 3 — **PLAN-005 convergence/acceptance closure** — is the next default execution boundary. Frozen PLAN-005 tasks remain authoritative underneath the package view.
+satisfied. Package 1 — **Product execution acceptance** — closed at functional revision `0f2e656` and received post-publication baseline repair `0fa6a04`. Package 2 — **Operator workflow acceptance** — subsequently closed at functional revision `ee8a8e4`. Package 3 — **PLAN-005 convergence/acceptance closure** — passed `TASK-P05-017` at revision `7829d5d`; PLAN-005 / F6 is closed. Package 4 — **Deployment, persistence resilience and service operations** — is the next default execution boundary under PLAN-006.
 
 ## Package 1 closure evidence
 
@@ -263,4 +263,45 @@ The Package 2 closure revision satisfies `TASK-P05-008..016`:
 - `/clearcache` refuses protected/ambiguous cache roots and records sanitized partial
   deletion failures without touching canonical/history data.
 
-Package 3 — **PLAN-005 convergence/acceptance closure** — is next and owns `TASK-P05-017`.
+Package 3 — **PLAN-005 convergence/acceptance closure** — passed the
+`TASK-P05-017` exit gate at revision `7829d5d`.
+
+## Package 3 / PLAN-005 closure evidence
+
+Status: **Verified / closed — PLAN-005 exit gate passed**
+
+Gate revision:
+
+```text
+7829d5da0a2ace024df89e37c6c6abb35c313d16
+7829d5d docs: close Package 2 and activate Package 3
+```
+
+Package-level gate summary:
+`/home/christiano/Downloads/yt-transcriber-plan005-package3-gate-summary-v1.txt`.
+
+`TASK-P05-017` convergence evidence confirms:
+
+- all 12 frozen operator UCs retain executable acceptance evidence through the
+  Package 1/2 owner suites and command/transport tests;
+- application-level `SS-001` startup reconciliation and `SS-002` volatile-retention
+  behavior pass their dedicated tests without claiming a host restart rehearsal;
+- registered commands, aliases and `HELP_TEXT` conform to the frozen current
+  interaction surface through `IC-001` tests;
+- Package 1 resource-limit/event-loop and primary-versus-derived delivery evidence
+  remains green after the Package 2 changes;
+- the full default and integration suites, Ruff, mypy, secret scanning, Gitleaks,
+  compile/benchmark smoke and pre-commit gates pass on the closure revision;
+- host/systemd/staging empirical evidence is explicitly not inferred from local
+  tests and remains PLAN-006 ownership;
+- the detailed environment-gated contract-test inventory/count is explicitly
+  deferred to `TASK-P06-001`, which owns that classification.
+
+No product behavior was added by `TASK-P05-017`; no failed owner criterion required
+routing back to `TASK-P05-001..016`.
+
+PLAN-005 / F6 is therefore closed. Package 4 — **Deployment, persistence resilience
+and service operations** — is next under PLAN-006. Its frozen work begins from
+`TASK-P06-001..004` / `TASK-P06-002` dependencies as defined by PLAN-006; later
+host/systemd, backup/restore, upgrade/rollback, manual-recovery, documentation
+conformance and readiness evidence retain their frozen dependencies and owners.
