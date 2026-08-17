@@ -1019,7 +1019,14 @@ class TelegramBotAdapter:
             await self._send_text(chat_id, "O Markdown desse job foi removido ou movido.")
             return
         assert retrieval.markdown_path is not None
-        await self._send_document_with_retry(chat_id, retrieval.markdown_path)
+        _delivery_ok = await self._send_document_with_retry(chat_id, retrieval.markdown_path)
+        if not _delivery_ok:
+            await self._record_nonprimary_delivery_failure(
+                user_id=user_id,
+                operation="history_delivery",
+                artifact_label="transcrição histórica",
+                artifact_path=retrieval.markdown_path,
+            )
 
     async def handle_command_rename(self, *, chat_id: int, user_id: int, text: str = "") -> None:
         if not self._is_authorized(user_id):
@@ -1194,7 +1201,14 @@ class TelegramBotAdapter:
                 f"✅ Resumo gerado para a transcrição #{index} "
                 f"({result.chunks} bloco(s), modelo {result.model}). Enviando arquivo…"
             )
-        await self._send_document_with_retry(chat_id, result.path)
+        _delivery_ok = await self._send_document_with_retry(chat_id, result.path)
+        if not _delivery_ok:
+            await self._record_nonprimary_delivery_failure(
+                user_id=user_id,
+                operation="summary_delivery",
+                artifact_label="resumo",
+                artifact_path=result.path,
+            )
 
     async def handle_command_export_shortcut(
         self, *, chat_id: int, user_id: int, format: str, text: str = ""
@@ -1227,7 +1241,14 @@ class TelegramBotAdapter:
         await self._send_text(
             chat_id, f"📄 Texto limpo gerado para a transcrição #{index}. Enviando arquivo…"
         )
-        await self._send_document_with_retry(chat_id, result.path)
+        _delivery_ok = await self._send_document_with_retry(chat_id, result.path)
+        if not _delivery_ok:
+            await self._record_nonprimary_delivery_failure(
+                user_id=user_id,
+                operation="text_export_delivery",
+                artifact_label="exportação de texto",
+                artifact_path=result.path,
+            )
 
     async def handle_command_export(self, *, chat_id: int, user_id: int, text: str = "") -> None:
         if not self._is_authorized(user_id):
@@ -1259,7 +1280,14 @@ class TelegramBotAdapter:
             f"📦 Exportação {result.format.upper()} gerada para a transcrição "
             f"#{index}. Enviando arquivo…",
         )
-        await self._send_document_with_retry(chat_id, result.path)
+        _delivery_ok = await self._send_document_with_retry(chat_id, result.path)
+        if not _delivery_ok:
+            await self._record_nonprimary_delivery_failure(
+                user_id=user_id,
+                operation="transcript_export_delivery",
+                artifact_label="exportação de transcrição",
+                artifact_path=result.path,
+            )
 
     async def handle_command_video_subs(
         self, *, chat_id: int, user_id: int, text: str = ""
@@ -1301,7 +1329,7 @@ class TelegramBotAdapter:
             chat_id,
             f"✅ MP4 com legenda selecionável gerado para a transcrição #{index}. Enviando vídeo…",
         )
-        await self._send_video_with_retry(
+        _delivery_ok = await self._send_video_with_retry(
             chat_id,
             result.path,
             caption=(
@@ -1310,6 +1338,13 @@ class TelegramBotAdapter:
                 "A legenda foi adicionada como faixa selecionável no MP4."
             ),
         )
+        if not _delivery_ok:
+            await self._record_nonprimary_delivery_failure(
+                user_id=user_id,
+                operation="video_subtitle_delivery",
+                artifact_label="vídeo com legendas",
+                artifact_path=result.path,
+            )
 
     async def handle_command_clearcache(self, *, chat_id: int, user_id: int) -> None:
         if not self._is_authorized(user_id):
@@ -1771,6 +1806,25 @@ class TelegramBotAdapter:
     # ------------------------------------------------------------------
     # Envio com retry
     # ------------------------------------------------------------------
+
+    async def _record_nonprimary_delivery_failure(
+        self,
+        *,
+        user_id: int,
+        operation: str,
+        artifact_label: str,
+        artifact_path: Path,
+    ) -> None:
+        await self._record_operational_error(
+            user_id=user_id,
+            operation=operation,
+            message=f"Falha na entrega de {artifact_label}; artefato preservado localmente.",
+            context={
+                "artifact_kind": artifact_label,
+                "artifact_path": str(artifact_path),
+            },
+            stage="delivery",
+        )
 
     async def _send_text(
         self, chat_id: int, text: str, reply_markup: InlineKeyboard | None = None

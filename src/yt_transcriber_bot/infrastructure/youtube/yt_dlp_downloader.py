@@ -113,6 +113,7 @@ class YtDlpDownloader(YouTubeDownloader):
         *,
         ydl_factory: _YDLFactory,
         subtitle_fetcher: _SubtitleFetcher,
+        socket_timeout_s: float = 30.0,
         cookies_file: str | None = None,
         cookies_browser: str | None = None,
         subtitle_fetch_max_attempts: int = _SUBTITLE_FETCH_MAX_ATTEMPTS,
@@ -122,6 +123,9 @@ class YtDlpDownloader(YouTubeDownloader):
     ) -> None:
         self._ydl_factory = ydl_factory
         self._subtitle_fetcher = subtitle_fetcher
+        if socket_timeout_s <= 0:
+            raise ValueError("socket_timeout_s deve ser > 0")
+        self._socket_timeout_s = float(socket_timeout_s)
         self._cookies_file = cookies_file or None
         self._cookies_browser = cookies_browser or None
         self._subtitle_fetch_max_attempts = max(1, subtitle_fetch_max_attempts)
@@ -141,6 +145,7 @@ class YtDlpDownloader(YouTubeDownloader):
             "no_warnings": True,
             "noplaylist": True,
             "skip_download": True,
+            "socket_timeout": self._socket_timeout_s,
             # Evita que um ~/.config/yt-dlp/config ou /etc/yt-dlp.conf do usuário
             # injete um seletor de formato incompatível com o fluxo do bot.
             "ignoreconfig": True,
