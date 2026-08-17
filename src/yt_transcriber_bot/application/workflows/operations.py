@@ -54,8 +54,18 @@ class OperationalWorkflow:
             severity=severity,
         )
 
-    def clear_cache(self) -> CacheCleanupResult:
-        return self._cache.clear()
+    def clear_cache(self, *, user_id: int | None = None) -> CacheCleanupResult:
+        result = self._cache.clear()
+        if result.failures and user_id is not None:
+            self._last_error.record_operation_error(
+                user_id=user_id,
+                operation="clearcache",
+                message="Limpeza de cache concluída parcialmente; alguns itens não puderam ser removidos.",
+                context={"failures": result.failures},
+                stage="cache_cleanup",
+                severity="warn",
+            )
+        return result
 
     def apply_retention(self) -> RetentionResult:
         return self._retention.apply()

@@ -55,11 +55,15 @@ class RenameSpeakersService:
     ) -> RenameResult:
         record = self._snapshots.require(slug)
         labels = set(record.transcript.speaker_labels())
-        effective = {
-            label: name.strip()
-            for label, name in aliases.items()
-            if label in labels and name.strip()
-        }
+        if not aliases:
+            raise ValueError("Informe ao menos um falante para renomear.")
+        unknown = sorted(set(aliases) - labels)
+        if unknown:
+            raise ValueError("Falante(s) inexistente(s): " + ", ".join(unknown))
+        empty = sorted(label for label, name in aliases.items() if not name.strip())
+        if empty:
+            raise ValueError("Nome vazio para: " + ", ".join(empty))
+        effective = {label: name.strip() for label, name in aliases.items()}
         rendered = self._renderer.render_transcript(
             TranscriptRenderRequest(
                 record=record,

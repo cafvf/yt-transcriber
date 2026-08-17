@@ -1016,7 +1016,7 @@ class TelegramBotAdapter:
             await self._send_text(chat_id, "O arquivo desse job não está mais disponível.")
             return
         if retrieval.markdown_state is MarkdownRetrievalState.MISSING_FILE:
-            await self._send_text(chat_id, "O Markdown desse job foi removido ou movido.")
+            await self._send_text(chat_id, "O Markdown desse job não está disponível para leitura.")
             return
         assert retrieval.markdown_path is not None
         _delivery_ok = await self._send_document_with_retry(chat_id, retrieval.markdown_path)
@@ -1352,7 +1352,10 @@ class TelegramBotAdapter:
         if self._operational_workflow is None:
             await self._send_text(chat_id, "Limpeza de cache indisponível neste bot.")
             return
-        result = await asyncio.to_thread(self._operational_workflow.clear_cache)
+        result = await asyncio.to_thread(
+            self._operational_workflow.clear_cache,
+            user_id=user_id,
+        )
         suffix = f" {result.failures} falha(s)." if result.failures else ""
         await self._send_text(
             chat_id,

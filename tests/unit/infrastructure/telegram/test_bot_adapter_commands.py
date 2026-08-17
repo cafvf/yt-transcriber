@@ -153,6 +153,7 @@ class SummaryWorkflowFake:
 class OperationalWorkflowFake:
     def __init__(self) -> None:
         self.errors: list[dict[str, object]] = []
+        self.clear_cache_user_id: int | None = None
 
     def healthcheck(self) -> HealthCheckReport:
         return HealthCheckReport((HealthCheckItem("LM Studio", "ok", "modelo disponível."),))
@@ -164,7 +165,8 @@ class OperationalWorkflowFake:
         self.errors.append(kwargs)
         return object()
 
-    def clear_cache(self) -> CacheCleanupResult:
+    def clear_cache(self, *, user_id: int | None = None) -> CacheCleanupResult:
+        self.clear_cache_user_id = user_id
         return CacheCleanupResult(removed_files=2, removed_directories=1)
 
     def apply_retention(self):
@@ -300,10 +302,11 @@ async def test_summary_and_derivative_exports_delegate_to_application_workflows(
 async def test_operational_commands_delegate_without_filesystem_fallback(
     adapter, client: FakeBotClient
 ) -> None:
-    instance, *_ = adapter
+    instance, *_, operations = adapter
     await instance.handle_command_healthcheck(chat_id=1, user_id=42)
     await instance.handle_command_lasterror(chat_id=1, user_id=42)
     await instance.handle_command_clearcache(chat_id=1, user_id=42)
+    assert operations.clear_cache_user_id == 42
     visible = chr(10).join(text for _, text, _ in client.sent)
     assert "LM Studio" in visible
     assert "Nenhum erro recente" in visible

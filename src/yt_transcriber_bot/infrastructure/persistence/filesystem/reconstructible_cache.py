@@ -7,13 +7,27 @@ from yt_transcriber_bot.application.ports.cache import CacheCleanupResult, Recon
 
 
 class FilesystemReconstructibleCache(ReconstructibleCache):
-    def __init__(self, roots: tuple[Path, ...]) -> None:
+    def __init__(
+        self,
+        roots: tuple[Path, ...],
+        *,
+        protected_paths: tuple[Path, ...] = (),
+    ) -> None:
         if not roots:
             raise ValueError("at least one reconstructible cache root is required")
-        resolved = tuple(root.expanduser().resolve(strict=False) for root in roots)
+        expanded = tuple(root.expanduser() for root in roots)
+        if any(root.is_symlink() for root in expanded if root.exists()):
+            raise ValueError("unsafe reconstructible cache root")
+        resolved = tuple(root.resolve(strict=False) for root in expanded)
+        protected = tuple(path.expanduser().resolve(strict=False) for path in protected_paths)
         unsafe = {Path("/"), Path.home().resolve(strict=False)}
         if any(root in unsafe or len(root.parts) < 2 for root in resolved):
             raise ValueError("unsafe reconstructible cache root")
+        if any(_paths_overlap(root, item) for root in resolved for item in protected):
+            raise ValueError("reconstructible cache overlaps protected application data")
+        for index, root in enumerate(resolved):
+            if any(_paths_overlap(root, other) for other in resolved[index + 1 :]):
+                raise ValueError("ambiguous reconstructible cache roots")
         self._roots = resolved
 
     def clear(self) -> CacheCleanupResult:
@@ -36,3 +50,7 @@ class FilesystemReconstructibleCache(ReconstructibleCache):
                 except OSError:
                     failures += 1
         return CacheCleanupResult(files, dirs, failures)
+
+
+def _paths_overlap(left: Path, right: Path) -> bool:
+    return left == right or left in right.parents or right in left.parents

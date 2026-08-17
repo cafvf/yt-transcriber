@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -134,6 +135,13 @@ def _bound_error_sanitizer(settings: AppSettings) -> Callable[[str], str]:
         return sanitize_text(detail, settings)
 
     return sanitize
+
+
+def _readable_file(path: Path) -> bool:
+    try:
+        return path.is_file() and os.access(path, os.R_OK)
+    except OSError:
+        return False
 
 
 @dataclass
@@ -344,7 +352,7 @@ def build(settings: AppSettings, *, credentials: ProviderCredentials) -> Composi
         index=search_repository,
         summaries=summary_store,
     )
-    history = CompletedHistoryWorkflow(repository, markdown_available=Path.is_file)
+    history = CompletedHistoryWorkflow(repository, markdown_available=_readable_file)
     history_presentation = HistoryPresentation(rename_service)
     text_search_workflow = TextSearchWorkflow(
         history=history, query=search_repository, indexer=indexer
@@ -396,6 +404,7 @@ def build(settings: AppSettings, *, credentials: ProviderCredentials) -> Composi
         settings=settings,
         error_store=error_store,
         log_reader=BoundedTextLogReader(),
+        artifact_available=_readable_file,
     )
     artifact_cleanup = FilesystemOwnedArtifactCleanup(
         (settings.downloads_dir(), settings.processed_dir(), settings.logs_dir())
@@ -408,7 +417,21 @@ def build(settings: AppSettings, *, credentials: ProviderCredentials) -> Composi
     operational_workflow = OperationalWorkflow(
         healthcheck=healthcheck_service,
         last_error=lasterror_service,
-        cache=CacheMaintenanceService(FilesystemReconstructibleCache((settings.models_dir,))),
+        cache=CacheMaintenanceService(
+            FilesystemReconstructibleCache(
+                (settings.models_dir,),
+                protected_paths=(
+                    settings.downloads_dir(),
+                    settings.processed_dir(),
+                    settings.transcripts_dir(),
+                    settings.logs_dir(),
+                    settings.summaries_dir(),
+                    settings.video_exports_dir(),
+                    settings.base_dir / "segments",
+                    settings.db_path,
+                ),
+            )
+        ),
         retention=retention_policy,
     )
     audit_logger = ExecutionAuditLogger(

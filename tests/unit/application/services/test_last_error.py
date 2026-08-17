@@ -74,5 +74,6 @@ def test_failed_job_can_be_rendered_without_reading_whole_log() -> None:
         settings=_settings(),
         error_store=Store(),
         log_reader=Logs(),
+        artifact_available=lambda path: path == Path(job.log_path or ""),
     )
     assert "safe tail" in service.latest_for_user(7).message

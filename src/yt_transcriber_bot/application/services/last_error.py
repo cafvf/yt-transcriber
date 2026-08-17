@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import traceback
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -30,11 +31,13 @@ class LastErrorService:
         settings: AppSettings,
         error_store: OperationalErrorStore,
         log_reader: JobLogReader,
+        artifact_available: Callable[[Path], bool] | None = None,
     ) -> None:
         self._repository = repository
         self._settings = settings
         self._error_store = error_store
         self._log_reader = log_reader
+        self._artifact_available = artifact_available or (lambda _path: False)
 
     def record_operation_error(
         self,
@@ -111,11 +114,16 @@ class LastErrorService:
             lines.append(f"Assinatura de configuração: {job.config_signature}")
         if job.error_message:
             lines.extend(["", "Erro:", sanitize_text(job.error_message, self._settings)])
-        if job.md_path:
+        available_artifacts: list[str] = []
+        if job.md_path and self._artifact_available(Path(job.md_path)):
+            available_artifacts.append("Markdown")
             lines.append("Markdown parcial: disponível")
-        if job.audio_path:
+        if job.audio_path and self._artifact_available(Path(job.audio_path)):
+            available_artifacts.append("áudio")
             lines.append("Áudio parcial: disponível")
-        if job.log_path:
+        if job.status is JobStatus.DELIVERY_FAILED and not available_artifacts:
+            lines.append("Artefatos locais recuperáveis: indisponíveis")
+        if job.log_path and self._artifact_available(Path(job.log_path)):
             tail = self._log_reader.tail(
                 Path(job.log_path),
                 max_lines=self._settings.lasterror_log_tail_lines,

@@ -107,25 +107,24 @@ def test_rename_partial(
     assert "SPEAKER_01" in content
 
 
-def test_rename_ignores_empty_names(
+def test_rename_rejects_empty_names(
     service: RenameSpeakersService, snapshot: TranscriptSnapshot, tmp_path: Path
 ) -> None:
     service._snapshots.save("teste-rename", snapshot)  # type: ignore[attr-defined]
     md = tmp_path / "out.md"
-    result = service.rename("teste-rename", {"SPEAKER_00": "  ", "SPEAKER_01": "Maria"}, md)
-    assert result.speakers_renamed == 1
-    content = md.read_text()
-    assert "Maria" in content
-    assert "SPEAKER_00" in content  # não foi renomeado
+    with pytest.raises(ValueError, match="Nome vazio"):
+        service.rename("teste-rename", {"SPEAKER_00": "  ", "SPEAKER_01": "Maria"}, md)
+    assert not md.exists()
 
 
-def test_rename_ignores_unknown_labels(
+def test_rename_rejects_unknown_labels(
     service: RenameSpeakersService, snapshot: TranscriptSnapshot, tmp_path: Path
 ) -> None:
     service._snapshots.save("teste-rename", snapshot)  # type: ignore[attr-defined]
     md = tmp_path / "out.md"
-    result = service.rename("teste-rename", {"SPEAKER_99": "Ghost", "SPEAKER_00": "João"}, md)
-    assert result.speakers_renamed == 1
+    with pytest.raises(ValueError, match=r"Falante\(s\) inexistente"):
+        service.rename("teste-rename", {"SPEAKER_99": "Ghost", "SPEAKER_00": "João"}, md)
+    assert not md.exists()
 
 
 def test_rename_missing_snapshot(service: RenameSpeakersService, tmp_path: Path) -> None:

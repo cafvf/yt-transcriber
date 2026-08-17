@@ -278,7 +278,7 @@ def test_rename_workflow_runs_with_in_memory_store_and_fake_renderer(
 
     result = service.rename(
         "ref",
-        {"SPEAKER_00": "Ana", "SPEAKER_99": "Ignorado"},
+        {"SPEAKER_00": "Ana"},
         tmp_path / "renamed.md",
     )
 
@@ -286,6 +286,21 @@ def test_rename_workflow_runs_with_in_memory_store_and_fake_renderer(
     assert result.md_path.read_text(encoding="utf-8").startswith("# fake")
     assert renderer.requests[0].record is store.records["ref"]
     assert writer.writes[0][0] == result.md_path
+
+
+def test_rename_workflow_rejects_unknown_speaker_label(
+    tmp_path: Path,
+) -> None:
+    store = InMemoryCanonicalTranscriptStore()
+    store.persist("ref", _record())
+    service = RenameSpeakersService(store, FakeRenderer(), FakeMarkdownWriter())
+
+    with pytest.raises(ValueError, match=r"Falante\(s\) inexistente\(s\): SPEAKER_99"):
+        service.rename(
+            "ref",
+            {"SPEAKER_00": "Ana", "SPEAKER_99": "Ignorado"},
+            tmp_path / "renamed.md",
+        )
 
 
 def test_export_consumer_runs_with_in_memory_store(tmp_path: Path) -> None:

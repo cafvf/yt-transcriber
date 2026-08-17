@@ -79,8 +79,9 @@ class TranscriptDerivativeWorkflow:
         reference = self._reference(job)
         if not job.md_path:
             raise FileNotFoundError("O Markdown desse job não está disponível.")
-        result = self._rename_service.rename(reference, aliases, Path(job.md_path))
-        job.speaker_renames = dict(aliases)
+        normalized_aliases = {label: name.strip() for label, name in aliases.items()}
+        result = self._rename_service.rename(reference, normalized_aliases, Path(job.md_path))
+        job.speaker_renames = normalized_aliases
         self._repository.save(job)
         self._indexer.refresh(job)
         return result
