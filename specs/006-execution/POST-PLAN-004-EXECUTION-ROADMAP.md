@@ -195,7 +195,7 @@ using frozen task IDs internally for dependencies, TDD ownership and evidence.
 
 PLAN-004 closed at functional revision `095abd4` after `TASK-P04-017` passed the
 Subphase D exit gate. The transition condition recorded at the top of this file is therefore
-satisfied. Package 1 — **Product execution acceptance** — subsequently closed at functional revision `0f2e656`; Package 2 — **Operator workflow acceptance** — is the next default execution boundary. Frozen PLAN-005 tasks remain authoritative underneath the package view.
+satisfied. Package 1 — **Product execution acceptance** — closed at functional revision `0f2e656` and received post-publication baseline repair `0fa6a04`. Package 2 — **Operator workflow acceptance** — subsequently closed at functional revision `ee8a8e4`; Package 3 — **PLAN-005 convergence/acceptance closure** — is the next default execution boundary. Frozen PLAN-005 tasks remain authoritative underneath the package view.
 
 ## Package 1 closure evidence
 
@@ -227,3 +227,40 @@ The closure revision satisfies the Package 1 mapping to `TASK-P05-001..007`:
 
 The real host/environment evidence intentionally owned by PLAN-006 remains outside this
 Package 1 closure. Package 2 — **Operator workflow acceptance** — is next.
+
+## Package 2 closure evidence
+
+Status: **Verified / closed — Operator workflow acceptance**
+
+Functional commit:
+
+```text
+ee8a8e4046b1c5b71d319a423480502a7f028187
+fix: complete PLAN-005 Package 2 acceptance
+```
+
+Package-level gate summary: `/home/christiano/Downloads/yt-transcriber-plan005-package2-gate-summary-v5.txt`.
+
+Before Package 2, the post-publication Package 1 baseline was repaired at `0fa6a044bb6675eebab065831f5f1c8070be7e1e` to
+bound the independent video-derivative yt-dlp/ffmpeg waits and progressive download size,
+and to normalize the prior documentation EOF. This repair remains owned by `TASK-P05-001`.
+
+The Package 2 closure revision satisfies `TASK-P05-008..016`:
+
+- completed history remains operator-scoped, positional and explicit about unavailable
+  canonical Markdown rather than reprocessing it;
+- textual search remains bounded, operator-scoped and deterministic through FTS5 or the
+  approved textual fallback, with canonical metadata/text, aliases and summaries indexed;
+- speaker rename/merge now rejects unknown labels and empty aliases before persistence,
+  persists only normalized aliases and explicitly refreshes search state;
+- summaries remain canonical-derived, budgeted, provenance-bearing and gated by the
+  explicit non-local disclosure policy, with search refresh after successful persistence;
+- TXT/JSON/SRT/VTT and YouTube MP4 derivatives remain canonical-derived and preserve
+  completed Job state on derivative failures;
+- healthcheck remains bounded/sanitized and host secret-file evidence stays with PLAN-006;
+- `/lasterror` reports recoverable local artifacts only after the injected availability
+  probe confirms they are readable, while preserving terminal state and timestamp precedence;
+- `/clearcache` refuses protected/ambiguous cache roots and records sanitized partial
+  deletion failures without touching canonical/history data.
+
+Package 3 — **PLAN-005 convergence/acceptance closure** — is next and owns `TASK-P05-017`.
