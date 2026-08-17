@@ -34,7 +34,8 @@ Current execution state:
 - F1 — security guardrails: **Verified / Closed**;
 - F2 — domain and data truth: **Verified / Closed**;
 - F3 — hexagonal boundaries and provider seams: **Verified / Closed — TASK-P03-001..014 complete; PLAN-003 exit gate passed**;
-- F4 — application/Telegram workflow decomposition: **Active — Subphases A and B published/closed; Subphase C (`TASK-P04-004..013`) verified/closed at `0e2bb0a`; Subphase D is next**.
+- F4/F5 — PLAN-004 workflow decomposition, reliability and convergence: **Verified / Closed at `095abd4` — PLAN-004 exit gate passed**;
+- Post-PLAN-004 roadmap: **Active — Package 1 (Product execution acceptance) is next**.
 
 Detailed evidence is recorded in `F0-BASELINE.md`, `F1-SECURITY.md`,
 `F2-DOMAIN-DATA.md`, `F3-HEXAGONAL-SEAMS.md`, and
@@ -43,9 +44,9 @@ Detailed evidence is recorded in `F0-BASELINE.md`, `F1-SECURITY.md`,
 ## Simplified tracking after PLAN-004
 
 To reduce execution-management overhead without changing frozen requirements, plans
-or tasks, post-PLAN-004 progress will be tracked through five larger outcome-based
-execution packages. PLAN-004 itself is unchanged and still finishes through its
-existing Subphases C and D.
+or tasks, post-PLAN-004 progress is now tracked through five larger outcome-based
+execution packages. PLAN-004 is closed; the package view is the active day-to-day
+execution view.
 
 See `POST-PLAN-004-EXECUTION-ROADMAP.md` for the transition rule, package outcomes,
 execution cadence and session-resume instructions.

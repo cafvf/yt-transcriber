@@ -1,6 +1,6 @@
 # Simplified execution roadmap after PLAN-004
 
-Status: **Approved execution-view decision / non-normative**
+Status: **Active execution view / non-normative — PLAN-004 closed**
 Decision date: **2026-08-16**
 Activation condition: **only after TASK-P04-017 closes PLAN-004**
 Checkpoint when recorded: `43d906911d7ccd4d32ce738f8dffea32ed116244`
@@ -189,3 +189,11 @@ A later session should begin by reading, in this order:
 
 The assistant should report progress using the compact execution view above while
 using frozen task IDs internally for dependencies, TDD ownership and evidence.
+
+
+## Activation evidence
+
+PLAN-004 closed at functional revision `095abd4` after `TASK-P04-017` passed the
+Subphase D exit gate. The transition condition recorded at the top of this file is therefore
+satisfied. Package 1 — **Product execution acceptance** — is the next default execution
+boundary; frozen PLAN-005 tasks remain authoritative underneath it.

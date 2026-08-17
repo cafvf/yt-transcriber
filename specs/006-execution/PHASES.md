@@ -1,6 +1,6 @@
 # Implementation Phases
 
-Status: **Active execution view**
+Status: **PLAN-004 closed — post-PLAN-004 execution packages active**
 Source: approved/frozen `005-tasks` v1.0.0
 
 These phases are an operational grouping only. They do not change task
@@ -40,7 +40,7 @@ dependencies, owners or gates:
 | C | `TASK-P04-004..013` | derived data, search, summary and operations |
 | D | `TASK-P04-014..017` | thin Telegram, reliability, convergence and exit gate |
 
-Subphase A is published and closed (`a68ba1c`, with post-push regression repair `8beea3d`). Subphase B is published and closed: `TASK-P04-002` at `d805525`, `TASK-P04-003` at `bb7ccd9`, with publication closure at `b9f2eba`. Subphase C (`TASK-P04-004..013`) is verified/closed at functional revision `0e2bb0a`; this documentation commit is its publication boundary. Subphase D (`TASK-P04-014..017`) is next.
+Subphases A, B and C are published/closed at their recorded revisions. Subphase D (`TASK-P04-014..017`) is verified/closed at functional revision `095abd4`; PLAN-004 has passed its exit gate. Post-PLAN-004 tracking now uses the five packages in `POST-PLAN-004-EXECUTION-ROADMAP.md`, with Package 1 next.
 
 ## Post-PLAN-004 tracking decision
 

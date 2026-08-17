@@ -1,6 +1,6 @@
 # F4 — Application/Telegram workflow decomposition
 
-Status: **Active — execution subphases A and B published/closed; Subphase C verified/closed at the functional revision below; Subphase D is next**
+Status: **Verified / closed — PLAN-004 completed at Subphase D functional revision `095abd4`**
 Plan: `PLAN-004`
 Base revision: `7c52c0d1d8682f4a1b59d8eeb57324171fa42fc7`
 Started: 2026-08-16
@@ -19,7 +19,7 @@ boundaries without changing any frozen task dependency or PLAN exit gate:
 | A | `TASK-P04-001` | establish application workflow/admission seam | **Published / closed** |
 | B | `TASK-P04-002..003` | execution/queue/cancel/recovery plus completed-history workflow | **Published / closed** |
 | C | `TASK-P04-004..013` | derived data, search, summary and operational decomposition | **Verified / closed at `0e2bb0a`** |
-| D | `TASK-P04-014..017` | thin-Telegram closure, reliability, convergence and PLAN-004 exit gate | Pending |
+| D | `TASK-P04-014..017` | thin-Telegram closure, reliability, convergence and PLAN-004 exit gate | **Verified / closed at `095abd4`** |
 
 The existing F4/F5 phase definitions remain authoritative as the execution
 view inherited from frozen tasks. These subphases are only smaller review and
@@ -518,3 +518,88 @@ has been committed and the Subphase C publication boundary has been pushed/verif
 
 Subphase D owns thin-Telegram closure, deterministic reliability/failure isolation,
 final cohesive-refactor convergence and the PLAN-004 exit gate.
+
+
+## Subphase D — PLAN-004 closure evidence
+
+Status: **Verified / closed — PLAN-004 exit gate passed**
+
+Functional commit:
+
+```text
+095abd46d73659e67b0d5cac4b4fe7f07fff43f7
+refactor: complete PLAN-004 Subphase D convergence
+```
+
+Gate run recorded at: `20260817T001958Z`.
+
+### Final convergence
+
+Subphase D closes `TASK-P04-014..017` without adding product scope.
+
+The functional revision:
+
+- removes the active parallel concrete-service graph from `TelegramBotAdapter`;
+- retains `HistoryPresentation` only as Telegram-side presentation/title formatting, while
+  completed-history selection remains Application-owned;
+- delegates search, rename, summary, exports/video derivatives and operational commands only
+  through Application workflows/capabilities;
+- moves private staged-source cleanup behind an Application service plus the existing
+  purpose-specific owned-artifact cleanup port;
+- injects completed-history, lifecycle and startup-recovery capabilities at composition;
+- isolates best-effort derived completion observers from already-persisted canonical
+  `COMPLETED` state while preserving propagation of canonical persistence failures;
+- characterizes repeated startup reconciliation as idempotent once terminal state is reached;
+- removes the obsolete history-search compatibility port/service and empty speculative
+  `domain.events` / `domain.pipeline` package shells;
+- removes persistence-shaped output-path parameters from the pure Application summary policy;
+- keeps the concrete summarization compatibility façade passive and outside the production
+  runtime graph because it remains useful for existing adapter-level compatibility tests and
+  does not compete with the Application workflow owner.
+
+No generic storage abstraction, translation behavior, checkpoint/resume semantics or new
+architecture layer was introduced.
+
+### PLAN-004 exit-gate evidence
+
+- `thin_transport` — exit `0`
+- `lifecycle_reliability` — exit `0`
+- `portable_workflows` — exit `0`
+- `persistence_search` — exit `0`
+- `provider_and_summary_boundaries` — exit `0`
+- `ruff_fix` — exit `0`
+- `ruff_format` — exit `0`
+- `ruff_strict` — exit `0`
+- `format_check` — exit `0`
+- `mypy` — exit `0`
+- `secret_scan` — exit `0`
+- `gitleaks` — exit `0`
+- `pytest_default` — exit `0`
+- `pytest_integration` — exit `0`
+- `compileall` — exit `0`
+- `benchmark_compile` — exit `0`
+- `benchmark_smoke` — exit `0`
+- `precommit` — exit `0`
+- `final_ruff` — exit `0`
+- `final_format` — exit `0`
+- `final_mypy` — exit `0`
+- `diff_check` — exit `0`
+
+The gate covers thin-transport conformance, lifecycle failure isolation, startup recovery
+idempotency, portable workflow tests, SQLite FTS/fallback behavior, provider/summary
+boundaries, security scans, full default/integration pytest, compileall, pre-commit and
+final immutable Ruff/format/mypy/diff checks.
+
+### Requirement/task closure map
+
+- `TASK-P04-014` / `REQ-ARC-002`: final thin-Telegram ownership closure.
+- `TASK-P04-015` / `REQ-NFR-001`: deterministic lifecycle and failure isolation.
+- `TASK-P04-016` / `REQ-NFR-005`: cohesive convergence and obsolete-surface cleanup.
+- `TASK-P04-017`: PLAN-004 exit gate and closure evidence.
+
+## PLAN-004 closed
+
+All PLAN-004 execution subphases A–D are closed. The simplified post-PLAN-004 execution
+view in `POST-PLAN-004-EXECUTION-ROADMAP.md` is now active. The next management boundary is
+**Package 1 — Product execution acceptance**, backed by the still-authoritative frozen
+PLAN-005 task graph.
