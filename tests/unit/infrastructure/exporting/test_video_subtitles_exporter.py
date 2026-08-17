@@ -40,6 +40,8 @@ class FakeYDL:
         return None
 
     def extract_info(self, url: str, download: bool = True) -> dict[str, Any]:
+        for hook in self.params.get("progress_hooks", []):
+            hook({"status": "downloading", "downloaded_bytes": self.payload_size})
         outtmpl = self.params["outtmpl"]
         path = Path(outtmpl.replace("%(ext)s", "mp4"))
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -87,7 +89,8 @@ def _service(
     def ydl_factory(params: dict[str, Any]) -> FakeYDL:
         return FakeYDL(params, payload_size=video_payload_size)
 
-    def runner(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+    def runner(cmd: list[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
+        assert timeout_s == pytest.approx(120.0)
         commands.append(cmd)
         Path(cmd[-1]).write_bytes(b"1" * 2048)
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
@@ -173,3 +176,71 @@ def test_provider_download_error_is_sanitized_before_escape(tmp_path: Path) -> N
     assert private not in message
     assert "[REDACTED]" in message
     assert "[OMITTED]" in message
+
+
+def test_export_configures_bounded_network_and_subprocess_waits(tmp_path: Path) -> None:
+    snapshots = TranscriptSnapshotRepository(tmp_path / "segments")
+    snapshots.save("video", _snapshot())
+    captured: dict[str, Any] = {}
+    seen_timeouts: list[float] = []
+
+    def factory(params: dict[str, Any]) -> FakeYDL:
+        captured.update(params)
+        return FakeYDL(params)
+
+    def runner(cmd: list[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
+        seen_timeouts.append(timeout_s)
+        Path(cmd[-1]).write_bytes(b"ok")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    service = VideoSoftSubtitleExportService(
+        snapshots=snapshots,
+        transcript_exporter=TranscriptExportService(snapshots),
+        ydl_factory=factory,
+        output_dir=tmp_path / "video_exports",
+        socket_timeout_s=12.5,
+        command_timeout_s=34.0,
+        command_runner=runner,
+    )
+
+    service.export(video_id=VideoId("dQw4w9WgXcQ"), slug="video")
+
+    assert captured["socket_timeout"] == pytest.approx(12.5)
+    assert captured["max_filesize"] == 200 * 1024 * 1024
+    assert captured["progress_hooks"]
+    assert seen_timeouts == [34.0]
+
+
+def test_export_maps_ffmpeg_timeout_to_explicit_derivative_failure(tmp_path: Path) -> None:
+    snapshots = TranscriptSnapshotRepository(tmp_path / "segments")
+    snapshots.save("video", _snapshot())
+
+    def runner(cmd: list[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=timeout_s)
+
+    service = VideoSoftSubtitleExportService(
+        snapshots=snapshots,
+        transcript_exporter=TranscriptExportService(snapshots),
+        ydl_factory=lambda params: FakeYDL(params),
+        output_dir=tmp_path / "video_exports",
+        command_timeout_s=0.5,
+        command_runner=runner,
+    )
+
+    with pytest.raises(VideoSubtitleExportError, match="tempo máximo"):
+        service.export(video_id=VideoId("dQw4w9WgXcQ"), slug="video")
+
+
+def test_export_rejects_nonpositive_wait_bounds(tmp_path: Path) -> None:
+    snapshots = TranscriptSnapshotRepository(tmp_path / "segments")
+    exporter = TranscriptExportService(snapshots)
+    kwargs = {
+        "snapshots": snapshots,
+        "transcript_exporter": exporter,
+        "ydl_factory": lambda params: FakeYDL(params),
+        "output_dir": tmp_path / "video_exports",
+    }
+    with pytest.raises(ValueError, match="socket_timeout_s"):
+        VideoSoftSubtitleExportService(**kwargs, socket_timeout_s=0)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="command_timeout_s"):
+        VideoSoftSubtitleExportService(**kwargs, command_timeout_s=0)  # type: ignore[arg-type]

@@ -227,4 +227,3 @@ The closure revision satisfies the Package 1 mapping to `TASK-P05-001..007`:
 
 The real host/environment evidence intentionally owned by PLAN-006 remains outside this
 Package 1 closure. Package 2 — **Operator workflow acceptance** — is next.
-

@@ -39,7 +39,7 @@ class _YDLFactory(Protocol):
     def __call__(self, params: dict[str, Any]) -> _YDLLike: ...
 
 
-CommandRunner = Callable[[list[str]], subprocess.CompletedProcess[str]]
+CommandRunner = Callable[[list[str], float], subprocess.CompletedProcess[str]]
 
 
 class VideoSubtitleExportError(DerivativeExportError):
@@ -87,6 +87,8 @@ class VideoSoftSubtitleExportService:
         ydl_factory: _YDLFactory,
         output_dir: Path,
         limits: VideoSubtitleExportLimits | None = None,
+        socket_timeout_s: float = 30.0,
+        command_timeout_s: float = 120.0,
         cookies_file: str | None = None,
         cookies_browser: str | None = None,
         ffmpeg_bin: str = "ffmpeg",
@@ -98,6 +100,12 @@ class VideoSoftSubtitleExportService:
         self._ydl_factory = ydl_factory
         self._output_dir = output_dir
         self._limits = limits or VideoSubtitleExportLimits()
+        if socket_timeout_s <= 0:
+            raise ValueError("socket_timeout_s deve ser > 0")
+        if command_timeout_s <= 0:
+            raise ValueError("command_timeout_s deve ser > 0")
+        self._socket_timeout_s = float(socket_timeout_s)
+        self._command_timeout_s = float(command_timeout_s)
         self._cookies_file = cookies_file or None
         self._cookies_browser = cookies_browser or None
         self._ffmpeg_bin = ffmpeg_bin
@@ -163,6 +171,9 @@ class VideoSoftSubtitleExportService:
             "merge_output_format": "mp4",
             "outtmpl": outtmpl,
             "restrictfilenames": True,
+            "socket_timeout": self._socket_timeout_s,
+            "max_filesize": self._limits.max_size_bytes,
+            "progress_hooks": [self._download_progress_hook],
         }
         if self._cookies_file:
             params["cookiefile"] = self._cookies_file
@@ -171,6 +182,8 @@ class VideoSoftSubtitleExportService:
         try:
             with self._ydl_factory(params) as ydl:
                 info = ydl.extract_info(video_id.canonical_url(), download=True)
+        except VideoSubtitleTooLargeError:
+            raise
         except Exception as exc:  # pragma: no cover - mapeamento defensivo
             raise VideoSubtitleExportError(
                 f"Falha ao baixar vídeo para legendagem: {self._error_sanitizer(str(exc))}"
@@ -179,6 +192,25 @@ class VideoSoftSubtitleExportService:
         if path is None or not path.is_file():
             raise VideoSubtitleExportError("yt-dlp não retornou um arquivo de vídeo baixado")
         return path
+
+    @staticmethod
+    def _reported_bytes(value: object) -> int:
+        if isinstance(value, int) and not isinstance(value, bool):
+            return max(0, value)
+        return 0
+
+    def _download_progress_hook(self, status: dict[str, object]) -> None:
+        observed = max(
+            self._reported_bytes(status.get("downloaded_bytes")),
+            self._reported_bytes(status.get("total_bytes")),
+            self._reported_bytes(status.get("total_bytes_estimate")),
+        )
+        if observed > self._limits.max_size_bytes:
+            raise VideoSubtitleTooLargeError(
+                "Download do vídeo excede o limite configurado antes da conclusão: "
+                f"{_format_mb(observed)} MB. Limite: "
+                f"{_format_mb(self._limits.max_size_bytes)} MB."
+            )
 
     def _mux_soft_subtitles(self, *, source_video: Path, subtitle: Path, output: Path) -> None:
         cmd = [
@@ -204,7 +236,12 @@ class VideoSoftSubtitleExportService:
             "+faststart",
             str(output),
         ]
-        completed = self._command_runner(cmd)
+        try:
+            completed = self._command_runner(cmd, self._command_timeout_s)
+        except subprocess.TimeoutExpired as exc:
+            raise VideoSubtitleExportError(
+                "ffmpeg excedeu o tempo máximo configurado para gerar o vídeo legendado"
+            ) from exc
         if completed.returncode != 0:
             stderr = (completed.stderr or completed.stdout or "").strip()
             raise VideoSubtitleExportError(
@@ -221,8 +258,8 @@ class VideoSoftSubtitleExportService:
             )
 
 
-def _run_command(cmd: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, check=False, capture_output=True, text=True)
+def _run_command(cmd: list[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=timeout_s)
 
 
 def _extract_downloaded_video_path(
