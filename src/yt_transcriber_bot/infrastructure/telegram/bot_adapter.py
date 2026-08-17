@@ -18,37 +18,41 @@ import asyncio
 import logging
 import re
 from collections.abc import Awaitable, Callable, Mapping
-from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
 from yt_transcriber_bot.application.config import AppSettings
 from yt_transcriber_bot.application.job_request_context import JobRequestContext
+from yt_transcriber_bot.application.ports.derived_artifacts import (
+    TRANSCRIPT_EXPORT_FORMATS,
+    DerivativeExportError,
+    DerivativeTooLargeError,
+    DerivativeTooLongError,
+)
 from yt_transcriber_bot.application.ports.incoming_media import (
     AudioDurationInspector,
     IncomingMedia,
     IncomingMediaDownloader,
 )
 from yt_transcriber_bot.application.ports.job_repository import JobRepository
+from yt_transcriber_bot.application.ports.staging_cleanup import PrivateStagingCleanup
+from yt_transcriber_bot.application.ports.text_generation import TextGenerationError
 from yt_transcriber_bot.application.services.config_signature import (
     compute_processing_fingerprint,
 )
-from yt_transcriber_bot.application.services.healthcheck import HealthCheckService
-from yt_transcriber_bot.application.services.history_search import HistorySearchService
-from yt_transcriber_bot.application.services.last_error import LastErrorService
-from yt_transcriber_bot.application.services.rename_speakers import (
-    RenameResult,
-    RenameSpeakersService,
-)
-from yt_transcriber_bot.application.services.retention_policy import (
-    RetentionPolicy,
-)
+from yt_transcriber_bot.application.services.rename_speakers import RenameResult
 from yt_transcriber_bot.application.services.sanitization import sanitize_text
-from yt_transcriber_bot.application.services.search_indexing import SearchIndexingService
 from yt_transcriber_bot.application.services.startup_recovery import (
     RecoveredPendingJob,
     StartupRecoveryService,
+)
+from yt_transcriber_bot.application.services.transcript_summary import (
+    SummaryError,
+    SummaryProgress,
+)
+from yt_transcriber_bot.application.services.volatile_source_cleanup import (
+    VolatileSourceCleanupService,
 )
 from yt_transcriber_bot.application.use_cases.transcribe_video import (
     TranscribeVideoUseCase,
@@ -85,28 +89,7 @@ from yt_transcriber_bot.application.workflows.text_search import TextSearchWorkf
 from yt_transcriber_bot.domain.entities.job import Job
 from yt_transcriber_bot.domain.value_objects.media_source import MediaSource, MediaSourceType
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
-from yt_transcriber_bot.infrastructure.exporting.plain_text_exporter import (
-    PlainTextTranscriptExportService,
-)
-from yt_transcriber_bot.infrastructure.exporting.transcript_exporter import (
-    SUPPORTED_EXPORT_FORMATS,
-    TranscriptExportService,
-)
-from yt_transcriber_bot.infrastructure.exporting.video_subtitles_exporter import (
-    VideoSoftSubtitleExportService,
-    VideoSubtitleExportError,
-    VideoSubtitleTooLargeError,
-    VideoSubtitleTooLongError,
-)
 from yt_transcriber_bot.infrastructure.logging.execution_audit import ExecutionAuditLogger
-from yt_transcriber_bot.infrastructure.summarization.openai_compatible_client import (
-    ChatCompletionError,
-)
-from yt_transcriber_bot.infrastructure.summarization.transcript_summarizer import (
-    SummaryError,
-    SummaryProgress,
-    TranscriptSummaryService,
-)
 from yt_transcriber_bot.infrastructure.telegram.history import (
     HistoryPresentation,
     parse_history_index,
@@ -136,14 +119,6 @@ def _payload_display_label(payload: JobPayload) -> str:
 
 def _video_id_value(video_id: VideoId | None) -> str | None:
     return video_id.value if video_id is not None else None
-
-
-def _remove_staged_media(directory: Path) -> None:
-    for path in directory.glob("*") if directory.exists() else ():
-        with suppress(OSError):
-            path.unlink()
-    with suppress(OSError):
-        directory.rmdir()
 
 
 HELP_TEXT = """🤖 yt-transcriber-bot — comandos disponíveis
@@ -290,65 +265,42 @@ class TelegramBotAdapter:
         client: BotClient,
         use_case: TranscribeVideoUseCase,
         repository: JobRepository | None = None,
-        rename_service: RenameSpeakersService | None = None,
-        export_service: TranscriptExportService | None = None,
-        plain_text_export_service: PlainTextTranscriptExportService | None = None,
-        summary_service: TranscriptSummaryService | None = None,
-        video_subtitle_export_service: VideoSoftSubtitleExportService | None = None,
-        history_search_service: HistorySearchService | None = None,
-        healthcheck_service: HealthCheckService | None = None,
-        lasterror_service: LastErrorService | None = None,
-        retention_policy: RetentionPolicy | None = None,
-        models_dir: Path | None = None,
         audit_logger: ExecutionAuditLogger | None = None,
         media_downloader: IncomingMediaDownloader | None = None,
         duration_inspector: AudioDurationInspector | None = None,
+        history_presentation: HistoryPresentation | None = None,
+        history_workflow: CompletedHistoryWorkflow | None = None,
+        execution_lifecycle: ExecutionLifecycleService | None = None,
+        startup_recovery_service: StartupRecoveryService | None = None,
+        source_cleanup_service: VolatileSourceCleanupService | None = None,
+        staging_cleanup: PrivateStagingCleanup | None = None,
         text_search_workflow: TextSearchWorkflow | None = None,
         derivative_workflow: TranscriptDerivativeWorkflow | None = None,
         summary_workflow: SummaryWorkflow | None = None,
         operational_workflow: OperationalWorkflow | None = None,
-        search_indexing_service: SearchIndexingService | None = None,
     ) -> None:
         self._settings = settings
         self._client = client
         self._use_case = use_case
         self._repository = repository
-        self._rename_service = rename_service
-        self._completed_history = CompletedHistoryWorkflow(
-            repository,
-            markdown_available=Path.is_file,
-        )
-        self._history = HistoryPresentation(rename_service)
-        self._export_service = export_service
-        self._plain_text_export_service = plain_text_export_service
-        self._summary_service = summary_service
-        self._video_subtitle_export_service = video_subtitle_export_service
-        self._history_search_service = history_search_service
-        self._healthcheck_service = healthcheck_service
-        self._lasterror_service = lasterror_service
-        self._retention_policy = retention_policy
-        self._models_dir = models_dir
         self._audit_logger = audit_logger
         self._media_downloader = media_downloader
         self._duration_inspector = duration_inspector
+        self._history = history_presentation or HistoryPresentation()
+        self._completed_history = history_workflow or CompletedHistoryWorkflow(repository)
+        self._execution_lifecycle = execution_lifecycle or ExecutionLifecycleService(repository)
+        self._startup_recovery_service = startup_recovery_service or (
+            StartupRecoveryService(repository) if repository is not None else None
+        )
+        self._source_cleanup_service = source_cleanup_service
+        self._staging_cleanup = staging_cleanup
         self._text_search_workflow = text_search_workflow
         self._derivative_workflow = derivative_workflow
         self._summary_workflow = summary_workflow
         self._operational_workflow = operational_workflow
-        self._search_indexing_service = search_indexing_service
-        self._execution_lifecycle = ExecutionLifecycleService(
-            repository,
-            completed_observer=(
-                search_indexing_service.refresh if search_indexing_service is not None else None
-            ),
-        )
         self._rename_session: RenameSession | None = None
         self._queue: SequentialJobQueue[JobPayload] = SequentialJobQueue(self._process_job)
-        self._startup_recovery_service = (
-            StartupRecoveryService(repository) if repository is not None else None
-        )
         self._startup_recovery_done = False
-        self._request_context_sidecar: dict[str, JobRequestContext] = {}
 
     # ------------------------------------------------------------------
     # Ciclo de vida
@@ -455,7 +407,7 @@ class TelegramBotAdapter:
                     self._duration_inspector.duration_seconds, path
                 )
         except (OSError, OverflowError, ValueError):
-            _remove_staged_media(staging_dir)
+            self._discard_staging_directory(staging_dir)
             await self._send_text(chat_id, "Não foi possível validar o áudio recebido.")
             return
 
@@ -471,7 +423,7 @@ class TelegramBotAdapter:
                 request_context_saver=self._save_request_context_if_possible,
             )
         except Exception as exc:
-            _remove_staged_media(staging_dir)
+            self._discard_staging_directory(staging_dir)
             logger.error(
                 "Falha ao persistir job de mídia Telegram antes do enqueue: %s",
                 type(exc).__name__,
@@ -483,7 +435,7 @@ class TelegramBotAdapter:
             return
 
         if isinstance(committed, AdmissionRejection):
-            _remove_staged_media(staging_dir)
+            self._discard_staging_directory(staging_dir)
             await self._send_text(chat_id, "Não foi possível validar o áudio recebido.")
             return
         assert isinstance(committed, MediaAdmission)
@@ -513,6 +465,17 @@ class TelegramBotAdapter:
             source_type="telegram_audio",
             queue_position=item.enqueued_position,
         )
+
+    def _discard_staging_directory(self, directory: Path) -> None:
+        if self._staging_cleanup is None:
+            return
+        try:
+            self._staging_cleanup.clear(directory)
+        except Exception as exc:  # pragma: no cover - cleanup must not mask admission failure
+            logger.warning(
+                "Falha ao limpar staging privado: %s",
+                sanitize_text(str(exc), self._settings),
+            )
 
     def _media_admission_rejection_text(self, rejection: AdmissionRejection) -> str:
         if rejection.code is AdmissionRejectionCode.QUEUE_FULL:
@@ -591,7 +554,7 @@ class TelegramBotAdapter:
             await self.handle_command_text(chat_id=chat_id, user_id=user_id, text=stripped)
         elif command == "export":
             await self.handle_command_export(chat_id=chat_id, user_id=user_id, text=stripped)
-        elif command in set(SUPPORTED_EXPORT_FORMATS):
+        elif command in set(TRANSCRIPT_EXPORT_FORMATS):
             await self.handle_command_export_shortcut(
                 chat_id=chat_id, user_id=user_id, format=command, text=stripped
             )
@@ -760,17 +723,12 @@ class TelegramBotAdapter:
     async def handle_command_healthcheck(self, *, chat_id: int, user_id: int) -> None:
         if not self._is_authorized(user_id):
             return
-        if self._operational_workflow is None and self._healthcheck_service is None:
+        if self._operational_workflow is None:
             await self._send_text(chat_id, "Healthcheck indisponível neste bot.")
             return
         try:
-            runner = (
-                self._operational_workflow.healthcheck
-                if self._operational_workflow is not None
-                else self._healthcheck_service.run  # type: ignore[union-attr]
-            )
-            report = await asyncio.to_thread(runner)
-        except Exception as exc:  # pragma: no cover - caminho defensivo
+            report = await asyncio.to_thread(self._operational_workflow.healthcheck)
+        except Exception as exc:  # pragma: no cover - defensive transport boundary
             logger.error(
                 "Healthcheck falhou: %s: %s",
                 type(exc).__name__,
@@ -787,17 +745,12 @@ class TelegramBotAdapter:
     async def handle_command_lasterror(self, *, chat_id: int, user_id: int) -> None:
         if not self._is_authorized(user_id):
             return
-        if self._operational_workflow is None and self._lasterror_service is None:
+        if self._operational_workflow is None:
             await self._send_text(chat_id, "Consulta de último erro indisponível neste bot.")
             return
         try:
-            getter = (
-                self._operational_workflow.last_error
-                if self._operational_workflow is not None
-                else self._lasterror_service.latest_for_user  # type: ignore[union-attr]
-            )
-            report = await asyncio.to_thread(getter, user_id)
-        except Exception as exc:  # pragma: no cover - caminho defensivo
+            report = await asyncio.to_thread(self._operational_workflow.last_error, user_id)
+        except Exception as exc:  # pragma: no cover - defensive transport boundary
             logger.error(
                 "/lasterror falhou: %s: %s",
                 type(exc).__name__,
@@ -822,17 +775,11 @@ class TelegramBotAdapter:
         stage: str = "",
         severity: str = "error",
     ) -> None:
-        """Registra falhas de comandos derivados para consulta via /lasterror."""
-        if self._operational_workflow is None and self._lasterror_service is None:
+        if self._operational_workflow is None:
             return
         try:
-            recorder = (
-                self._operational_workflow.record_error
-                if self._operational_workflow is not None
-                else self._lasterror_service.record_operation_error  # type: ignore[union-attr]
-            )
             await asyncio.to_thread(
-                recorder,
+                self._operational_workflow.record_error,
                 user_id=user_id,
                 operation=operation,
                 message=message,
@@ -841,7 +788,7 @@ class TelegramBotAdapter:
                 stage=stage,
                 severity=severity,
             )
-        except Exception as exc:  # pragma: no cover - caminho defensivo
+        except Exception as exc:  # pragma: no cover - diagnostic must never break transport
             logger.warning(
                 "Não consegui registrar erro operacional %s: %s",
                 operation,
@@ -1024,62 +971,35 @@ class TelegramBotAdapter:
         if not query:
             await self._send_text(chat_id, "Uso: /search <texto>. Exemplo: /search privacidade.")
             return
-        if self._text_search_workflow is not None:
-            try:
-                workflow_results = await asyncio.to_thread(
-                    self._text_search_workflow.search,
-                    user_id=user_id,
-                    query=query,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Falha ao pesquisar histórico: %s",
-                    sanitize_text(str(exc), self._settings),
-                )
-                await self._send_text(chat_id, "Não foi possível pesquisar seu histórico agora.")
-                return
-            if not workflow_results:
-                await self._send_text(chat_id, f"Nenhum resultado para “{query}”.")
-                return
-            lines = [f"Resultados para “{query}”: "]
-            for workflow_result in workflow_results:
-                lines.extend(
-                    [
-                        f"{workflow_result.history_index}. {_compact_search_text(workflow_result.title, limit=120)} — "
-                        f"{workflow_result.video_id or workflow_result.source_label} — {workflow_result.completed_at}",
-                        f"   {_compact_search_text(workflow_result.snippet, limit=240)}",
-                    ]
-                )
-            await self._send_text(chat_id, chr(10).join(lines))
-            return
-
-        # Compatibility path removed by TASK-P04-014.
-        if self._history_search_service is None:
+        if self._text_search_workflow is None:
             await self._send_text(chat_id, "Busca indisponível neste bot.")
             return
-        legacy_results = await asyncio.to_thread(
-            self._history_search_service.search, user_id=user_id, query=query
-        )
-        if not legacy_results:
+        try:
+            results = await asyncio.to_thread(
+                self._text_search_workflow.search,
+                user_id=user_id,
+                query=query,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Falha ao pesquisar histórico: %s",
+                sanitize_text(str(exc), self._settings),
+            )
+            await self._send_text(chat_id, "Não foi possível pesquisar seu histórico agora.")
+            return
+        if not results:
             await self._send_text(chat_id, f"Nenhum resultado para “{query}”.")
             return
-        history = self._completed_history.list_completed(user_id, limit=200)
-        indexes = {job.job_id: index for index, job in enumerate(history, start=1)}
         lines = [f"Resultados para “{query}”: "]
-        for legacy_result in legacy_results:
-            index = indexes.get(legacy_result.job_id)
-            if index is not None:
-                lines.extend(
-                    [
-                        f"{index}. {_compact_search_text(legacy_result.title, limit=120)} — "
-                        f"{legacy_result.video_id or legacy_result.source_label} — {legacy_result.completed_at}",
-                        f"   {_compact_search_text(legacy_result.snippet, limit=240)}",
-                    ]
-                )
-        await self._send_text(
-            chat_id,
-            chr(10).join(lines) if len(lines) > 1 else f"Nenhum resultado para “{query}”.",
-        )
+        for result in results:
+            lines.extend(
+                [
+                    f"{result.history_index}. {_compact_search_text(result.title, limit=120)} — "
+                    f"{result.video_id or result.source_label} — {result.completed_at}",
+                    f"   {_compact_search_text(result.snippet, limit=240)}",
+                ]
+            )
+        await self._send_text(chat_id, "\n".join(lines))
 
     async def handle_command_last(self, *, chat_id: int, user_id: int, text: str = "") -> None:
         if not self._is_authorized(user_id):
@@ -1104,64 +1024,39 @@ class TelegramBotAdapter:
     async def handle_command_rename(self, *, chat_id: int, user_id: int, text: str = "") -> None:
         if not self._is_authorized(user_id):
             return
-        if self._repository is None or self._rename_service is None:
+        if self._derivative_workflow is None:
             await self._send_text(chat_id, "Renomeação indisponível neste bot.")
             return
         index = parse_history_index(text)
-        selected: Job
-        slug: str | None
-        if self._derivative_workflow is not None:
-            try:
-                prepared = await asyncio.to_thread(
-                    self._derivative_workflow.prepare_rename,
-                    user_id=user_id,
-                    index=index,
-                )
-            except (ValueError, LookupError, FileNotFoundError) as exc:
-                await self._send_text(chat_id, str(exc))
-                return
-            selected = prepared.job
-            slug = prepared.canonical_transcript_ref
-            speakers = prepared.speakers
-        else:
-            legacy_selected = await self._select_completed_job(
-                chat_id=chat_id, user_id=user_id, index=index
+        try:
+            prepared = await asyncio.to_thread(
+                self._derivative_workflow.prepare_rename,
+                user_id=user_id,
+                index=index,
             )
-            if legacy_selected is None:
-                return
-            selected = legacy_selected
-            slug = self._snapshot_ref_for_job(selected)
-        if slug is None:
-            await self._send_text(chat_id, "Não consegui localizar o snapshot dessa transcrição.")
+        except (ValueError, LookupError, FileNotFoundError) as exc:
+            await self._send_text(chat_id, str(exc))
             return
-        if self._derivative_workflow is None:
-            try:
-                speakers = self._rename_service.list_speakers(slug)
-            except FileNotFoundError:
-                await self._send_text(
-                    chat_id, "Snapshot dessa transcrição expirou. Reprocesse o vídeo."
-                )
-                return
-        if not speakers:
+        if not prepared.speakers:
             await self._send_text(chat_id, "Nenhum falante para renomear.")
             return
+        selected = prepared.job
         self._rename_session = RenameSession(
             user_id=user_id,
-            slug=slug,
+            slug=prepared.canonical_transcript_ref,
             job_id=selected.job_id,
             md_path=selected.md_path,
             aliases=dict(selected.speaker_renames),
         )
-        keyboard = _rename_keyboard(speakers)
         await self._send_text(
             chat_id,
             f"✏️ Renomear falantes da transcrição #{index}.\n"
             f"Alvo: {self._history.format_job(selected)}\n"
-            f"Falantes detectados: {', '.join(speakers)}\n\n"
+            f"Falantes detectados: {', '.join(prepared.speakers)}\n\n"
             "Toque em um falante para renomear com botões, ou envie diretamente:\n"
             "SPEAKER_00=João, SPEAKER_01=Maria\n\n"
             "Para mesclar falantes, use o mesmo nome em dois labels.",
-            reply_markup=keyboard,
+            reply_markup=_rename_keyboard(prepared.speakers),
         )
 
     async def handle_callback_query(self, *, chat_id: int, user_id: int, data: str) -> None:
@@ -1216,29 +1111,19 @@ class TelegramBotAdapter:
         return self._completed_history.select_from_completed(jobs, index=index)
 
     async def handle_command_summary(self, *, chat_id: int, user_id: int, text: str = "") -> None:
-        """Gera resumo estruturado em Markdown para uma transcrição concluída."""
         if not self._is_authorized(user_id):
             return
-        if self._summary_workflow is not None:
-            await self._run_summary_workflow(chat_id=chat_id, user_id=user_id, text=text)
-            return
-        if self._repository is None or self._summary_service is None:
+        if self._summary_workflow is None:
             await self._send_text(
                 chat_id,
                 "Sumarização indisponível neste bot. Verifique SUMMARY_BACKEND e a configuração do LM Studio.",
             )
             return
+        await self._run_summary_workflow(chat_id=chat_id, user_id=user_id, text=text)
+
+    async def _run_summary_workflow(self, *, chat_id: int, user_id: int, text: str) -> None:
+        assert self._summary_workflow is not None
         index = parse_history_index(text)
-        selected = await self._select_completed_job(chat_id=chat_id, user_id=user_id, index=index)
-        if selected is None:
-            return
-        slug = self._snapshot_ref_for_job(selected)
-        if slug is None:
-            await self._send_text(chat_id, "Não consegui localizar o snapshot dessa transcrição.")
-            return
-        output_base = (
-            Path(selected.md_path) if selected.md_path else self._settings.summaries_dir() / slug
-        )
         progress_message_id = await self._send_text(
             chat_id,
             f"🧠 Gerando resumo da transcrição #{index} com {self._settings.summary_model}. "
@@ -1259,44 +1144,28 @@ class TelegramBotAdapter:
             else None
         )
 
-        def summary_progress_cb(event: SummaryProgress) -> None:
-            if progress is None:
-                return
-            asyncio.run_coroutine_threadsafe(
-                progress.stage(_humanize_summary_progress(event)), loop
-            )
+        def callback(event: SummaryProgress) -> None:
+            if progress is not None:
+                asyncio.run_coroutine_threadsafe(
+                    progress.stage(_humanize_summary_progress(event)),
+                    loop,
+                )
 
         try:
             result = await asyncio.to_thread(
-                self._summary_service.summarize,
-                slug=slug,
-                output_base_path=output_base,
-                speaker_aliases=selected.speaker_renames,
-                on_progress=summary_progress_cb,
-            )
-        except FileNotFoundError as exc:
-            await self._record_operational_error(
+                self._summary_workflow.summarize,
                 user_id=user_id,
-                operation="summary",
-                message="Snapshot dessa transcrição expirou. Reprocesse o vídeo.",
-                context=_artifact_error_context(
-                    selected, index=index, error=exc, artifact="summary"
-                ),
-                error=exc,
-                stage="snapshot",
+                index=index,
+                on_progress=callback,
             )
-            await self._send_text(
-                chat_id, "Snapshot dessa transcrição expirou. Reprocesse o vídeo."
-            )
+        except (FileNotFoundError, ValueError, LookupError) as exc:
+            await self._send_text(chat_id, str(exc))
             return
-        except ChatCompletionError as exc:
+        except TextGenerationError as exc:
             await self._record_operational_error(
                 user_id=user_id,
                 operation="summary",
                 message=f"Falha ao chamar a LLM de resumo: {exc}",
-                context=_artifact_error_context(
-                    selected, index=index, error=exc, artifact="summary"
-                ),
                 error=exc,
                 stage="llm",
             )
@@ -1311,9 +1180,6 @@ class TelegramBotAdapter:
                 user_id=user_id,
                 operation="summary",
                 message=f"Falha ao gerar resumo: {exc}",
-                context=_artifact_error_context(
-                    selected, index=index, error=exc, artifact="summary"
-                ),
                 error=exc,
                 stage="summary",
             )
@@ -1321,66 +1187,6 @@ class TelegramBotAdapter:
                 chat_id,
                 "Falha ao gerar resumo. "
                 "Detalhes técnicos sanitizados foram registrados em /lasterror.",
-            )
-            return
-        if progress is not None:
-            await progress.finish(
-                f"✅ Resumo gerado para a transcrição #{index} "
-                f"({result.chunks} bloco(s), modelo {result.model}). Enviando arquivo…"
-            )
-        else:
-            await self._send_text(
-                chat_id,
-                f"✅ Resumo gerado para a transcrição #{index} "
-                f"({result.chunks} bloco(s), modelo {result.model}). Enviando arquivo…",
-            )
-        await self._send_document_with_retry(chat_id, result.path)
-
-    async def _run_summary_workflow(self, *, chat_id: int, user_id: int, text: str) -> None:
-        assert self._summary_workflow is not None
-        index = parse_history_index(text)
-        progress_message_id = await self._send_text(
-            chat_id,
-            f"🧠 Gerando resumo da transcrição #{index} com {self._settings.summary_model}. "
-            "Preparando transcrição para a LLM…",
-        )
-        loop = asyncio.get_running_loop()
-        progress = (
-            ProgressReporter(
-                _make_editor(self._client, chat_id, progress_message_id, settings=self._settings),
-                min_interval_s=self._settings.telegram_message_edit_min_interval_s,
-            )
-            if progress_message_id
-            else None
-        )
-
-        def callback(event: SummaryProgress) -> None:
-            if progress is not None:
-                asyncio.run_coroutine_threadsafe(
-                    progress.stage(_humanize_summary_progress(event)), loop
-                )
-
-        try:
-            result = await asyncio.to_thread(
-                self._summary_workflow.summarize,
-                user_id=user_id,
-                index=index,
-                on_progress=callback,
-            )
-        except (FileNotFoundError, ValueError, LookupError) as exc:
-            await self._send_text(chat_id, str(exc))
-            return
-        except (ChatCompletionError, SummaryError) as exc:
-            await self._record_operational_error(
-                user_id=user_id,
-                operation="summary",
-                message=f"Falha ao gerar resumo: {exc}",
-                error=exc,
-                stage="summary",
-            )
-            await self._send_text(
-                chat_id,
-                "Falha ao gerar resumo. Detalhes técnicos sanitizados foram registrados em /lasterror.",
             )
             return
         if progress is not None:
@@ -1403,67 +1209,20 @@ class TelegramBotAdapter:
         )
 
     async def handle_command_text(self, *, chat_id: int, user_id: int, text: str = "") -> None:
-        """Exporta texto limpo de snapshot concluído, sem reprocessar mídia."""
         if not self._is_authorized(user_id):
             return
-
-        if self._derivative_workflow is not None:
-            index = parse_history_index(text)
-            try:
-                workflow_result = await asyncio.to_thread(
-                    self._derivative_workflow.export_text,
-                    user_id=user_id,
-                    index=index,
-                )
-            except (ValueError, LookupError, FileNotFoundError) as exc:
-                await self._send_text(chat_id, str(exc))
-                return
-            await self._send_text(
-                chat_id, f"📄 Texto limpo gerado para a transcrição #{index}. Enviando arquivo…"
-            )
-            await self._send_document_with_retry(chat_id, workflow_result.path)
-            return
-        if self._repository is None:
+        if self._derivative_workflow is None:
             await self._send_text(chat_id, "Exportação de texto indisponível neste bot.")
             return
         index = parse_history_index(text)
-        # Mantém a mesma mensagem de índice inválido dos comandos de histórico,
-        # mesmo quando o exportador opcional não foi instalado neste processo.
-        if index <= 0:
-            await self._select_completed_job(chat_id=chat_id, user_id=user_id, index=index)
-            return
-        if self._plain_text_export_service is None:
-            await self._send_text(chat_id, "Exportação de texto indisponível neste bot.")
-            return
-        selected = await self._select_completed_job(chat_id=chat_id, user_id=user_id, index=index)
-        if selected is None:
-            return
-        slug = self._snapshot_ref_for_job(selected)
-        if slug is None:
-            await self._send_text(chat_id, "Não consegui localizar o snapshot dessa transcrição.")
-            return
-        output_base = (
-            Path(selected.md_path) if selected.md_path else self._settings.transcripts_dir() / slug
-        )
         try:
             result = await asyncio.to_thread(
-                self._plain_text_export_service.export,
-                slug=slug,
-                output_base_path=output_base,
-                speaker_aliases=selected.speaker_renames,
-            )
-        except FileNotFoundError as exc:
-            await self._record_operational_error(
+                self._derivative_workflow.export_text,
                 user_id=user_id,
-                operation="text_export",
-                message="Snapshot dessa transcrição expirou. Reprocesse o vídeo.",
-                context=_artifact_error_context(selected, index=index, error=exc, artifact="text"),
-                error=exc,
-                stage="snapshot",
+                index=index,
             )
-            await self._send_text(
-                chat_id, "Snapshot dessa transcrição expirou. Reprocesse o vídeo."
-            )
+        except (ValueError, LookupError, FileNotFoundError) as exc:
+            await self._send_text(chat_id, str(exc))
             return
         await self._send_text(
             chat_id, f"📄 Texto limpo gerado para a transcrição #{index}. Enviando arquivo…"
@@ -1471,39 +1230,7 @@ class TelegramBotAdapter:
         await self._send_document_with_retry(chat_id, result.path)
 
     async def handle_command_export(self, *, chat_id: int, user_id: int, text: str = "") -> None:
-        """Exporta JSON/SRT/VTT de uma transcrição concluída sem reprocessar."""
         if not self._is_authorized(user_id):
-            return
-
-        if self._derivative_workflow is not None:
-            parsed = _parse_export_command(text)
-            if parsed is None:
-                await self._send_text(
-                    chat_id,
-                    "Uso: /export json|srt|vtt [n]. Exemplo: /export srt 2. "
-                    "Use /list para ver as transcrições disponíveis.",
-                )
-                return
-            fmt, index = parsed
-            try:
-                workflow_result = await asyncio.to_thread(
-                    self._derivative_workflow.export_transcript,
-                    user_id=user_id,
-                    index=index,
-                    format=fmt,
-                )
-            except (ValueError, LookupError, FileNotFoundError) as exc:
-                await self._send_text(chat_id, str(exc))
-                return
-            await self._send_text(
-                chat_id,
-                f"📦 Exportação {workflow_result.format.upper()} gerada para a transcrição "
-                f"#{index}. Enviando arquivo…",
-            )
-            await self._send_document_with_retry(chat_id, workflow_result.path)
-            return
-        if self._repository is None or self._export_service is None:
-            await self._send_text(chat_id, "Exportação indisponível neste bot.")
             return
         parsed = _parse_export_command(text)
         if parsed is None:
@@ -1513,186 +1240,62 @@ class TelegramBotAdapter:
                 "Use /list para ver as transcrições disponíveis.",
             )
             return
+        if self._derivative_workflow is None:
+            await self._send_text(chat_id, "Exportação indisponível neste bot.")
+            return
         fmt, index = parsed
-        selected = await self._select_completed_job(chat_id=chat_id, user_id=user_id, index=index)
-        if selected is None:
-            return
-        slug = self._snapshot_ref_for_job(selected)
-        if slug is None:
-            await self._send_text(chat_id, "Não consegui localizar o snapshot dessa transcrição.")
-            return
-        output_base = (
-            Path(selected.md_path) if selected.md_path else self._settings.transcripts_dir() / slug
-        )
         try:
-            result = self._export_service.export(
-                slug=slug,
-                output_base_path=output_base,
+            result = await asyncio.to_thread(
+                self._derivative_workflow.export_transcript,
+                user_id=user_id,
+                index=index,
                 format=fmt,
-                speaker_aliases=selected.speaker_renames,
             )
-        except FileNotFoundError as exc:
-            await self._record_operational_error(
-                user_id=user_id,
-                operation="export",
-                message="Snapshot dessa transcrição expirou. Reprocesse o vídeo.",
-                context=_artifact_error_context(selected, index=index, error=exc, artifact=fmt),
-                error=exc,
-                stage="snapshot",
-            )
-            await self._send_text(
-                chat_id, "Snapshot dessa transcrição expirou. Reprocesse o vídeo."
-            )
-            return
-        except ValueError as exc:
-            await self._record_operational_error(
-                user_id=user_id,
-                operation="export",
-                message=str(exc),
-                context=_artifact_error_context(selected, index=index, error=exc, artifact=fmt),
-                error=exc,
-                stage="export",
-            )
+        except (ValueError, LookupError, FileNotFoundError) as exc:
             await self._send_text(chat_id, str(exc))
             return
         await self._send_text(
             chat_id,
-            f"📦 Exportação {result.format.upper()} gerada para a transcrição #{index}. Enviando arquivo…",
+            f"📦 Exportação {result.format.upper()} gerada para a transcrição "
+            f"#{index}. Enviando arquivo…",
         )
         await self._send_document_with_retry(chat_id, result.path)
 
     async def handle_command_video_subs(
         self, *, chat_id: int, user_id: int, text: str = ""
     ) -> None:
-        """Gera e envia MP4 com legenda selecionável para uma transcrição concluída."""
         if not self._is_authorized(user_id):
             return
-
-        if self._derivative_workflow is not None:
-            index = parse_history_index(text)
-            try:
-                workflow_result = await asyncio.to_thread(
-                    self._derivative_workflow.export_video,
-                    user_id=user_id,
-                    index=index,
-                )
-            except (
-                VideoSubtitleTooLongError,
-                VideoSubtitleTooLargeError,
-                VideoSubtitleExportError,
-                ValueError,
-                LookupError,
-                FileNotFoundError,
-            ) as exc:
-                await self._record_operational_error(
-                    user_id=user_id,
-                    operation="video_subs",
-                    message=str(exc),
-                    error=exc,
-                    stage="video_derivative",
-                )
-                await self._send_text(chat_id, str(exc))
-                return
-            await self._send_text(
-                chat_id,
-                f"✅ MP4 com legenda selecionável gerado para a transcrição #{index}. Enviando vídeo…",
-            )
-            await self._send_video_with_retry(
-                chat_id,
-                workflow_result.path,
-                caption=(
-                    "🎬 Vídeo com legenda selecionável\n"
-                    f"Arquivo: {_format_file_size(workflow_result.size_bytes or 0)}\n"
-                    "A legenda foi adicionada como faixa selecionável no MP4."
-                ),
-            )
-            return
-        if self._repository is None or self._video_subtitle_export_service is None:
+        if self._derivative_workflow is None:
             await self._send_text(chat_id, "Exportação de vídeo legendado indisponível neste bot.")
             return
         index = parse_history_index(text)
-        selected = await self._select_completed_job(chat_id=chat_id, user_id=user_id, index=index)
-        if selected is None:
-            return
-        video_id = selected.video_id
-        if video_id is None:
-            await self._send_text(
-                chat_id,
-                "Vídeo legendado está disponível apenas para transcrições do YouTube.",
-            )
-            return
-        slug = self._snapshot_ref_for_job(selected)
-        if slug is None:
-            await self._send_text(chat_id, "Não consegui localizar o snapshot dessa transcrição.")
-            return
-        await self._send_text(
-            chat_id,
-            "🎬 Gerando MP4 com legenda selecionável. "
-            f"Limites: {self._settings.max_video_subtitles_duration_min} min e "
-            f"{self._settings.max_video_subtitles_size_mb} MB.",
-        )
         try:
             result = await asyncio.to_thread(
-                self._video_subtitle_export_service.export,
-                video_id=video_id,
-                slug=slug,
-                speaker_aliases=selected.speaker_renames,
-            )
-        except FileNotFoundError as exc:
-            await self._record_operational_error(
+                self._derivative_workflow.export_video,
                 user_id=user_id,
-                operation="video_subs",
-                message="Snapshot dessa transcrição expirou. Reprocesse o vídeo.",
-                context=_artifact_error_context(
-                    selected, index=index, error=exc, artifact="video_subs"
-                ),
-                error=exc,
-                stage="snapshot",
+                index=index,
             )
-            await self._send_text(
-                chat_id, "Snapshot dessa transcrição expirou. Reprocesse o vídeo."
-            )
-            return
-        except VideoSubtitleTooLongError as exc:
+        except (DerivativeTooLongError, DerivativeTooLargeError) as exc:
             await self._record_operational_error(
                 user_id=user_id,
                 operation="video_subs",
                 message=f"Vídeo não exportado: {exc}",
-                context=_artifact_error_context(
-                    selected, index=index, error=exc, artifact="video_subs"
-                ),
                 error=exc,
                 stage="limits",
                 severity="warn",
             )
             await self._send_text(chat_id, f"Vídeo não exportado: {exc}")
             return
-        except VideoSubtitleTooLargeError as exc:
-            await self._record_operational_error(
-                user_id=user_id,
-                operation="video_subs",
-                message=f"Vídeo não exportado: {exc}",
-                context=_artifact_error_context(
-                    selected, index=index, error=exc, artifact="video_subs"
-                ),
-                error=exc,
-                stage="limits",
-                severity="warn",
-            )
-            await self._send_text(chat_id, f"Vídeo não exportado: {exc}")
-            return
-        except VideoSubtitleExportError as exc:
+        except (DerivativeExportError, ValueError, LookupError, FileNotFoundError) as exc:
             await self._record_operational_error(
                 user_id=user_id,
                 operation="video_subs",
                 message=f"Falha ao gerar vídeo legendado: {exc}",
-                context=_artifact_error_context(
-                    selected, index=index, error=exc, artifact="video_subs"
-                ),
                 error=exc,
-                stage="ffmpeg",
+                stage="video_derivative",
             )
-            await self._send_text(chat_id, f"Falha ao gerar vídeo legendado: {exc}")
+            await self._send_text(chat_id, str(exc))
             return
         await self._send_text(
             chat_id,
@@ -1703,7 +1306,7 @@ class TelegramBotAdapter:
             result.path,
             caption=(
                 "🎬 Vídeo com legenda selecionável\n"
-                f"Arquivo: {_format_file_size(result.size_bytes)}\n"
+                f"Arquivo: {_format_file_size(result.size_bytes or 0)}\n"
                 "A legenda foi adicionada como faixa selecionável no MP4."
             ),
         )
@@ -1711,61 +1314,14 @@ class TelegramBotAdapter:
     async def handle_command_clearcache(self, *, chat_id: int, user_id: int) -> None:
         if not self._is_authorized(user_id):
             return
-
-        if self._operational_workflow is not None:
-            result = await asyncio.to_thread(self._operational_workflow.clear_cache)
-            suffix = f" {result.failures} falha(s)." if result.failures else ""
-            await self._send_text(
-                chat_id,
-                f"Cache limpo. {result.removed_files} arquivo(s) removido(s).{suffix}",
-            )
+        if self._operational_workflow is None:
+            await self._send_text(chat_id, "Limpeza de cache indisponível neste bot.")
             return
-        if self._models_dir is None or not self._models_dir.is_dir():
-            await self._send_text(chat_id, "Diretório de cache de modelos não definido.")
-            return
-        if not self._is_safe_models_cache_dir(self._models_dir):
-            await self._send_text(
-                chat_id,
-                "Operação recusada: diretório de cache de modelos parece inseguro.",
-            )
-            return
-        removed = 0
-        failures: list[str] = []
-        for entry in self._models_dir.rglob("*"):
-            if entry.is_file():
-                try:
-                    entry.unlink()
-                    removed += 1
-                except OSError as exc:
-                    failures.append(f"{entry}: {exc}")
-        if failures:
-            await self._record_operational_error(
-                user_id=user_id,
-                operation="clearcache",
-                message=f"Falha ao remover {len(failures)} arquivo(s) do cache de modelos.",
-                context={
-                    "models_dir": self._models_dir,
-                    "failed_files": " | ".join(failures[:5]),
-                },
-                stage="filesystem",
-                severity="warn",
-            )
-        suffix = f" {len(failures)} falha(s) foram registradas em /lasterror." if failures else ""
-        await self._send_text(chat_id, f"Cache limpo. {removed} arquivo(s) removido(s).{suffix}")
-
-    def _is_safe_models_cache_dir(self, path: Path) -> bool:
-        """Impede que /clearcache apague diretórios amplos por erro de configuração."""
-        try:
-            resolved = path.resolve()
-            configured = self._settings.models_dir.resolve()
-        except OSError:
-            return False
-        unsafe_names = {"", "/", "home", "usr", "var", "tmp", "etc", "opt"}
-        return (
-            resolved == configured
-            and resolved.parent != resolved
-            and resolved.name not in unsafe_names
-            and len(resolved.parts) >= 2
+        result = await asyncio.to_thread(self._operational_workflow.clear_cache)
+        suffix = f" {result.failures} falha(s)." if result.failures else ""
+        await self._send_text(
+            chat_id,
+            f"Cache limpo. {result.removed_files} arquivo(s) removido(s).{suffix}",
         )
 
     def _extract_language_hint(self, text: str) -> str | None:
@@ -1787,7 +1343,6 @@ class TelegramBotAdapter:
     async def _handle_rename_input(self, chat_id: int, user_id: int, text: str) -> None:
         session = self._rename_session
         assert session is not None
-        assert self._rename_service is not None
         selected_label = session.selected_label
         aliases: dict[str, str]
         if selected_label is not None and "=" not in text:
@@ -1832,47 +1387,23 @@ class TelegramBotAdapter:
         session: RenameSession,
         aliases: dict[str, str],
     ) -> RenameResult | None:
-        if self._derivative_workflow is not None:
-            try:
-                return await asyncio.to_thread(
-                    self._derivative_workflow.rename,
-                    job_id=session.job_id,
-                    aliases=aliases,
-                )
-            except (LookupError, FileNotFoundError) as exc:
-                await self._send_text(chat_id, str(exc))
-                self._clear_pending_rename()
-                return None
-        # Compatibility path until TASK-P04-014.
-        assert self._repository is not None
-        assert self._rename_service is not None
-        target = self._repository.get_by_id(session.job_id)
-        md_path = session.md_path or (target.md_path if target else None)
-        if target is None or md_path is None:
-            await self._send_text(chat_id, "Job selecionado não encontrado.")
+        if self._derivative_workflow is None:
+            await self._send_text(chat_id, "Renomeação indisponível neste bot.")
             self._clear_pending_rename()
             return None
         try:
-            result = self._rename_service.rename(session.slug, aliases, Path(md_path))
-        except FileNotFoundError:
-            await self._send_text(chat_id, "Snapshot expirou. Reprocesse o vídeo.")
+            return await asyncio.to_thread(
+                self._derivative_workflow.rename,
+                job_id=session.job_id,
+                aliases=aliases,
+            )
+        except (LookupError, FileNotFoundError) as exc:
+            await self._send_text(chat_id, str(exc))
             self._clear_pending_rename()
             return None
-        # Atualiza speaker_renames no Job para auditoria
-        target.speaker_renames = dict(aliases)
-        self._repository.save(target)
-        return result
 
     def _clear_pending_rename(self) -> None:
         self._rename_session = None
-
-    @staticmethod
-    def _slug_from_md_path(md_path: str | None) -> str | None:
-        return HistoryPresentation.slug_from_md_path(md_path)
-
-    @staticmethod
-    def _snapshot_ref_for_job(job: Job) -> str | None:
-        return job.canonical_transcript_ref
 
     # ------------------------------------------------------------------
     # Worker — executa o use case e envia entregáveis
@@ -2047,38 +1578,16 @@ class TelegramBotAdapter:
 
     def _save_request_context_if_possible(self, context: JobRequestContext) -> None:
         if self._repository is not None:
-            save_context = getattr(self._repository, "save_request_context", None)
-            if callable(save_context):
-                save_context(context)
-                return
-        self._request_context_sidecar[context.job_id] = context
+            self._repository.save_request_context(context)
 
     def _request_context_for(self, job: Job) -> JobRequestContext | None:
-        if self._repository is not None:
-            get_context = getattr(self._repository, "get_request_context", None)
-            if callable(get_context):
-                persisted = get_context(job.job_id)
-                if isinstance(persisted, JobRequestContext):
-                    return persisted
-        return self._request_context_sidecar.get(job.job_id)
+        if self._repository is None:
+            return None
+        return self._repository.get_request_context(job.job_id)
 
     def _cleanup_telegram_source(self, job: Job) -> None:
-        request_context = self._request_context_for(job)
-        if (
-            job.media_source is None
-            or job.media_source.source_type is not MediaSourceType.TELEGRAM_AUDIO
-            or request_context is None
-            or not request_context.source_locator
-        ):
-            return
-        _remove_staged_media(Path(request_context.source_locator).parent)
-        self._save_request_context_if_possible(
-            JobRequestContext(
-                job_id=job.job_id,
-                delivery_chat_id=request_context.delivery_chat_id,
-                source_locator=None,
-            )
-        )
+        if self._source_cleanup_service is not None:
+            self._source_cleanup_service.cleanup(job)
 
     def _load_or_create_job(self, payload: JobPayload) -> Job:
         if payload.job_id is not None and self._repository is not None:
@@ -2242,16 +1751,11 @@ class TelegramBotAdapter:
         )
 
     def _apply_retention_after_success(self) -> None:
-        """Aplica retenção FIFO após entrega bem-sucedida sem derrubar o bot."""
-        if self._operational_workflow is None and self._retention_policy is None:
+        if self._operational_workflow is None:
             return
         try:
-            result = (
-                self._operational_workflow.apply_retention()
-                if self._operational_workflow is not None
-                else self._retention_policy.apply()  # type: ignore[union-attr]
-            )
-        except Exception as exc:  # pragma: no cover - caminho defensivo
+            result = self._operational_workflow.apply_retention()
+        except Exception as exc:  # pragma: no cover - diagnostic/cleanup isolation
             logger.warning(
                 "Falha ao aplicar retenção FIFO: %s",
                 sanitize_text(str(exc), self._settings),
@@ -2312,25 +1816,6 @@ class TelegramBotAdapter:
 # ----------------------------------------------------------------------
 # Helpers
 # ----------------------------------------------------------------------
-
-
-def _artifact_error_context(
-    job: Job, *, index: int, error: BaseException, artifact: str
-) -> dict[str, object]:
-    """Contexto comum para falhas de artefatos derivados."""
-    context: dict[str, object] = {
-        "artifact": artifact,
-        "history_index": index,
-        "job_id": job.job_id,
-        "video_id": _video_id_value(job.video_id),
-        "job_status": job.status.value,
-        "error_type": type(error).__name__,
-    }
-    if job.md_path:
-        context["md_path"] = job.md_path
-    if job.audio_path:
-        context["audio_path"] = job.audio_path
-    return context
 
 
 def _humanize_summary_progress(event: SummaryProgress) -> str:
@@ -2430,7 +1915,7 @@ def _parse_export_command(text: str) -> tuple[str, int] | None:
     if len(parts) < 2:
         return None
     fmt = parts[1].strip().lower().lstrip(".")
-    if fmt not in SUPPORTED_EXPORT_FORMATS:
+    if fmt not in TRANSCRIPT_EXPORT_FORMATS:
         return None
     index = 1
     if len(parts) >= 3:

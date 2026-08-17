@@ -54,7 +54,6 @@ class SummaryWorkflow:
         association = DerivedArtifactAssociation.from_job(job, ArtifactClass.DERIVED_SUMMARY)
         generated = self._summary_policy.summarize(
             slug=association.canonical_transcript_ref,
-            output_base_path=Path(association.canonical_transcript_ref),
             speaker_aliases=job.speaker_renames,
             on_progress=on_progress,
         )

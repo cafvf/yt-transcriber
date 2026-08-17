@@ -235,6 +235,17 @@ class FakeLastErrorService:
         return object()
 
 
+class FakeOperationalWorkflow:
+    def __init__(self, sink: FakeLastErrorService | None = None) -> None:
+        self.sink = sink or FakeLastErrorService()
+
+    def record_error(self, **kwargs: object) -> object:
+        return self.sink.record_operation_error(**kwargs)
+
+    def apply_retention(self) -> object:
+        return type("Retention", (), {"expired_jobs": (), "removed_files": ()})()
+
+
 class FailingSaveRepo(FakeRepo):
     def save(self, job: Job) -> None:
         raise OSError("database password=do-not-expose")
@@ -404,8 +415,8 @@ async def test_summary_llm_error_does_not_send_backend_body_to_telegram(
         client=client,
         use_case=MagicMock(),
         repository=repo,  # type: ignore[arg-type]
-        summary_service=FailingSummaryService(backend_error),  # type: ignore[arg-type]
-        lasterror_service=lasterror,  # type: ignore[arg-type]
+        summary_workflow=FailingSummaryService(backend_error),  # type: ignore[arg-type]
+        operational_workflow=FakeOperationalWorkflow(lasterror),  # type: ignore[arg-type]
     )
 
     await adapter.handle_command_summary(chat_id=10, user_id=42, text="/summary 1")
@@ -435,7 +446,7 @@ async def test_unexpected_pipeline_error_does_not_edit_raw_body_to_telegram(
         client=client,
         use_case=use_case,  # type: ignore[arg-type]
         repository=repo,  # type: ignore[arg-type]
-        lasterror_service=FakeLastErrorService(),  # type: ignore[arg-type]
+        operational_workflow=FakeOperationalWorkflow(),  # type: ignore[arg-type]
     )
     await adapter.start()
     try:
@@ -945,7 +956,7 @@ async def test_delivery_failure_marks_job_failed_and_preserves_artifact_paths(
         client=client,
         use_case=use_case,  # type: ignore[arg-type]
         repository=repo,  # type: ignore[arg-type]
-        lasterror_service=lasterror,  # type: ignore[arg-type]
+        operational_workflow=FakeOperationalWorkflow(lasterror),  # type: ignore[arg-type]
     )
     await adapter.start()
     try:

@@ -16,6 +16,9 @@ from yt_transcriber_bot.application.ports.incoming_media import (
 )
 from yt_transcriber_bot.domain.value_objects.media_source import MediaSource
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
+from yt_transcriber_bot.infrastructure.persistence.filesystem.private_staging_cleanup import (
+    FilesystemPrivateStagingCleanup,
+)
 from yt_transcriber_bot.infrastructure.telegram.bot_adapter import JobPayload, TelegramBotAdapter
 
 
@@ -79,9 +82,14 @@ class _FailingRepository:
 @dataclass
 class _RecordingRepository:
     jobs: list[object] = field(default_factory=list)
+    contexts: dict[str, object] = field(default_factory=dict)
 
     def save(self, job: object) -> None:
         self.jobs.append(job)
+
+    def save_request_context(self, context: object) -> None:
+        job_id = context.job_id
+        self.contexts[str(job_id)] = context
 
 
 @pytest.fixture
@@ -161,6 +169,7 @@ async def test_document_duration_is_inspected_before_enqueue_and_staged_file_is_
         use_case=_UseCase(),
         media_downloader=_Downloader(),
         duration_inspector=_DurationInspector(181 * 60),  # type: ignore[arg-type]
+        staging_cleanup=FilesystemPrivateStagingCleanup(settings.downloads_dir()),
     )
     before = (
         set(settings.downloads_dir().glob("**/*")) if settings.downloads_dir().exists() else set()
@@ -189,6 +198,7 @@ async def test_persistence_failure_does_not_enqueue_media_and_cleans_staging(
         use_case=_UseCase(),
         repository=_FailingRepository(),  # type: ignore[arg-type]
         media_downloader=_Downloader(),
+        staging_cleanup=FilesystemPrivateStagingCleanup(settings.downloads_dir()),
     )
     before = (
         set(settings.downloads_dir().glob("**/*")) if settings.downloads_dir().exists() else set()

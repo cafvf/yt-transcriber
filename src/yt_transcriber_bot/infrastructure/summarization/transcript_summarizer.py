@@ -59,7 +59,6 @@ class TranscriptSummaryService:
         self._policy = ApplicationTranscriptSummaryService(
             snapshots=snapshots,
             chat_client=chat_client,
-            output_dir=output_dir,
             max_chars_per_chunk=max_chars_per_chunk,
             max_input_tokens=max_input_tokens,
             chars_per_token=chars_per_token,
@@ -87,7 +86,6 @@ class TranscriptSummaryService:
     ) -> SummaryResult:
         result = self._policy.summarize(
             slug=slug,
-            output_base_path=output_base_path,
             speaker_aliases=speaker_aliases,
             on_progress=on_progress,
         )

@@ -13,7 +13,6 @@ import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
 
 from yt_transcriber_bot.application.ports.canonical_transcript import (
     CanonicalTranscriptRecord,
@@ -77,7 +76,6 @@ class TranscriptSummaryService:
         *,
         snapshots: CanonicalTranscriptStore,
         chat_client: ChatCompletionClient,
-        output_dir: Path,
         max_chars_per_chunk: int = 18_000,
         max_input_tokens: int = 6_000,
         chars_per_token: float = 2.5,
@@ -96,7 +94,6 @@ class TranscriptSummaryService:
     ) -> None:
         self._snapshots = snapshots
         self._chat_client = chat_client
-        self._output_dir = output_dir
         self._max_chars_per_chunk = max(1_000, max_chars_per_chunk)
         self._max_input_tokens = max(512, max_input_tokens)
         self._chars_per_token = max(1.0, chars_per_token)
@@ -117,7 +114,6 @@ class TranscriptSummaryService:
         self,
         *,
         slug: str,
-        output_base_path: Path,
         speaker_aliases: Mapping[str, str] | None = None,
         on_progress: Callable[[SummaryProgress], None] | None = None,
     ) -> SummaryResult:

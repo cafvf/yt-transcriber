@@ -57,14 +57,23 @@ class ExecutionLifecycleService:
         if outcome.delivered:
             job.transition_to(JobStatus.COMPLETED)
             self._save(job)
-            if self._completed_observer is not None:
-                self._completed_observer(job)
+            self._notify_completed(job)
             return
         job.transition_to(
             JobStatus.DELIVERY_FAILED,
             error=outcome.error or "Falha na entrega primária; artefatos preservados localmente.",
         )
         self._save(job)
+
+    def _notify_completed(self, job: Job) -> None:
+        if self._completed_observer is None:
+            return
+        try:
+            self._completed_observer(job)
+        except Exception:
+            # Search/index refresh is derived best-effort work. Canonical completion
+            # was already persisted and must not be retroactively invalidated.
+            return
 
     def _save(self, job: Job) -> None:
         if self._repository is not None:

@@ -4,10 +4,26 @@ from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from yt_transcriber_bot.domain.entities.job import Job
 from yt_transcriber_bot.domain.value_objects.artifact import ArtifactClass
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
+
+TranscriptExportFormat = Literal["json", "srt", "vtt"]
+TRANSCRIPT_EXPORT_FORMATS: tuple[TranscriptExportFormat, ...] = ("json", "srt", "vtt")
+
+
+class DerivativeExportError(RuntimeError):
+    pass
+
+
+class DerivativeTooLongError(DerivativeExportError):
+    pass
+
+
+class DerivativeTooLargeError(DerivativeExportError):
+    pass
 
 
 @dataclass(frozen=True, slots=True)

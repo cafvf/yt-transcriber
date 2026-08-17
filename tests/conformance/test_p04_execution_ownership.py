@@ -13,11 +13,10 @@ RECOVERY = ROOT / "src/yt_transcriber_bot/application/services/startup_recovery.
 
 def test_sequential_queue_implementation_is_application_owned() -> None:
     app_source = APP_QUEUE.read_text(encoding="utf-8")
-    legacy_source = LEGACY_QUEUE.read_text(encoding="utf-8")
     bot_source = BOT.read_text(encoding="utf-8")
 
     assert "class SequentialJobQueue" in app_source
-    assert "class SequentialJobQueue" not in legacy_source
+    assert not LEGACY_QUEUE.exists()
     assert "application.workflows.execution_queue" in bot_source
     assert "infrastructure.telegram.job_queue import" not in bot_source
 

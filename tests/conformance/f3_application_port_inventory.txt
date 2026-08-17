@@ -9,10 +9,10 @@ derived_artifacts.py
 diarization_engine.py
 gpu_detector.py
 health_probe.py
-history_search.py
 incoming_media.py
 job_repository.py
 operational_error.py
+staging_cleanup.py
 text_generation.py
 text_search.py
 transcript_renderer.py

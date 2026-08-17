@@ -15,6 +15,11 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from yt_transcriber_bot.application.ports.canonical_transcript import CanonicalTranscriptStore
+from yt_transcriber_bot.application.ports.derived_artifacts import (
+    DerivativeExportError,
+    DerivativeTooLargeError,
+    DerivativeTooLongError,
+)
 from yt_transcriber_bot.application.services.sanitization import sanitize_text
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
 from yt_transcriber_bot.infrastructure.exporting.transcript_exporter import (
@@ -37,15 +42,15 @@ class _YDLFactory(Protocol):
 CommandRunner = Callable[[list[str]], subprocess.CompletedProcess[str]]
 
 
-class VideoSubtitleExportError(Exception):
+class VideoSubtitleExportError(DerivativeExportError):
     """Erro genérico ao gerar vídeo com legenda selecionável."""
 
 
-class VideoSubtitleTooLongError(VideoSubtitleExportError):
+class VideoSubtitleTooLongError(DerivativeTooLongError, VideoSubtitleExportError):
     """Vídeo excede o limite de duração configurado."""
 
 
-class VideoSubtitleTooLargeError(VideoSubtitleExportError):
+class VideoSubtitleTooLargeError(DerivativeTooLargeError, VideoSubtitleExportError):
     """Vídeo excede o limite de tamanho configurado."""
 
 

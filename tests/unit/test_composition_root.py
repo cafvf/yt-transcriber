@@ -139,7 +139,7 @@ def test_build_wires_credentials_and_runtime_tokenizer_at_composition(
         credentials=settings.credentials,
     )
 
-    assert composition.summary_service is not None
+    assert composition.summary_workflow is not None
     assert diarization["hf_token"] == "hf_test"
     assert youtube["cookies_file"] == "/tmp/cookies.txt"
     assert youtube["cookies_browser"] == "firefox"
@@ -189,7 +189,7 @@ def test_disabled_summary_skips_optional_provider_construction_without_api_key(
     )
 
     assert settings.credentials.summary_api_key == ""
-    assert composition.summary_service is None
+    assert composition.summary_workflow is None
 
 
 def test_build_smoke_constructs_core_graph_without_external_network(
@@ -209,9 +209,10 @@ def test_build_smoke_constructs_core_graph_without_external_network(
     assert composition.repository is not None
     assert composition.snapshots is not None
     assert composition.use_case is not None
-    assert composition.summary_service is None
-    assert composition.healthcheck_service is not None
-    assert composition.retention_policy is not None
+    assert composition.summary_workflow is None
+    assert composition.operational_workflow is not None
+    assert composition.execution_lifecycle is not None
+    assert composition.history_workflow is not None
 
 
 def test_build_runtime_owns_telegram_provider_graph(
@@ -226,17 +227,13 @@ def test_build_runtime_owns_telegram_provider_graph(
     core = SimpleNamespace(
         use_case=object(),
         repository=object(),
-        rename_service=object(),
-        export_service=object(),
-        plain_text_export_service=object(),
-        summary_service=None,
-        video_subtitle_export_service=object(),
-        healthcheck_service=object(),
-        history_search_service=object(),
-        lasterror_service=object(),
-        retention_policy=object(),
         audit_logger=object(),
-        search_indexing_service=SimpleNamespace(refresh=lambda _job: None),
+        history_presentation=object(),
+        history_workflow=object(),
+        execution_lifecycle=object(),
+        startup_recovery_service=object(),
+        source_cleanup_service=object(),
+        staging_cleanup=object(),
         text_search_workflow=object(),
         derivative_workflow=object(),
         summary_workflow=None,
@@ -268,19 +265,15 @@ def test_build_runtime_owns_telegram_provider_graph(
     assert runtime.core is core
     assert runtime.application is application
     assert isinstance(runtime.adapter, TelegramBotAdapter)
+    assert runtime.adapter._history is core.history_presentation
+    assert runtime.adapter._completed_history is core.history_workflow
+    assert runtime.adapter._execution_lifecycle is core.execution_lifecycle
+    assert runtime.adapter._startup_recovery_service is core.startup_recovery_service
+    assert runtime.adapter._source_cleanup_service is core.source_cleanup_service
+    assert runtime.adapter._staging_cleanup is core.staging_cleanup
     assert runtime.adapter._text_search_workflow is core.text_search_workflow
     assert runtime.adapter._derivative_workflow is core.derivative_workflow
     assert runtime.adapter._summary_workflow is core.summary_workflow
     assert runtime.adapter._operational_workflow is core.operational_workflow
-    assert runtime.adapter._search_indexing_service is core.search_indexing_service
-    assert runtime.adapter._rename_service is None
-    assert runtime.adapter._export_service is None
-    assert runtime.adapter._plain_text_export_service is None
-    assert runtime.adapter._summary_service is None
-    assert runtime.adapter._video_subtitle_export_service is None
-    assert runtime.adapter._history_search_service is None
-    assert runtime.adapter._healthcheck_service is None
-    assert runtime.adapter._lasterror_service is None
-    assert runtime.adapter._retention_policy is None
     assert runtime.audience.allowed_user_id == 42
     assert isinstance(runtime.denied_audience_filter, DeniedAudienceFilter)

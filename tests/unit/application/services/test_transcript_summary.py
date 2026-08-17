@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from pathlib import Path
 
 from yt_transcriber_bot.application.ports.canonical_transcript import (
     CanonicalTranscriptRecord,
@@ -89,23 +88,20 @@ def _record() -> CanonicalTranscriptRecord:
     )
 
 
-def test_application_summary_policy_runs_with_only_application_domain_fakes(tmp_path: Path) -> None:
+def test_application_summary_policy_runs_with_only_application_domain_fakes() -> None:
     generator = Generator()
     service = TranscriptSummaryService(
         snapshots=CanonicalStore(_record()),
         chat_client=generator,
-        output_dir=tmp_path,
         tokenizer=Tokenizer(),
         output_language="pt",
     )
 
     result = service.summarize(
         slug="canonical",
-        output_base_path=tmp_path / "ignored.md",
         speaker_aliases={"SPEAKER_00": "Pessoa"},
     )
 
     assert result.model == "fake-model"
     assert "resultado" in result.content
     assert "Pessoa: conteúdo canônico" in generator.requests[0].user_prompt
-    assert list(tmp_path.iterdir()) == []

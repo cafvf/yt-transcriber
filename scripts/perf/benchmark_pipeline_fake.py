@@ -38,7 +38,6 @@ from yt_transcriber_bot.infrastructure.rendering.markdown_renderer import (
     MarkdownTranscriptRenderer,
     RenderContext,
 )
-from yt_transcriber_bot.infrastructure.telegram.bot_adapter import TelegramBotAdapter
 from yt_transcriber_bot.infrastructure.youtube.yt_dlp_downloader import _parse_subtitle
 
 
@@ -172,9 +171,9 @@ def _pipeline_fake(
 
 def _history_title_listing(rename_service: RenameSpeakersService, jobs: list[Job]) -> list[str]:
     slugs = tuple(
-        slug
-        for slug in (TelegramBotAdapter._slug_from_md_path(job.md_path) for job in jobs)
-        if slug is not None
+        reference
+        for reference in (job.canonical_transcript_ref for job in jobs)
+        if reference is not None
     )
     titles = rename_service.metadata_for_many(slugs)
     return [titles[slug].title for slug in slugs if slug in titles]
@@ -185,9 +184,9 @@ def _history_title_listing_legacy(
 ) -> list[str]:
     titles: list[str] = []
     for job in jobs:
-        slug = TelegramBotAdapter._slug_from_md_path(job.md_path)
-        if slug is None:
+        if job.md_path is None:
             continue
+        slug = Path(job.md_path).stem
         snapshot = snapshots.load(slug)
         if snapshot is not None:
             titles.append(snapshot.metadata.title)
@@ -209,6 +208,7 @@ def _make_completed_job(*, video_id: str, slug: str, requested_at: datetime) -> 
         job.transition_to(status)
     object.__setattr__(job, "updated_at", requested_at)
     job.md_path = f"/tmp/{slug}.md"
+    job.canonical_transcript_ref = slug
     return job
 
 

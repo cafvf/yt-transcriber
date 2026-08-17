@@ -11,17 +11,20 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
 from yt_transcriber_bot.application.ports.canonical_transcript import (
     CanonicalTranscriptRecord,
     CanonicalTranscriptStore,
 )
+from yt_transcriber_bot.application.ports.derived_artifacts import (
+    TRANSCRIPT_EXPORT_FORMATS,
+    TranscriptExportFormat,
+)
 from yt_transcriber_bot.domain.entities.transcript import TranscriptSegment
 from yt_transcriber_bot.infrastructure.text.normalization import normalize_artifact_text
 
-ExportFormat = Literal["json", "srt", "vtt"]
-SUPPORTED_EXPORT_FORMATS: tuple[ExportFormat, ...] = ("json", "srt", "vtt")
+ExportFormat = TranscriptExportFormat
+SUPPORTED_EXPORT_FORMATS: tuple[ExportFormat, ...] = TRANSCRIPT_EXPORT_FORMATS
 
 
 @dataclass(frozen=True)

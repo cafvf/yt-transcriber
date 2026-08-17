@@ -52,6 +52,6 @@ def test_runtime_wires_application_subphase_c_workflows() -> None:
         "derivative_workflow=core.derivative_workflow",
         "summary_workflow=core.summary_workflow",
         "operational_workflow=core.operational_workflow",
-        "search_indexing_service=core.search_indexing_service",
+        "execution_lifecycle=core.execution_lifecycle",
     ):
         assert token in source

@@ -325,7 +325,6 @@ def test_summary_consumer_runs_with_in_memory_store(tmp_path: Path) -> None:
     "relative",
     [
         "src/yt_transcriber_bot/application/services/rename_speakers.py",
-        "src/yt_transcriber_bot/application/services/history_search.py",
         "src/yt_transcriber_bot/infrastructure/summarization/transcript_summarizer.py",
         "src/yt_transcriber_bot/infrastructure/exporting/transcript_exporter.py",
         "src/yt_transcriber_bot/infrastructure/exporting/plain_text_exporter.py",

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from yt_transcriber_bot.application.config import AppSettings
@@ -11,22 +12,27 @@ from yt_transcriber_bot.application.ports.canonical_transcript import CanonicalT
 from yt_transcriber_bot.application.ports.diarization_engine import DiarizationEngine
 from yt_transcriber_bot.application.ports.gpu_detector import GpuDetector, HardwareProfile
 from yt_transcriber_bot.application.ports.job_repository import JobRepository
+from yt_transcriber_bot.application.ports.staging_cleanup import PrivateStagingCleanup
 from yt_transcriber_bot.application.ports.transcription_engine import TranscriptionEngine
 from yt_transcriber_bot.application.ports.youtube_downloader import YouTubeDownloader
 from yt_transcriber_bot.application.services.cache_maintenance import CacheMaintenanceService
 from yt_transcriber_bot.application.services.healthcheck import HealthCheckService
-from yt_transcriber_bot.application.services.history_search import HistorySearchService
 from yt_transcriber_bot.application.services.last_error import LastErrorService
 from yt_transcriber_bot.application.services.rename_speakers import RenameSpeakersService
 from yt_transcriber_bot.application.services.retention_policy import RetentionPolicy
 from yt_transcriber_bot.application.services.sanitization import sanitize_text
 from yt_transcriber_bot.application.services.search_indexing import SearchIndexingService
+from yt_transcriber_bot.application.services.startup_recovery import StartupRecoveryService
 from yt_transcriber_bot.application.services.transcript_summary import TranscriptSummaryService
+from yt_transcriber_bot.application.services.volatile_source_cleanup import (
+    VolatileSourceCleanupService,
+)
 from yt_transcriber_bot.application.use_cases.transcribe_video import (
     TranscribeVideoDependencies,
     TranscribeVideoUseCase,
 )
 from yt_transcriber_bot.application.workflows.derivatives import TranscriptDerivativeWorkflow
+from yt_transcriber_bot.application.workflows.execution import ExecutionLifecycleService
 from yt_transcriber_bot.application.workflows.history import CompletedHistoryWorkflow
 from yt_transcriber_bot.application.workflows.operations import OperationalWorkflow
 from yt_transcriber_bot.application.workflows.summary import SummaryWorkflow
@@ -71,6 +77,9 @@ from yt_transcriber_bot.infrastructure.persistence.filesystem.operational_error_
 from yt_transcriber_bot.infrastructure.persistence.filesystem.owned_artifact_cleanup import (
     FilesystemOwnedArtifactCleanup,
 )
+from yt_transcriber_bot.infrastructure.persistence.filesystem.private_staging_cleanup import (
+    FilesystemPrivateStagingCleanup,
+)
 from yt_transcriber_bot.infrastructure.persistence.filesystem.reconstructible_cache import (
     FilesystemReconstructibleCache,
 )
@@ -100,6 +109,7 @@ from yt_transcriber_bot.infrastructure.telegram.bot_adapter import TelegramBotAd
 from yt_transcriber_bot.infrastructure.telegram.ffprobe_duration_inspector import (
     FfprobeAudioDurationInspector,
 )
+from yt_transcriber_bot.infrastructure.telegram.history import HistoryPresentation
 from yt_transcriber_bot.infrastructure.telegram.ptb_bot_client import PTBBotClient
 from yt_transcriber_bot.infrastructure.youtube.yt_dlp_downloader import YtDlpDownloader
 from yt_transcriber_bot.infrastructure.youtube.yt_dlp_real_factory import (
@@ -132,17 +142,13 @@ class Composition:
     repository: JobRepository
     snapshots: TranscriptSnapshotRepository
     use_case: TranscribeVideoUseCase
-    rename_service: RenameSpeakersService
-    export_service: TranscriptExportService
-    plain_text_export_service: PlainTextTranscriptExportService
-    summary_service: TranscriptSummaryService | None
-    video_subtitle_export_service: VideoSoftSubtitleExportService
-    healthcheck_service: HealthCheckService
-    history_search_service: HistorySearchService
-    lasterror_service: LastErrorService
-    retention_policy: RetentionPolicy
     audit_logger: ExecutionAuditLogger
-    search_indexing_service: SearchIndexingService
+    history_presentation: HistoryPresentation
+    history_workflow: CompletedHistoryWorkflow
+    execution_lifecycle: ExecutionLifecycleService
+    startup_recovery_service: StartupRecoveryService
+    source_cleanup_service: VolatileSourceCleanupService
+    staging_cleanup: PrivateStagingCleanup
     text_search_workflow: TextSearchWorkflow
     derivative_workflow: TranscriptDerivativeWorkflow
     summary_workflow: SummaryWorkflow | None
@@ -251,7 +257,6 @@ def _make_summary_service(
     return TranscriptSummaryService(
         snapshots=snapshots,
         chat_client=client,
-        output_dir=settings.summaries_dir(),
         max_chars_per_chunk=settings.summary_max_chars_per_chunk,
         max_input_tokens=settings.summary_max_input_tokens,
         chars_per_token=settings.summary_chars_per_token,
@@ -339,7 +344,8 @@ def build(settings: AppSettings, *, credentials: ProviderCredentials) -> Composi
         index=search_repository,
         summaries=summary_store,
     )
-    history = CompletedHistoryWorkflow(repository)
+    history = CompletedHistoryWorkflow(repository, markdown_available=Path.is_file)
+    history_presentation = HistoryPresentation(rename_service)
     text_search_workflow = TextSearchWorkflow(
         history=history, query=search_repository, indexer=indexer
     )
@@ -391,11 +397,12 @@ def build(settings: AppSettings, *, credentials: ProviderCredentials) -> Composi
         error_store=error_store,
         log_reader=BoundedTextLogReader(),
     )
+    artifact_cleanup = FilesystemOwnedArtifactCleanup(
+        (settings.downloads_dir(), settings.processed_dir(), settings.logs_dir())
+    )
     retention_policy = RetentionPolicy(
         repository=repository,
-        artifact_cleanup=FilesystemOwnedArtifactCleanup(
-            (settings.downloads_dir(), settings.processed_dir(), settings.logs_dir())
-        ),
+        artifact_cleanup=artifact_cleanup,
         max_volatile_jobs=settings.retention_count,
     )
     operational_workflow = OperationalWorkflow(
@@ -410,23 +417,26 @@ def build(settings: AppSettings, *, credentials: ProviderCredentials) -> Composi
         max_bytes=settings.audit_log_max_bytes,
         backup_count=settings.audit_log_backup_count,
     )
+    execution_lifecycle = ExecutionLifecycleService(
+        repository,
+        completed_observer=indexer.refresh,
+    )
+    startup_recovery_service = StartupRecoveryService(repository)
+    source_cleanup_service = VolatileSourceCleanupService(repository, artifact_cleanup)
+    staging_cleanup = FilesystemPrivateStagingCleanup(settings.downloads_dir())
 
     return Composition(
         settings=settings,
         repository=repository,
         snapshots=snapshots,
         use_case=use_case,
-        rename_service=rename_service,
-        export_service=export_service,
-        plain_text_export_service=plain_text_export_service,
-        summary_service=summary_service,
-        video_subtitle_export_service=video_subtitle_export_service,
-        healthcheck_service=healthcheck_service,
-        history_search_service=HistorySearchService(search_repository),
-        lasterror_service=lasterror_service,
-        retention_policy=retention_policy,
         audit_logger=audit_logger,
-        search_indexing_service=indexer,
+        history_presentation=history_presentation,
+        history_workflow=history,
+        execution_lifecycle=execution_lifecycle,
+        startup_recovery_service=startup_recovery_service,
+        source_cleanup_service=source_cleanup_service,
+        staging_cleanup=staging_cleanup,
         text_search_workflow=text_search_workflow,
         derivative_workflow=derivative_workflow,
         summary_workflow=summary_workflow,
@@ -455,11 +465,16 @@ def _make_telegram_runtime(
         audit_logger=core.audit_logger,
         media_downloader=client,
         duration_inspector=FfprobeAudioDurationInspector(),
+        history_presentation=core.history_presentation,
+        history_workflow=core.history_workflow,
+        execution_lifecycle=core.execution_lifecycle,
+        startup_recovery_service=core.startup_recovery_service,
+        source_cleanup_service=core.source_cleanup_service,
+        staging_cleanup=core.staging_cleanup,
         text_search_workflow=core.text_search_workflow,
         derivative_workflow=core.derivative_workflow,
         summary_workflow=core.summary_workflow,
         operational_workflow=core.operational_workflow,
-        search_indexing_service=core.search_indexing_service,
     )
     audience = TelegramAudiencePolicy(settings.telegram_allowed_user_id)
     return RuntimeComposition(
