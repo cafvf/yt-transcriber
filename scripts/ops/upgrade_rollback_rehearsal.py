@@ -242,7 +242,12 @@ def run_rehearsal(args: argparse.Namespace) -> Path:
         # Validate the already-approved backup in isolated staging during rollback proof.
         with TemporaryDirectory(prefix="yt-transcriber-p06-007-") as tmp:
             staging = Path(tmp)
-            from scripts.ops.phase4_phase8_rehearsal import run_restore_staging
+            try:
+                from scripts.ops.phase4_phase8_rehearsal import run_restore_staging
+            except ModuleNotFoundError as exc:
+                if exc.name != "scripts":
+                    raise
+                from phase4_phase8_rehearsal import run_restore_staging
 
             restore_args = argparse.Namespace(
                 app_dir=app_dir,

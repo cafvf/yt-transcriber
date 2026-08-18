@@ -121,3 +121,14 @@ def test_preflight_output_is_private(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     assert path.stat().st_mode & 0o777 == 0o600
     assert path.parent.stat().st_mode & 0o777 == 0o700
     assert json.loads(path.read_text(encoding="utf-8"))["production_mutated"] is False
+
+
+def test_rehearsal_direct_script_restore_import_has_fallback() -> None:
+    source = SCRIPT.read_text(encoding="utf-8")
+    marker = 'with TemporaryDirectory(prefix="yt-transcriber-p06-007-") as tmp:'
+    block = source[source.index(marker) :]
+    assert "try:" in block
+    assert "from scripts.ops.phase4_phase8_rehearsal import run_restore_staging" in block
+    assert "except ModuleNotFoundError as exc:" in block
+    assert 'if exc.name != "scripts":' in block
+    assert "from phase4_phase8_rehearsal import run_restore_staging" in block
