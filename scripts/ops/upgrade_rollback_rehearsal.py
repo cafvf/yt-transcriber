@@ -207,6 +207,13 @@ def run_rehearsal(args: argparse.Namespace) -> Path:
     if original_sha != target_sha:
         raise RuntimeError("real rehearsal must begin on the target revision intended for closure")
 
+    original_branch = _run_ok(
+        ["git", "symbolic-ref", "--quiet", "--short", "HEAD"],
+        cwd=app_dir,
+    ).stdout
+    if not original_branch:
+        raise RuntimeError("real rehearsal must begin on a named branch, not detached HEAD")
+
     results: list[CommandResult] = []
     service_stopped = False
     current_revision = original_sha
@@ -258,20 +265,27 @@ def run_rehearsal(args: argparse.Namespace) -> Path:
             run_restore_staging(restore_args)
             restored_validation = _validate_restored_state(staging / "restore")
 
-        # Return production checkout to the closure target after rollback was demonstrated.
+        # Return production checkout to the original named branch after rollback was demonstrated.
         results.append(_service(app_dir, "stop", args.service))
         service_stopped = True
-        results.append(_checkout(app_dir, target_sha))
-        current_revision = target_sha
+        results.append(_run_ok(["git", "checkout", original_branch], cwd=app_dir))
+        current_revision = _resolve_ref(app_dir, "HEAD")
+        if current_revision != original_sha:
+            raise RuntimeError("original branch no longer resolves to the closure target revision")
         results.append(_service(app_dir, "start", args.service))
         service_stopped = False
         results.append(_service_status(app_dir, args.service))
     finally:
-        if current_revision != original_sha:
+        final_branch = _run(
+            ["git", "symbolic-ref", "--quiet", "--short", "HEAD"],
+            cwd=app_dir,
+        ).stdout
+        final_sha = _resolve_ref(app_dir, "HEAD")
+        if final_branch != original_branch or final_sha != original_sha:
             if not service_stopped:
                 _service(app_dir, "stop", args.service)
                 service_stopped = True
-            _checkout(app_dir, original_sha)
+            _run_ok(["git", "checkout", original_branch], cwd=app_dir)
         if service_stopped:
             _service(app_dir, "start", args.service)
 
@@ -286,6 +300,7 @@ def run_rehearsal(args: argparse.Namespace) -> Path:
             "- destructive_db_migration_performed: `no`",
             "- rollback_code_revision_exercised: `yes`",
             "- rollback_backup_restore_validated_in_isolated_staging: `yes`",
+            f"- final_production_branch: `{original_branch}`",
             "- final_production_revision: `target_revision`",
             "",
             "## Restored data validation",

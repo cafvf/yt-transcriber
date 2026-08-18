@@ -132,3 +132,12 @@ def test_rehearsal_direct_script_restore_import_has_fallback() -> None:
     assert "except ModuleNotFoundError as exc:" in block
     assert 'if exc.name != "scripts":' in block
     assert "from phase4_phase8_rehearsal import run_restore_staging" in block
+
+
+def test_rehearsal_preserves_original_named_branch() -> None:
+    source = SCRIPT.read_text(encoding="utf-8")
+    assert '["git", "symbolic-ref", "--quiet", "--short", "HEAD"]' in source
+    assert "real rehearsal must begin on a named branch, not detached HEAD" in source
+    assert '_run_ok(["git", "checkout", original_branch], cwd=app_dir)' in source
+    assert "original branch no longer resolves to the closure target revision" in source
+    assert "final_production_branch" in source
