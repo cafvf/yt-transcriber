@@ -1,6 +1,6 @@
 # PLAN-006 readiness ledger
 
-Status: **P06-010 candidate closure evidence**
+Status: **Verified / closed - TASK-P06-010 readiness evidence accepted**
 Owner task: **TASK-P06-010**
 Primary requirement: **REQ-OPS-007**
 Operational evidence baseline: **`ed3985b7e9337cbd05a3dec896c29845865fbda2`**
@@ -148,10 +148,22 @@ systemd, backup/restore, rollback and manual-recovery records below.
 
 ## P06-010 decision
 
-`TASK-P06-010` is **READY TO CLOSE after its readiness-ledger conformance gate
-passes**. No failed owner criterion was found and no product repair belongs in
-this aggregation task.
+`TASK-P06-010` is **CLOSED**. Its readiness-ledger conformance gate passed and the
+record was published before the final PLAN-006 exit gate. No failed owner criterion
+was found and no product repair belonged in this aggregation task.
 
-After P06-010 is committed, `TASK-P06-011` remains the PLAN-006 exit gate. It
-must perform the final plan-wide conformance/quality review and route any failure
-back to the owning task rather than patching around it.
+## P06-011 exit-gate consumption
+
+`TASK-P06-011` consumed this ledger at published baseline
+`318d90dda0ead178c5df30b899fb4fea4430fc0d`. The final read-only Stage A gate
+passed Ruff, global format check, mypy, default pytest, full conformance, all 35
+current integration tests, environment-gated lineage validation, security scans,
+compile, the official fake benchmark, pre-commit and repository/service invariants.
+
+Decision: **GREEN / PASS**.
+
+Sanitized summary:
+`~/Downloads/p06-011-exit-gate-20260818T231226Z/p06-011-exit-gate-summary-20260818T231226Z.txt`.
+
+The Stage B closure-document changes are non-material to the operational evidence
+aggregated above and therefore do not require repetition of the host/staging rehearsals.

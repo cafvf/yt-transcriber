@@ -171,11 +171,11 @@ After PLAN-004 closes:
 
 ```text
 Post-PLAN-004 roadmap
-  [ ] Package 1 — Product execution acceptance
-  [ ] Package 2 — Operator workflow acceptance
-  [ ] Package 3 — PLAN-005 convergence and acceptance closure
-  [ ] Package 4 — Deployment, persistence resilience and service operations
-  [ ] Package 5 — Production readiness and roadmap closure
+  [x] Package 1 — Product execution acceptance
+  [x] Package 2 — Operator workflow acceptance
+  [x] Package 3 — PLAN-005 convergence and acceptance closure
+  [x] Package 4 — Deployment, persistence resilience and service operations
+  [x] Package 5 — Production readiness and roadmap closure
 ```
 
 ## Session-resume rule
@@ -303,8 +303,9 @@ routing back to `TASK-P05-001..016`.
 PLAN-005 / F6 is therefore closed. Package 4 — **Deployment, persistence resilience
 and service operations** — subsequently closed on the operational evidence baseline
 `ed3985b7e9337cbd05a3dec896c29845865fbda2`. Package 5 — **Production readiness and
-roadmap closure** — is now active under PLAN-006; `TASK-P06-010` aggregates the
-sanitized readiness evidence and `TASK-P06-011` remains the final exit gate.
+roadmap closure** — also closed after `TASK-P06-010` aggregated the sanitized
+readiness evidence and `TASK-P06-011` passed the final PLAN-006 exit gate at
+`318d90dda0ead178c5df30b899fb4fea4430fc0d`.
 
 ## Package 4 closure evidence
 
@@ -335,17 +336,22 @@ Package 4 closure is supported by the frozen owner tasks and their evidence:
 Detailed sanitized aggregation is recorded in
 `specs/006-execution/PLAN-006-READINESS-LEDGER.md`.
 
-## Package 5 current state
+## Package 5 closure evidence
 
-Status: **Active — Production readiness and roadmap closure**
+Status: **Verified / closed - Production readiness and roadmap closure**
 
 - `TASK-P06-007`: versioned upgrade/rollback procedure and empirical rehearsal
   completed; evidence remains valid after materiality review;
 - `TASK-P06-008`: manual artifact-recovery procedure and staging rehearsal
   completed; evidence remains valid after materiality review;
 - `TASK-P06-009`: command/help/documentation conformance completed;
-- `TASK-P06-010`: readiness evidence aggregation is the current task;
-- `TASK-P06-011`: pending final PLAN-006 exit-gate verification.
+- `TASK-P06-010`: readiness evidence aggregation completed and published;
+- `TASK-P06-011`: final PLAN-006 exit gate passed on
+  `318d90dda0ead178c5df30b899fb4fea4430fc0d`.
 
-Package 5 does not authorize new product functionality. Any failed exit criterion
-must be routed back to its frozen owner before the roadmap is declared closed.
+Final sanitized gate summary:
+`~/Downloads/p06-011-exit-gate-20260818T231226Z/p06-011-exit-gate-summary-20260818T231226Z.txt`.
+
+PLAN-006 is closed. Package 5 does not authorize new product functionality; future
+work resumes from the separately approved product roadmap while preserving this
+stabilized remediation baseline.

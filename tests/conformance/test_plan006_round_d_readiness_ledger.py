@@ -133,8 +133,9 @@ def test_p06_010_acceptance_review_is_explicit() -> None:
 
     for acceptance in ("AC-01", "AC-02", "AC-03", "AC-04"):
         assert f"- {acceptance} — **PASS**" in ledger
-    assert "READY TO CLOSE after its readiness-ledger conformance gate" in ledger
-    assert "TASK-P06-011" in ledger
+    assert "`TASK-P06-010` is **CLOSED**" in ledger
+    assert "P06-011 exit-gate consumption" in ledger
+    assert "318d90dda0ead178c5df30b899fb4fea4430fc0d" in ledger
 
 
 def test_p06_010_readiness_document_no_longer_claims_rehearsals_are_missing() -> None:
@@ -157,20 +158,22 @@ def test_p06_010_readiness_document_no_longer_claims_rehearsals_are_missing() ->
     assert BASELINE in readiness
 
 
-def test_p06_010_execution_tracking_activates_package5() -> None:
+def test_p06_010_execution_tracking_reports_plan006_closed() -> None:
     readme = EXEC_README.read_text(encoding="utf-8")
     roadmap = EXEC_ROADMAP.read_text(encoding="utf-8")
 
-    assert "Packages 1\u20134 closed" in readme
-    assert "TASK-P06-010" in readme
-    assert "TASK-P06-011" in readme
+    assert "Packages 1-5 / PLAN-006 closed" in readme
+    assert "`TASK-P06-011` exit gate passed" in readme
+    assert "318d90dda0ead178c5df30b899fb4fea4430fc0d" in readme
 
     assert "Package 4 closure evidence" in roadmap
+    assert "Package 5 closure evidence" in roadmap
     assert "Verified / closed" in roadmap
     assert BASELINE in roadmap
-    assert "Package 5 current state" in roadmap
+    assert "318d90dda0ead178c5df30b899fb4fea4430fc0d" in roadmap
     assert "`TASK-P06-010`" in roadmap
     assert "`TASK-P06-011`" in roadmap
+    assert "Package 5 current state" not in roadmap
 
 
 def test_p06_010_preserves_environment_gated_lineage() -> None:
