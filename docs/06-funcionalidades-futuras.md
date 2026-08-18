@@ -186,7 +186,3 @@ Adicionar `LOG_FORMAT=json` para integração futura com observabilidade externa
 ### Docker Compose (`baixa`, `pequeno`)
 
 Empacotar bot em container. Útil para servidor, mas menos prioritário no fluxo local com GPU/WSL2.
-
-### GitHub Actions CI (`baixa`, `pequeno`)
-
-Rodar testes unitários e linters em PRs, sem depender de GPU ou modelos pesados.

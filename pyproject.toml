@@ -1,7 +1,7 @@
 [project]
 name = "yt-transcriber-bot"
 version = "0.1.3"
-description = "Bot Telegram que transcreve vídeos do YouTube com WhisperX e diarização"
+description = "Bot privado do Telegram que transcreve YouTube e mídia de áudio com WhisperX e diarização"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 license = { text = "MIT" }
