@@ -327,6 +327,193 @@ def run_backup(args: argparse.Namespace) -> Path:
     )
 
 
+def _safe_extract_canonical_transcripts(archive: Path, restore_root: Path) -> None:
+    data_root = restore_root / "data"
+    _make_private_dir(data_root)
+    with tarfile.open(archive, "r:gz") as tar:
+        for member in tar.getmembers():
+            parts = Path(member.name).parts
+            if not parts or parts[0] != "transcripts" or ".." in parts:
+                raise RuntimeError(
+                    f"Archive canônico contém membro fora de transcripts/: {member.name}"
+                )
+            if member.issym() or member.islnk():
+                raise RuntimeError(f"Archive canônico contém link não permitido: {member.name}")
+            target = data_root.joinpath(*parts)
+            if member.isdir():
+                _make_private_dir(target)
+                continue
+            if not member.isfile():
+                raise RuntimeError(f"Archive canônico contém tipo não suportado: {member.name}")
+            _make_private_dir(target.parent)
+            extracted = tar.extractfile(member)
+            if extracted is None:
+                raise RuntimeError(f"Falha ao ler membro do archive: {member.name}")
+            target.write_bytes(extracted.read())
+            _make_private_file(target)
+
+
+def _canonical_reference_rows(conn: sqlite3.Connection) -> list[tuple[str, str | None]]:
+    columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+    if "canonical_transcript_ref" not in columns:
+        return []
+    md_expr = "md_path" if "md_path" in columns else "NULL"
+    rows = conn.execute(
+        f"SELECT canonical_transcript_ref, {md_expr} FROM jobs "
+        "WHERE canonical_transcript_ref IS NOT NULL "
+        "AND TRIM(canonical_transcript_ref) <> ''"
+    ).fetchall()
+    return [
+        (str(reference), str(md_path) if md_path is not None else None)
+        for reference, md_path in rows
+    ]
+
+
+def _canonical_reference_state(
+    reference: str,
+    md_path: str | None,
+    transcripts_dir: Path,
+) -> str:
+    if Path(reference).name != reference or reference in {".", ".."}:
+        raise RuntimeError(f"Referência canônica inválida no banco restaurado: {reference}")
+
+    snapshot = transcripts_dir / f"{reference}.json"
+    markdown = (
+        transcripts_dir / Path(md_path).name if md_path else transcripts_dir / f"{reference}.md"
+    )
+    if snapshot.is_file():
+        if md_path and not markdown.is_file():
+            raise RuntimeError(
+                "Job restaurado aponta para Markdown canônico ausente: "
+                f"{reference} -> {markdown.name}"
+            )
+        return "structured"
+    if markdown.is_file():
+        return "legacy_markdown_only"
+    raise RuntimeError(
+        "Referência canônica restaurada sem evidência recuperável: "
+        f"{reference} -> snapshot={snapshot.name}, markdown={markdown.name}"
+    )
+
+
+def _validate_restored_state(restore_root: Path) -> dict[str, object]:
+    db_path = restore_root / "data" / "jobs.db"
+    transcripts_dir = restore_root / "data" / "transcripts"
+    if not db_path.is_file():
+        raise RuntimeError("Restore não contém data/jobs.db")
+    if not transcripts_dir.is_dir():
+        raise RuntimeError("Restore não contém data/transcripts")
+
+    with sqlite3.connect(db_path) as conn:
+        integrity = conn.execute("PRAGMA integrity_check").fetchone()
+        if integrity is None or integrity[0] != "ok":
+            raise RuntimeError("Banco restaurado falhou no PRAGMA integrity_check")
+        jobs_table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='jobs'"
+        ).fetchone()
+        if jobs_table is None:
+            raise RuntimeError("Banco restaurado não contém tabela jobs")
+        job_count = int(conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0])
+        canonical_rows = _canonical_reference_rows(conn)
+        reference_states = [
+            _canonical_reference_state(reference, md_path, transcripts_dir)
+            for reference, md_path in canonical_rows
+        ]
+        structured_count = reference_states.count("structured")
+        legacy_markdown_only_count = reference_states.count("legacy_markdown_only")
+
+        search_table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='job_search_documents'"
+        ).fetchone()
+        search_refs: list[str] = []
+        if search_table is not None:
+            search_refs = [
+                str(row[0])
+                for row in conn.execute(
+                    "SELECT DISTINCT canonical_transcript_ref FROM job_search_documents "
+                    "WHERE canonical_transcript_ref IS NOT NULL "
+                    "AND TRIM(canonical_transcript_ref) <> ''"
+                ).fetchall()
+            ]
+            for reference in search_refs:
+                state = _canonical_reference_state(reference, None, transcripts_dir)
+                if state != "structured":
+                    raise RuntimeError(
+                        "Documento de busca restaurado aponta para referência sem snapshot "
+                        f"estruturado: {reference}"
+                    )
+
+    return {
+        "sqlite_integrity": "ok",
+        "jobs_table_opened": True,
+        "job_count": job_count,
+        "canonical_job_references_validated": len(canonical_rows),
+        "structured_canonical_references": structured_count,
+        "legacy_markdown_only_references": legacy_markdown_only_count,
+        "search_document_references_validated": len(search_refs),
+    }
+
+
+def run_restore_staging(args: argparse.Namespace) -> Path:
+    occurred_at = _utc_now()
+    app_dir = args.app_dir.resolve()
+    backup_dir = args.backup_dir.resolve()
+    restore_root = args.restore_root.resolve()
+    output_root = args.output_dir.resolve()
+
+    if restore_root == app_dir or app_dir in restore_root.parents:
+        raise RuntimeError(
+            "restore-staging deve usar diretório isolado fora da árvore da aplicação"
+        )
+    if restore_root.exists() and any(restore_root.iterdir()):
+        raise RuntimeError("Diretório de restore staging deve estar ausente ou vazio")
+
+    _validate_standard_backup(backup_dir)
+    _make_private_dir(restore_root)
+
+    _sqlite_backup(backup_dir / "jobs.db", restore_root / "data" / "jobs.db")
+    _safe_extract_canonical_transcripts(
+        backup_dir / "canonical-transcripts.tgz",
+        restore_root,
+    )
+    for name in ("backup-contract.json", "git-revision.txt"):
+        target = restore_root / name
+        target.write_bytes((backup_dir / name).read_bytes())
+        _make_private_file(target)
+
+    validation = _validate_restored_state(restore_root)
+    body = "\n".join(
+        [
+            "# Credential-Free Restore Staging — Captured Evidence",
+            "",
+            f"- Occurred at: {occurred_at.astimezone(UTC).isoformat(timespec='seconds')}",
+            f"- Source backup: `{backup_dir}`",
+            f"- Isolated restore root: `{restore_root}`",
+            "- Production service mutated: `no`",
+            "- Credentials/cookies restored: `no`",
+            "- SQLite validation: `PRAGMA integrity_check`",
+            "",
+            "## Restored-state validation",
+            "",
+            "```json",
+            json.dumps(validation, ensure_ascii=False, indent=2, sort_keys=True),
+            "```",
+            "",
+            "## Operator follow-up",
+            "",
+            "- Confirm `/healthcheck` and `/status` on the operational service after the drill.",
+            "- Capture `/list` (or the approved history view) and compare expected history with the restored validation counts.",
+            "- Keep credentials and authentication cookies provisioned separately; never copy them into this staging tree.",
+        ]
+    )
+    return _write_snippet(
+        output_dir=output_root,
+        section="credential-free-restore-staging",
+        body=body,
+        occurred_at=occurred_at,
+    )
+
+
 def run_systemd_smoke(args: argparse.Namespace) -> Path:
     occurred_at = _utc_now()
     app_dir = args.app_dir.resolve()
@@ -526,6 +713,16 @@ def _parse_args() -> argparse.Namespace:
     backup.add_argument("--stop-service", action="store_true")
     backup.add_argument("--start-service", action="store_true")
     backup.set_defaults(func=run_backup)
+
+    restore = subparsers.add_parser(
+        "restore-staging",
+        help="Restore the standard credential-free backup into isolated staging and validate it.",
+    )
+    restore.add_argument("--app-dir", type=Path, default=DEFAULT_APP_DIR)
+    restore.add_argument("--backup-dir", type=Path, required=True)
+    restore.add_argument("--restore-root", type=Path, required=True)
+    restore.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    restore.set_defaults(func=run_restore_staging)
 
     systemd = subparsers.add_parser(
         "systemd-smoke",

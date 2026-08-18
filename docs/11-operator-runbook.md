@@ -518,3 +518,47 @@ Não apague `data/jobs.db`, `data/transcripts`, `data/summaries` ou `data/logs` 
 - Não há `LOG_FORMAT=json`; logs Python continuam em texto, enquanto `operational_errors.jsonl` e `execution_audit.jsonl` são JSONL estruturados.
 - Não há alertas externos, métricas Prometheus, cotas multiusuário ou hardening para bot público.
 - O baseline default da Phase 5 está limpo em 2026-07-09, incluindo `mypy` em CI; reexecute os gates após mudanças e mantenha checks ML/network/e2e como validações environment-gated.
+
+## 8. PLAN-006 / P06-006 — backup credential-free e restore validado
+
+O backup operacional padrão é deliberadamente **credential-free**. Ele inclui somente o banco SQLite de Jobs/histórico, os transcripts canônicos (Markdown + snapshots estruturados), a revisão Git e o contrato do backup. `.env`, `/etc/yt-transcriber-bot/env`, cookies de autenticação, logs, mídia volátil, modelos e caches reconstruíveis ficam fora do conjunto e devem ser reprovisionados separadamente.
+
+### 8.1 Backup controlado no host
+
+Para um rehearsal operacional conservador, pare o serviço durante a captura do conjunto completo e reinicie ao final:
+
+```bash
+cd ~/git/yt-transcriber
+uv run python scripts/ops/phase4_phase8_rehearsal.py backup \
+  --service yt-transcriber-bot \
+  --stop-service \
+  --start-service \
+  --output-dir ~/Downloads/p06-006-backup
+```
+
+O banco é copiado por `sqlite3.Connection.backup()` e o helper valida `PRAGMA integrity_check`, composição do backup e exclusão de credenciais/cookies antes de produzir evidência.
+
+### 8.2 Restore obrigatório primeiro em staging isolado
+
+Nunca valide um backup pela primeira vez sobre o diretório operacional. Restaure-o em uma árvore vazia fora do repositório:
+
+```bash
+uv run python scripts/ops/phase4_phase8_rehearsal.py restore-staging \
+  --backup-dir ~/Downloads/p06-006-backup/backup-<TIMESTAMP> \
+  --restore-root ~/Downloads/p06-006-restore-staging \
+  --output-dir ~/Downloads/p06-006-restore-evidence
+```
+
+O restore staging recusa a árvore da aplicação como destino, recusa destino não vazio, extrai o archive canônico sem links/path traversal e valida: abertura do SQLite, `PRAGMA integrity_check`, tabela `jobs`, contagem de histórico e referências `canonical_transcript_ref`/documentos de busca contra os snapshots restaurados. Quando `md_path` existe, o Markdown correspondente também deve existir.
+
+### 8.3 Evidência pós-restore
+
+Após o restore staging, mantenha o serviço operacional com suas credenciais/cookies originais e capture:
+
+```text
+/healthcheck
+/status
+/list
+```
+
+A evidência de P06-006 é composta pelo relatório do backup, relatório do restore staging e checkpoints sanitizados de health/status/history. O rehearsal real desta tarefa também pode satisfazer a evidência compatível de P06-002; não repita a mesma operação apenas para bookkeeping.
