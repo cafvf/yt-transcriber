@@ -4,13 +4,12 @@ Este ledger acompanha a trilha de maturidade aprovada em
 `.omx/plans/prd-production-maturity-20260704T195723Z.md`.
 
 Escopo da meta atual: **produção privada/single-operator**. A Phase 0 e as
-Phases 1, 2, 3 e 5 estão fechadas para o baseline atual:
-contratos/documentação foram reconciliados, lifecycle de jobs e restart recovery
-têm regressões direcionadas,
-a sanitização de erros/logs foi auditada nos caminhos conhecidos e o gate default
-local/CI está limpo. Isso ainda **não** fecha produção privada completa: faltam
-ensaios operacionais reais de Phase 4/8 — systemd, backup/restore, rollback e
-recovery — registrados como evidência executada. Uso público ou multiusuário
+Phases 1, 2, 3 e 5 estão fechadas para o baseline atual, e os ensaios
+operacionais de Phase 4/8 — systemd, backup/restore, rollback, restart
+reconciliation e recuperação manual — foram executados e agregados pelo
+`TASK-P06-010` sobre o baseline operacional
+`ed3985b7e9337cbd05a3dec896c29845865fbda2`. A declaração final de prontidão
+privada ainda depende do exit gate `TASK-P06-011`. Uso público ou multiusuário
 exige uma trilha posterior de autorização, cotas, isolamento, observabilidade e
 mitigação de abuso.
 
@@ -25,8 +24,8 @@ mitigação de abuso.
 | Busca, artefatos e entrada Telegram | `/search <texto>`, `/text [n]` e áudio/voz/documento Telegram registrados, user-scoped e cobertos por FTS5 opcional/fallback limitado e snapshots | port de busca, adapter SQLite, exportador `.txt`, handlers Telegram e regressões | Busca semântica e `/translate` continuam futuros; o índice, snapshots e staging de mídia privada permanecem locais. |
 | Falha de entrega Telegram | Implementada com use case persistindo renderização como `delivering`, adapter promovendo `delivering` para `completed` após envio ou `delivery_failed` após retries, preservação de paths locais, registro `transcribe_delivery` quando disponível e fallback job-side em `/lasterror` | `JobStatus.DELIVERING`, `JobStatus.DELIVERY_FAILED`, `_mark_job_completed_after_delivery`, `_mark_delivery_failed`, `LastErrorService` | Operador ainda precisa usar `/lasterror` e paths locais para recuperar manualmente artefatos não entregues. |
 | Segurança e sanitização | Phase 3 fechada para os caminhos conhecidos de Telegram/logs operacionais | `sanitize_text`, `LastErrorService`, `HealthCheckService`, `ExecutionAuditLogger`, regressões de sanitização em `tests/unit/application/services`, `tests/unit/infrastructure/telegram` e `tests/unit/infrastructure/logging` | Novos caminhos de erro devem continuar usando o sanitizador central; saídas sanitizadas ainda podem conter metadados privados e não devem ser publicadas integralmente. |
-| Observabilidade operacional | `/healthcheck`, `/lasterror`, `operational_errors.jsonl` e `execution_audit.jsonl` implementados; documentação/runbook criados | `HealthCheckService`, `LastErrorService`, `ExecutionAuditLogger`, `docs/03-manual-de-uso.md`, `docs/11-operator-runbook.md` | Falta ensaio real em host systemd; logs Python continuam em texto e não há métricas/alertas externos. |
-| Operação e recovery | Runbook orientado a systemd criado para backup/restore, upgrade/rollback, recovery de `delivery_failed`/restart, modelos/cache e limpeza emergencial | `docs/11-operator-runbook.md`, `deploy/yt-transcriber-bot.service` | Procedimentos são documentados, mas smoke de systemd, ensaio de restore, rollback e recovery ainda não foram registrados como evidência executada. |
+| Observabilidade operacional | `/healthcheck`, `/lasterror`, `operational_errors.jsonl` e `execution_audit.jsonl` implementados; documentação/runbook e ensaio systemd real registrados | `HealthCheckService`, `LastErrorService`, `ExecutionAuditLogger`, `docs/03-manual-de-uso.md`, `docs/11-operator-runbook.md`, `specs/006-execution/PLAN-006-READINESS-LEDGER.md` | Logs Python continuam em texto e não há métricas/alertas externos; isso não bloqueia a meta privada atual. |
+| Operação e recovery | Runbook orientado a systemd criado e procedimentos críticos ensaiados para backup/restore, upgrade/rollback e recovery de `delivery_failed`/restart | `docs/11-operator-runbook.md`, `deploy/yt-transcriber-bot.service`, `specs/006-execution/PLAN-006-READINESS-LEDGER.md` | O exit gate `TASK-P06-011` ainda precisa confirmar a convergência final do PLAN-006. |
 
 ## Fases de maturidade
 
@@ -36,11 +35,11 @@ mitigação de abuso.
 | 1 — Lifecycle de jobs | Aplicação/Telegram | Concluída com regressões direcionadas | Regressões para `/cancel`, `/cancelall`, pendentes cancelados, falha de entrega, fallback `/lasterror` e retenção | Semântica de entrega é durável no job e prepara o recovery operacional. |
 | 2 — Fila durável e restart recovery | Persistência/aplicação | Concluída com regressões direcionadas | ADR de Recovery Semantics; migração aditiva SQLite; testes SQLite temporários simulando restart e idempotência por instância | Ainda não há retomada por checkpoint dentro de etapas caras; isso fica para fase posterior. |
 | 3 — Segurança e privacidade | Aplicação/infra | Concluída para o baseline atual | Sanitização central em Telegram/logs; `/healthcheck` omite paths locais sensíveis; `/lasterror` persiste mensagem/contexto/traceback sanitizados; regressões para tokens, cookies, `Authorization`, corpos de API, prompts e transcrições ecoadas por erros; secret scan limpo em baseline recente | Não é autorização para expor logs completos publicamente; novos handlers devem manter o mesmo padrão de sanitização. |
-| 4 — Observabilidade e runbooks | Operação/docs | Implementada documentalmente; aguardando ensaios reais | `/healthcheck`, `/lasterror`, `operational_errors.jsonl`, `execution_audit.jsonl`, README/manual atualizado e `docs/11-operator-runbook.md` | Falta evidência de ensaio real documentado de systemd, backup/restore, rollback e recovery; `LOG_FORMAT=json` e alertas externos ficam como evolução futura. |
+| 4 — Observabilidade e runbooks | Operação/docs | Implementada e empiricamente ensaiada | `/healthcheck`, `/lasterror`, registros systemd/backup/restore/rollback/recovery agregados por `TASK-P06-010` | `LOG_FORMAT=json` e alertas externos ficam como evolução futura; o exit gate `TASK-P06-011` permanece. |
 | 5 — CI e quality gates | Tooling | Concluída para o baseline default local/CI | Em 2026-07-09: ruff, format, pytest, mypy, secret scan, gitleaks e `git diff --check` passaram; CI agora inclui `uv run mypy src` | Checks ML/network/e2e seguem environment-gated; manter o baseline limpo em alterações futuras. |
 | 6 — Maintainability/refactor | Arquitetura/executor | Concluída com testes de caracterização | Colaboração de histórico extraída sem alterar autorização, ordenação, índices ou comandos existentes | Mudanças futuras devem preservar os testes de equivalência. |
 | 7 — Search MVP | Produto/aplicação | Concluída com regressões direcionadas | FTS5 opcional, fallback limitado, isolamento por usuário, snippets sanitizados, backfill/refresh | Busca semântica permanece deliberadamente fora de escopo. |
-| 8 — Deployment systemd | Operação/docs | Pendente de ensaios reais | Evidência de smoke systemd, backup/restore, rollback e logs em host/staging real | Docker Compose permanece opcional/futuro. |
+| 8 — Deployment systemd | Operação/docs | Ensaiada no host privado; evidência agregada | Smoke systemd, backup/restore, rollback e recovery em host/staging real estão referenciados no ledger P06-010 | Docker Compose permanece opcional/futuro; o exit gate P06-011 ainda é necessário. |
 | 9 — Funcionalidades estendidas | Produto | Em execução incremental | `/text [n]` e entrada de áudio/voz/documento Telegram concluídos com TDD; ASR multilíngue, `/translate`, `/redo` avançado permanecem no roadmap | Não misturar com hardening de produção. |
 
 ## Checklist de contrato atual vs planejado
@@ -70,10 +69,10 @@ mitigação de abuso.
       ensaios Phase 4/8. O baseline default da Phase 5 está limpo em
       2026-07-09, mas deve ser reexecutado antes de commit/release se houver
       novas alterações.
-- [ ] Executar e registrar ensaio real de backup/restore em host ou ambiente de
+- [x] Executar e registrar ensaio real de backup/restore em host ou ambiente de
       staging.
-- [ ] Executar e registrar smoke real de systemd start/stop/restart/rollback.
-- [ ] Executar e registrar ensaio de recovery de `delivery_failed` e job
+- [x] Executar e registrar smoke real de systemd start/stop/restart/rollback.
+- [x] Executar e registrar ensaio de recovery de `delivery_failed` e job
       interrompido seguindo o runbook.
 
 ## Critério de evidência Phase 4/8
@@ -108,8 +107,10 @@ Critério específico por ensaio:
 
 ## Baseline de validação
 
-Atualize esta seção quando os checks forem executados. Evidência combinada mais
-recente validada em **2026-07-09**:
+O quadro abaixo preserva o baseline amplo histórico de **2026-07-09**. A
+validação operacional/qualidade mais recente do PLAN-006 ocorreu em **2026-08-18**
+sobre o baseline `ed3985b7e9337cbd05a3dec896c29845865fbda2`; o ledger P06-010
+distingue explicitamente testes locais de rehearsals empíricos:
 
 | Check | Status atual | Observação |
 |---|---|---|
@@ -126,12 +127,11 @@ recente validada em **2026-07-09**:
 
 ## O que ainda falta para declarar produção privada completa
 
-- Executar e registrar ensaio real de backup/restore em host ou staging.
-- Executar e registrar smoke real de systemd start/stop/restart/rollback.
-- Executar e registrar ensaio de recovery de `delivery_failed` e job
-  interrompido com os procedimentos do runbook.
-- Reexecutar o baseline default antes de commit/release se houver novas
-  alterações depois das evidências de 2026-07-09.
+- Executar o `TASK-P06-011` como exit gate do PLAN-006, incluindo a revisão final
+  de conformance/quality gates e a confirmação de que nenhuma obrigação ou
+  evidência ficou silenciosamente omitida.
+- Se o exit gate encontrar falha material, reabrir o task proprietário; P06-010
+  e P06-011 não devem corrigir produto por contorno.
 
 ## Evoluções operacionais futuras não bloqueantes
 

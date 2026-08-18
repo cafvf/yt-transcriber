@@ -301,7 +301,51 @@ No product behavior was added by `TASK-P05-017`; no failed owner criterion requi
 routing back to `TASK-P05-001..016`.
 
 PLAN-005 / F6 is therefore closed. Package 4 — **Deployment, persistence resilience
-and service operations** — is next under PLAN-006. Its frozen work begins from
-`TASK-P06-001..004` / `TASK-P06-002` dependencies as defined by PLAN-006; later
-host/systemd, backup/restore, upgrade/rollback, manual-recovery, documentation
-conformance and readiness evidence retain their frozen dependencies and owners.
+and service operations** — subsequently closed on the operational evidence baseline
+`ed3985b7e9337cbd05a3dec896c29845865fbda2`. Package 5 — **Production readiness and
+roadmap closure** — is now active under PLAN-006; `TASK-P06-010` aggregates the
+sanitized readiness evidence and `TASK-P06-011` remains the final exit gate.
+
+## Package 4 closure evidence
+
+Status: **Verified / closed — Deployment, persistence resilience and service operations**
+
+Operational evidence baseline:
+
+```text
+ed3985b7e9337cbd05a3dec896c29845865fbda2
+fix: harden P06-005 preflight evidence persistence
+```
+
+Package 4 closure is supported by the frozen owner tasks and their evidence:
+
+- `TASK-P06-001`: all 46 historical environment-gated contracts have an explicit
+  disposition; the current inventory contains 35 integration tests and no missing
+  lineage item;
+- `TASK-P06-002`/`TASK-P06-006`: standard backup excludes reusable
+  credentials/cookies and a real backup plus isolated validated restore passed on
+  the operational baseline;
+- `TASK-P06-003`: fresh-process restart reconciliation passed in isolated SQLite
+  staging on the operational baseline;
+- `TASK-P06-004`: automatic FIFO retention/reference-truth/failure-isolation
+  acceptance passed with 14 focused tests on the operational baseline;
+- `TASK-P06-005`: real systemd lifecycle/preflight/permission evidence passed,
+  including corrected private evidence persistence.
+
+Detailed sanitized aggregation is recorded in
+`specs/006-execution/PLAN-006-READINESS-LEDGER.md`.
+
+## Package 5 current state
+
+Status: **Active — Production readiness and roadmap closure**
+
+- `TASK-P06-007`: versioned upgrade/rollback procedure and empirical rehearsal
+  completed; evidence remains valid after materiality review;
+- `TASK-P06-008`: manual artifact-recovery procedure and staging rehearsal
+  completed; evidence remains valid after materiality review;
+- `TASK-P06-009`: command/help/documentation conformance completed;
+- `TASK-P06-010`: readiness evidence aggregation is the current task;
+- `TASK-P06-011`: pending final PLAN-006 exit-gate verification.
+
+Package 5 does not authorize new product functionality. Any failed exit criterion
+must be routed back to its frozen owner before the roadmap is declared closed.

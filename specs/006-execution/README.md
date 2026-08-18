@@ -36,7 +36,7 @@ Current execution state:
 - F3 — hexagonal boundaries and provider seams: **Verified / Closed — TASK-P03-001..014 complete; PLAN-003 exit gate passed**;
 - F4/F5 — PLAN-004 workflow decomposition, reliability and convergence: **Verified / Closed at `095abd4` — PLAN-004 exit gate passed**;
 - F6 / PLAN-005 functional/NFR reconnection and acceptance: **Verified / Closed at `7829d5d` — `TASK-P05-017` exit gate passed**;
-- Post-PLAN-004 roadmap: **Active — Packages 1–3 / PLAN-005 closed; Package 4 (Deployment, persistence resilience and service operations) / PLAN-006 is next**.
+- Post-PLAN-004 roadmap: **Active — Packages 1–4 closed; Package 5 / PLAN-006 production-readiness aggregation is active (`TASK-P06-010`), followed by `TASK-P06-011`**.
 
 Detailed evidence is recorded in `F0-BASELINE.md`, `F1-SECURITY.md`,
 `F2-DOMAIN-DATA.md`, `F3-HEXAGONAL-SEAMS.md`, and
