@@ -30,9 +30,7 @@ JOB_REPOSITORY = "tests/unit/infrastructure/persistence/test_job_repository.py"
 HISTORY_SEARCH = "tests/unit/infrastructure/persistence/test_history_search_repository.py"
 LOCAL_FILE_STORAGE = "tests/unit/infrastructure/persistence/test_local_file_storage.py"
 FFPROBE_TEST = "tests/unit/infrastructure/telegram/test_ffprobe_duration_inspector.py"
-FFPROBE_REPLACEMENT_NODEID = (
-    f"{FFPROBE_TEST}::test_real_ffprobe_duration_inspector"
-)
+FFPROBE_REPLACEMENT_NODEID = f"{FFPROBE_TEST}::test_real_ffprobe_duration_inspector"
 FROZEN_FFPROBE_NODEID = (
     "tests/unit/infrastructure/audio/test_ffmpeg_converter.py::"
     "TestFfmpegRealIntegration::test_real_probe_duration"
@@ -130,9 +128,7 @@ def _nodeids(stdout: str) -> tuple[str, ...]:
     # parser to repository test paths so warnings/summaries containing "::" can
     # never inflate the inventory.
     return tuple(
-        line.strip()
-        for line in stdout.splitlines()
-        if line.startswith("tests/") and "::" in line
+        line.strip() for line in stdout.splitlines() if line.startswith("tests/") and "::" in line
     )
 
 
@@ -140,15 +136,16 @@ def _ast_nodeids(path: str, source: str) -> list[str]:
     tree = ast.parse(source, filename=path)
     result: list[str] = []
     for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith(
+            "test_"
+        ):
             result.append(f"{path}::{node.name}")
             continue
         if isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
             for child in node.body:
-                if (
-                    isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
-                    and child.name.startswith("test_")
-                ):
+                if isinstance(
+                    child, (ast.FunctionDef, ast.AsyncFunctionDef)
+                ) and child.name.startswith("test_"):
                     result.append(f"{path}::{node.name}::{child.name}")
     return result
 
