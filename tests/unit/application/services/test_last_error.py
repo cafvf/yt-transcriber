@@ -77,3 +77,50 @@ def test_failed_job_can_be_rendered_without_reading_whole_log() -> None:
         artifact_available=lambda path: path == Path(job.log_path or ""),
     )
     assert "safe tail" in service.latest_for_user(7).message
+
+
+def _delivery_failed_job() -> Job:
+    job = Job.new(VideoId("dQw4w9WgXcQ"), user_id=7)
+    for status in (
+        JobStatus.ACQUIRING,
+        JobStatus.CONVERTING,
+        JobStatus.TRANSCRIBING,
+        JobStatus.DIARIZING,
+        JobStatus.RENDERING,
+        JobStatus.DELIVERING,
+        JobStatus.DELIVERY_FAILED,
+    ):
+        job.transition_to(status)
+    return job
+
+
+def test_delivery_failed_reports_actual_recoverability_without_private_path() -> None:
+    job = _delivery_failed_job()
+    job.md_path = "/private/transcripts/final.md"
+    service = LastErrorService(
+        repository=Repo([job]),  # type: ignore[arg-type]
+        settings=_settings(),
+        error_store=Store(),
+        log_reader=Logs(),
+        artifact_available=lambda path: path == Path(job.md_path or ""),
+    )
+
+    message = service.latest_for_user(7).message
+
+    assert "Artefatos locais recuperáveis: Markdown" in message
+    assert "procedimento privado do operador" in message
+    assert "/private/transcripts/final.md" not in message
+
+
+def test_delivery_failed_reports_missing_artifact_as_unavailable() -> None:
+    job = _delivery_failed_job()
+    job.md_path = "/private/transcripts/missing.md"
+    service = LastErrorService(
+        repository=Repo([job]),  # type: ignore[arg-type]
+        settings=_settings(),
+        error_store=Store(),
+        log_reader=Logs(),
+        artifact_available=lambda _path: False,
+    )
+
+    assert "Artefatos locais recuperáveis: indisponíveis" in service.latest_for_user(7).message

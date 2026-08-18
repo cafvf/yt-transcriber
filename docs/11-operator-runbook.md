@@ -607,3 +607,67 @@ Após o rehearsal, capture no Telegram:
 ```
 
 e preserve o relatório sanitizado de `journalctl` gerado pelo helper. Evidência de backup/restore já válida pode ser reutilizada; não repita operações apenas para bookkeeping.
+
+## 10. PLAN-006 / P06-008 — recuperação manual após `delivery_failed`
+
+A recuperação desta baseline é deliberadamente manual. Ela não reabre o Job terminal, não
+recomputa transcrição/diarização/renderização e não dispara reenvio automático ao Telegram.
+
+### 10.1 Identificar o Job e a disponibilidade
+
+Primeiro use `/lasterror`. Para um Job em `delivery_failed`, a resposta informa se existem
+artefatos locais recuperáveis, mas não publica caminhos privados no Telegram.
+
+No host, use o `job_id` informado por `/lasterror` para inspecionar as referências persistidas:
+
+```bash
+cd ~/git/yt-transcriber
+uv run python scripts/ops/manual_artifact_recovery.py \
+  --db-path data/jobs.db \
+  --job-id <JOB_ID> \
+  --output ~/Downloads/p06-008-inspect.json \
+  inspect
+```
+
+O relatório privado distingue:
+
+- `available`: referência persistida e arquivo local existente;
+- `reference_absent`: não há referência persistida; para artefatos voláteis isso pode refletir
+  ausência ou purga legítima por retenção;
+- `referenced_missing`: a referência persiste, mas o arquivo não existe no disco.
+
+A retenção de Completed Jobs não autoriza remover Markdown nem transcript canônico. Portanto,
+Markdown ausente deve ser tratado como indisponível/anômalo, não como artefato recuperável.
+
+### 10.2 Copiar um artefato existente
+
+A cópia exige opt-in explícito, restringe a origem a uma raiz permitida, recusa symlinks,
+não sobrescreve destino existente e grava a cópia com modo `0600`:
+
+```bash
+uv run python scripts/ops/manual_artifact_recovery.py \
+  --db-path data/jobs.db \
+  --job-id <JOB_ID> \
+  copy \
+  --artifact markdown \
+  --allowed-root data \
+  --destination ~/Downloads/recovered-<JOB_ID>.md
+```
+
+Se os dados estiverem fora de `data`, informe explicitamente a raiz operacional aprovada em
+`--allowed-root`. A cópia não altera o Job, não altera o artefato de origem e não envia nada
+a serviços externos.
+
+### 10.3 Evidência de rehearsal
+
+Para P06-008, produza/identifique um `delivery_failed` controlado em host/staging, capture
+`/lasterror`, execute `inspect`, copie um artefato existente para um destino privado e confirme:
+
+1. o Job permanece `delivery_failed`;
+2. o arquivo recuperado é byte-a-byte equivalente ao artefato persistido;
+3. a origem permanece intacta;
+4. nenhum reenvio automático ocorre;
+5. um artefato ausente/purgado é reportado como indisponível, nunca como recuperável.
+
+Preserve apenas evidência sanitizada/privada. Não publique caminhos, conteúdo de artefatos,
+IDs privados ou credenciais.

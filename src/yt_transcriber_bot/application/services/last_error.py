@@ -121,8 +121,12 @@ class LastErrorService:
         if job.audio_path and self._artifact_available(Path(job.audio_path)):
             available_artifacts.append("áudio")
             lines.append("Áudio parcial: disponível")
-        if job.status is JobStatus.DELIVERY_FAILED and not available_artifacts:
-            lines.append("Artefatos locais recuperáveis: indisponíveis")
+        if job.status is JobStatus.DELIVERY_FAILED:
+            if available_artifacts:
+                lines.append("Artefatos locais recuperáveis: " + ", ".join(available_artifacts))
+                lines.append("Recuperação: use o job_id acima no procedimento privado do operador.")
+            else:
+                lines.append("Artefatos locais recuperáveis: indisponíveis")
         if job.log_path and self._artifact_available(Path(job.log_path)):
             tail = self._log_reader.tail(
                 Path(job.log_path),
