@@ -25,6 +25,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+try:
+    from scripts.ops.systemd_host_preflight import sanitize_evidence_text
+except ModuleNotFoundError as exc:
+    if exc.name != "scripts":
+        raise
+    from systemd_host_preflight import sanitize_evidence_text
+
 DEFAULT_OUTPUT_DIR = Path("ops-evidence")
 DEFAULT_APP_DIR = Path.cwd()
 DEFAULT_DB_PATH = Path("data/jobs.db")
@@ -95,8 +102,8 @@ def _make_private_file(path: Path) -> None:
 
 def _format_command(result: CommandResult) -> str:
     joined = " ".join(result.command)
-    stdout = result.stdout or "<empty>"
-    stderr = result.stderr or "<empty>"
+    stdout = sanitize_evidence_text(result.stdout or "<empty>")
+    stderr = sanitize_evidence_text(result.stderr or "<empty>")
     return (
         f"### `$ {joined}`\n\n"
         f"- Return code: `{result.returncode}`\n\n"
@@ -197,8 +204,7 @@ def _validate_standard_backup(backup_dir: Path) -> None:
     )
     if forbidden:
         raise RuntimeError(
-            "Backup padrão contém credencial/cookie reutilizável proibido: "
-            + ", ".join(forbidden)
+            "Backup padrão contém credencial/cookie reutilizável proibido: " + ", ".join(forbidden)
         )
 
     with sqlite3.connect(backup_dir / "jobs.db") as conn:
@@ -218,9 +224,7 @@ def _validate_standard_backup(backup_dir: Path) -> None:
                     f"Archive canônico contém membro fora de transcripts/: {member.name}"
                 )
             if member.issym() or member.islnk():
-                raise RuntimeError(
-                    f"Archive canônico contém link não permitido: {member.name}"
-                )
+                raise RuntimeError(f"Archive canônico contém link não permitido: {member.name}")
             if Path(member.name).name.lower() in forbidden_names:
                 raise RuntimeError(
                     f"Archive canônico contém nome de credencial/cookie proibido: {member.name}"

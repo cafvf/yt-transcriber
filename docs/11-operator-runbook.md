@@ -88,7 +88,16 @@ Evidência mínima por ensaio:
 
 ## 2. Pré-flight antes de produção privada
 
-Execute no diretório do projeto:
+Comece pelo contrato read-only de host/systemd:
+
+```bash
+cd ~/yt-transcriber-bot
+uv run python scripts/ops/systemd_host_preflight.py --service yt-transcriber-bot --output ~/Downloads/p06-005-preflight.json
+```
+
+O relatório não lê nem imprime os valores do arquivo secreto; valida somente caminho, owner/mode e propriedades não-secretas do serviço. Saídas levadas a superfícies de colaboração devem ser sanitizadas. O `systemd-smoke` sanitiza stdout/stderr antes de gravar evidência.
+
+Depois execute no diretório do projeto:
 
 ```bash
 cd ~/yt-transcriber-bot
@@ -150,6 +159,8 @@ sudo systemctl enable yt-transcriber-bot
 Revise `/etc/systemd/system/yt-transcriber-bot.service` antes de iniciar. `User`, `Group`, `WorkingDirectory` e `ExecStart` devem apontar para o usuário real, diretório real e binário `uv` real.
 
 ### 3.2 Start, stop, restart e logs
+
+Antes do primeiro start e após mudanças na unit/env, reexecute `scripts/ops/systemd_host_preflight.py`. Falha de conta não-root, owner/mode do env ou pré-requisito é evidência Red e deve ser corrigida antes do smoke.
 
 ```bash
 sudo systemctl start yt-transcriber-bot

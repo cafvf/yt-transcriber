@@ -498,7 +498,17 @@ WantedBy=multi-user.target
 
 Substitua `SEU_USUARIO` pelo seu username (ex.: `ubuntu`, `fulano`). Confirme o caminho do `uv` com `which uv`.
 
-### 11.3 Instalar e ativar
+### 11.3 Pré-flight do host e do serviço
+
+Antes de ativar o serviço, execute o preflight read-only de P06-005:
+
+```bash
+uv run python scripts/ops/systemd_host_preflight.py --service yt-transcriber-bot
+```
+
+Depois de instalar a unit, execute-o novamente. O preflight verifica Linux/Python suportado, `uv`, `ffmpeg`, `ffprobe`, `systemctl`, `journalctl`, conta não-root, diretório/ExecStart e permissões do arquivo de ambiente sem imprimir os valores secretos. Para evidência compartilhável, use `--output ~/Downloads/p06-005-preflight.json`; o arquivo é criado com permissão `0600` e conteúdo sanitizado.
+
+### 11.4 Instalar e ativar
 ```bash
 sudo cp deploy/yt-transcriber-bot.service /etc/systemd/system/
 sudo systemctl daemon-reload
@@ -506,19 +516,21 @@ sudo systemctl enable yt-transcriber-bot
 sudo systemctl start yt-transcriber-bot
 ```
 
-### 11.4 Verificar
+### 11.5 Verificar
 ```bash
 sudo systemctl status yt-transcriber-bot
 journalctl -u yt-transcriber-bot -f
 ```
 
-### 11.5 Parar / reiniciar
+Antes de mover trechos de journal para chats/issues/artefatos de colaboração, sanitize a saída. O helper `systemd-smoke` faz essa sanitização automaticamente; não copie dumps brutos que possam conter valores de ambiente, paths privados ou tokens.
+
+### 11.6 Parar / reiniciar
 ```bash
 sudo systemctl stop yt-transcriber-bot
 sudo systemctl restart yt-transcriber-bot
 ```
 
-### 11.6 systemd em WSL2
+### 11.7 systemd em WSL2
 WSL2 (versões recentes do Windows 11) suporta systemd nativamente. Habilite editando `/etc/wsl.conf`:
 ```ini
 [boot]
