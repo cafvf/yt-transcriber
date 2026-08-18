@@ -111,3 +111,33 @@ def test_sanitizer_redacts_private_numeric_identifiers() -> None:
     assert "chat_id=<private-identifier-redacted>" in sanitized
     assert "jobs=13" in sanitized
     assert "pid=180326" in sanitized
+
+
+def test_write_report_preserves_existing_parent_mode_and_writes_valid_json(
+    tmp_path: Path,
+) -> None:
+    import json
+
+    module = _load()
+    parent = tmp_path / "shared"
+    parent.mkdir()
+    parent.chmod(0o777)
+    output = parent / "preflight.json"
+    report = {"passed": True, "checks": []}
+
+    module.write_report(report, output)
+
+    assert stat.S_IMODE(parent.stat().st_mode) == 0o777
+    assert json.loads(output.read_text(encoding="utf-8")) == report
+    assert stat.S_IMODE(output.stat().st_mode) == 0o600
+
+
+def test_write_report_protects_parent_created_by_helper(tmp_path: Path) -> None:
+    module = _load()
+    parent = tmp_path / "new-private-evidence"
+    output = parent / "preflight.json"
+
+    module.write_report({"passed": True}, output)
+
+    assert stat.S_IMODE(parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(output.stat().st_mode) == 0o600

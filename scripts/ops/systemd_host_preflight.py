@@ -154,10 +154,12 @@ def build_report(service: str) -> dict[str, object]:
 
 
 def write_report(report: dict[str, object], output: Path) -> None:
+    parent_existed = output.parent.exists()
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.parent.chmod(0o700)
+    if not parent_existed:
+        output.parent.chmod(0o700)
     output.write_text(
-        sanitize_evidence_text(json.dumps(report, indent=2, sort_keys=True)) + "\\n",
+        sanitize_evidence_text(json.dumps(report, indent=2, sort_keys=True)) + "\n",
         encoding="utf-8",
     )
     output.chmod(0o600)
