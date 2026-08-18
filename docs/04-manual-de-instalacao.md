@@ -78,7 +78,7 @@ uv sync
 
 Esse comando:
 1. Lê `pyproject.toml` e `uv.lock`.
-2. Cria um ambiente virtual em `.venv/` (Python 3.11).
+2. Cria um ambiente virtual em `.venv/` com Python 3.11 ou 3.12, conforme o interpretador compatível selecionado pelo `uv`.
 3. Instala todas as dependências exatamente nas versões travadas, incluindo `torch`, `torchaudio`, `whisperx`, `pyannote.audio` e `faster-whisper`.
 
 Tempo: 3–20 minutos, dependendo da rede e do cache local. O PyTorch é grande e pode baixar pacotes CUDA mesmo quando o processamento final usar CPU.

@@ -238,12 +238,20 @@ class FakeLastErrorService:
 class FakeOperationalWorkflow:
     def __init__(self, sink: FakeLastErrorService | None = None) -> None:
         self.sink = sink or FakeLastErrorService()
+        self.retention_calls = 0
 
     def record_error(self, **kwargs: object) -> object:
         return self.sink.record_operation_error(**kwargs)
 
     def apply_retention(self) -> object:
+        self.retention_calls += 1
         return type("Retention", (), {"expired_jobs": (), "removed_files": ()})()
+
+
+class FailingRetentionOperationalWorkflow(FakeOperationalWorkflow):
+    def apply_retention(self) -> object:
+        self.retention_calls += 1
+        raise RuntimeError("retention cleanup failed")
 
 
 class FailingSaveRepo(FakeRepo):
@@ -1114,3 +1122,72 @@ async def test_cancel_final_success_message_is_sent(
     await adapter.handle_command_cancel(chat_id=10, user_id=42)
     await asyncio.sleep(1.1)
     assert any("Job cancelado com sucesso" in m.text for m in client.sent)
+
+
+@pytest.mark.asyncio
+async def test_successful_primary_delivery_automatically_applies_retention(
+    settings: AppSettings, client: FakeBotClient, tmp_path: Path
+) -> None:
+    md = tmp_path / "done.md"
+    md.write_text("# done", encoding="utf-8")
+    repo = FakeRepo()
+    workflow = FakeOperationalWorkflow()
+    adapter = TelegramBotAdapter(
+        settings=settings,
+        client=client,
+        use_case=CapturingUseCase(md_path=md),  # type: ignore[arg-type]
+        repository=repo,  # type: ignore[arg-type]
+        operational_workflow=workflow,  # type: ignore[arg-type]
+    )
+
+    await adapter.start()
+    try:
+        await adapter.handle_message(
+            chat_id=10,
+            user_id=42,
+            text="https://youtu.be/dQw4w9WgXcQ",
+        )
+        await asyncio.wait_for(adapter._queue._queue.join(), timeout=1.0)
+    finally:
+        await adapter.stop()
+
+    assert len(repo.jobs) == 1
+    assert repo.jobs[0].status is JobStatus.COMPLETED
+    assert workflow.retention_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_retention_failure_is_recorded_without_retroactively_failing_completed_job(
+    settings: AppSettings, client: FakeBotClient, tmp_path: Path
+) -> None:
+    md = tmp_path / "done.md"
+    md.write_text("# done", encoding="utf-8")
+    repo = FakeRepo()
+    sink = FakeLastErrorService()
+    workflow = FailingRetentionOperationalWorkflow(sink)
+    adapter = TelegramBotAdapter(
+        settings=settings,
+        client=client,
+        use_case=CapturingUseCase(md_path=md),  # type: ignore[arg-type]
+        repository=repo,  # type: ignore[arg-type]
+        operational_workflow=workflow,  # type: ignore[arg-type]
+    )
+
+    await adapter.start()
+    try:
+        await adapter.handle_message(
+            chat_id=10,
+            user_id=42,
+            text="https://youtu.be/dQw4w9WgXcQ",
+        )
+        await asyncio.wait_for(adapter._queue._queue.join(), timeout=1.0)
+    finally:
+        await adapter.stop()
+
+    assert repo.jobs[0].status is JobStatus.COMPLETED
+    assert workflow.retention_calls == 1
+    assert sink.recorded
+    record = sink.recorded[-1]
+    assert record["operation"] == "retention"
+    assert record["stage"] == "retention"
+    assert record["severity"] == "warning"

@@ -195,131 +195,92 @@ Se houver job ativo, a Phase 2 não retoma o meio da etapa. Ao voltar, jobs `pen
 
 ---
 
-## 4. Backup
+## 4. Backup padrão credential-free
 
-Backups podem conter transcrições privadas, áudio, caminhos locais, cookies e segredos. Guarde-os com permissão restrita, criptografia ou volume protegido.
+O backup operacional padrão é um **backup de dados duráveis**, não uma cópia da
+instalação inteira. Ele continua sendo dado privado e deve permanecer sob acesso
+restrito, mas **não carrega credenciais reutilizáveis**.
 
-### 4.1 Backup recomendado antes de upgrade/manutenção
+### 4.1 Contrato do conjunto padrão
 
-```bash
-set -euo pipefail
-APP_DIR="$HOME/yt-transcriber-bot"
-SERVICE="yt-transcriber-bot"
-STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-BACKUP_DIR="$HOME/yt-transcriber-backups/$STAMP"
+Incluído:
 
-mkdir -p "$BACKUP_DIR"
-cd "$APP_DIR"
-sudo systemctl stop "$SERVICE"
-test -f "$APP_DIR/data/jobs.db"
+| Classe | Artefato | Razão |
+|---|---|---|
+| Estado/histórico | `jobs.db` | Jobs, histórico e associações persistidas. |
+| Evidência canônica | `canonical-transcripts.tgz` | Markdown e snapshots JSON versionados de `data/transcripts/`. |
+| Contrato/revisão | `backup-contract.json`, `git-revision.txt` | Reprodutibilidade e validação do conjunto. |
 
-uv run python - "$APP_DIR/data/jobs.db" "$BACKUP_DIR/jobs.db" <<'PY'
-import sqlite3
-import sys
-source, target = sys.argv[1:3]
-with sqlite3.connect(source) as src, sqlite3.connect(target) as dst:
-    src.backup(dst)
-PY
+Excluído do backup padrão:
 
-tar -C "$APP_DIR" -czf "$BACKUP_DIR/runtime-data.tgz" data
-[ -d "$APP_DIR/models" ] && tar -C "$APP_DIR" -czf "$BACKUP_DIR/models.tgz" models || true
-sudo cp /etc/yt-transcriber-bot/env "$BACKUP_DIR/systemd-env" 2>/dev/null || true
-cp .env "$BACKUP_DIR/dotenv" 2>/dev/null || true
-git rev-parse HEAD > "$BACKUP_DIR/git-revision.txt"
-chmod -R go-rwx "$BACKUP_DIR"
+- `.env`, arquivo de ambiente/segredos do systemd e credenciais de providers;
+- cookies do navegador/YouTube e qualquer outro material de autenticação reutilizável;
+- mídia staged/downloaded, áudio convertido e outros artefatos voláteis;
+- logs operacionais;
+- summaries, exports e vídeos derivados, que não são fonte canônica de verdade;
+- modelos e caches reconstruíveis.
 
-sudo systemctl start "$SERVICE"
-echo "Backup criado em: $BACKUP_DIR"
-```
+Credenciais e cookies devem ser **reprovisionados separadamente** no host de destino.
+Nunca copie `systemd-env`, `.env` ou cookies para dentro do diretório do backup padrão.
 
-Esse backup guarda:
+### 4.2 Criar o backup padrão
 
-- `jobs.db` via API de backup do SQLite;
-- `data/` com banco, downloads, processed, transcripts, summaries, video exports e logs;
-- `models/`, se existir;
-- arquivo de ambiente systemd e `.env`, se existirem;
-- revisão Git atual para rollback.
-
-Se você customizou `DB_PATH`, `BASE_DIR` ou `MODELS_DIR`, ajuste os caminhos no comando.
-
-### 4.2 Backup online só do SQLite
-
-Use quando não puder parar o serviço e precisar de uma cópia consistente do banco. Ele não garante consistência com artefatos gerados ao mesmo tempo.
+O helper é a referência executável do contrato local:
 
 ```bash
-set -euo pipefail
-APP_DIR="$HOME/yt-transcriber-bot"
-STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-BACKUP_DIR="$HOME/yt-transcriber-backups/$STAMP"
-mkdir -p "$BACKUP_DIR"
-cd "$APP_DIR"
-test -f "$APP_DIR/data/jobs.db"
-
-uv run python - "$APP_DIR/data/jobs.db" "$BACKUP_DIR/jobs.db" <<'PY'
-import sqlite3
-import sys
-source, target = sys.argv[1:3]
-with sqlite3.connect(source) as src, sqlite3.connect(target) as dst:
-    src.backup(dst)
-PY
-chmod -R go-rwx "$BACKUP_DIR"
+cd ~/yt-transcriber-bot
+uv run python scripts/ops/phase4_phase8_rehearsal.py backup \
+  --output-dir "$HOME/yt-transcriber-backups"
 ```
+
+Para um backup frio em host autorizado:
+
+```bash
+uv run python scripts/ops/phase4_phase8_rehearsal.py backup \
+  --stop-service \
+  --start-service \
+  --service yt-transcriber-bot \
+  --output-dir "$HOME/yt-transcriber-backups"
+```
+
+Se `DB_PATH` ou o diretório canônico de transcrições forem customizados, informe
+`--db-path` e `--transcripts-dir`. O helper usa a API `sqlite3.Connection.backup()`,
+gera um archive limitado a `transcripts/`, grava o contrato em JSON, executa
+`PRAGMA integrity_check` na cópia e rejeita nomes conhecidos de arquivos de
+credencial/cookie no diretório de backup.
+
+A criação bem-sucedida deste conjunto é **evidência local de composição e integridade
+do backup**, não prova de restauração.
+
+### 4.3 Backup online apenas do SQLite
+
+Uma cópia online do SQLite pode ser útil para diagnóstico ou proteção adicional,
+mas não substitui o conjunto padrão quando é necessário preservar também Markdown
+e snapshots canônicos. Use sempre a API de backup do SQLite; não copie o arquivo
+`jobs.db` cru enquanto houver escrita concorrente.
 
 ---
 
-## 5. Restore
+## 5. Fronteira de restore deste round
 
-Restaure apenas em uma instalação parada. Antes de sobrescrever qualquer coisa, faça uma cópia do estado atual.
+`TASK-P06-002` define o **contrato de dados**. O procedimento operacional completo
+de restore, incluindo staging/serviço parado, validação das relações canônicas e
+evidência pós-restore, pertence a `TASK-P06-006`.
 
-```bash
-set -euo pipefail
-APP_DIR="$HOME/yt-transcriber-bot"
-SERVICE="yt-transcriber-bot"
-BACKUP_DIR="$HOME/yt-transcriber-backups/20260708T120000Z"  # ajuste
+Até `TASK-P06-006` fechar:
 
-cd "$APP_DIR"
-test -d "$BACKUP_DIR"
-sudo systemctl stop "$SERVICE"
-mkdir -p "$HOME/yt-transcriber-restore-safety"
-tar -C "$APP_DIR" -czf "$HOME/yt-transcriber-restore-safety/pre-restore-data.tgz" data 2>/dev/null || true
-cp data/jobs.db "$HOME/yt-transcriber-restore-safety/jobs.db.before-restore" 2>/dev/null || true
+1. não trate a simples criação do backup como prova de restore;
+2. não restaure `.env`, systemd env ou cookies a partir do backup padrão — eles não
+   devem existir nele;
+3. qualquer ensaio deve ocorrer em staging isolado ou com o serviço parado;
+4. a evidência futura precisa demonstrar abertura/integridade do SQLite, preservação
+   de `canonical_transcript_ref`→snapshot e `md_path`→Markdown, além de
+   `/healthcheck`, `/status` e `/list` após o restore;
+5. credenciais/cookies são provisionados separadamente depois que os dados duráveis
+   forem restaurados.
 
-rm -rf data
-tar -C "$APP_DIR" -xzf "$BACKUP_DIR/runtime-data.tgz"
-cp "$BACKUP_DIR/jobs.db" data/jobs.db
-
-if [ -f "$BACKUP_DIR/systemd-env" ]; then
-  sudo cp "$BACKUP_DIR/systemd-env" /etc/yt-transcriber-bot/env
-  sudo chmod 600 /etc/yt-transcriber-bot/env
-  sudo chown root:root /etc/yt-transcriber-bot/env
-fi
-
-if [ -f "$BACKUP_DIR/models.tgz" ]; then
-  rm -rf models
-  tar -C "$APP_DIR" -xzf "$BACKUP_DIR/models.tgz"
-fi
-
-sudo systemctl start "$SERVICE"
-sudo systemctl status "$SERVICE" --no-pager
-```
-
-Após restore, rode no Telegram:
-
-```text
-/healthcheck
-/status
-/list
-/lasterror
-```
-
-Se o restore trouxe jobs `pending`, o startup recovery deve re-enfileirá-los. Se trouxe jobs interrompidos em estados ativos antigos, eles devem ser reconciliados para `failed` ou `delivery_failed`.
-
-Para o ensaio de backup/restore contar como evidência Phase 4/8, registre o
-diretório do backup, commit Git, confirmação de que o serviço estava parado ou
-que o restore ocorreu em staging isolado, saída sanitizada dos comandos de
-restore, `systemctl status` após o start e os resultados de `/healthcheck`,
-`/status` e `/list`. Não publique o conteúdo de backups, `.env`, cookies ou
-transcrições privadas.
+O helper deste Round A valida composição e integridade do **backup**; ele
+deliberadamente não implementa nem simula a restauração real de `TASK-P06-006`.
 
 ---
 

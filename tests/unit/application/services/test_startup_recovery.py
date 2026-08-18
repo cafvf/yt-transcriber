@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from yt_transcriber_bot.application.job_request_context import JobRequestContext
 from yt_transcriber_bot.application.services.startup_recovery import (
     RecoveredPendingJob,
@@ -125,3 +127,83 @@ def test_interrupted_delivery_becomes_delivery_failed() -> None:
 
     assert result.interrupted_delivery_failed == (job,)
     assert job.status is JobStatus.DELIVERY_FAILED
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        JobStatus.ACQUIRING,
+        JobStatus.CONVERTING,
+        JobStatus.TRANSCRIBING,
+        JobStatus.DIARIZING,
+        JobStatus.RENDERING,
+    ],
+)
+def test_each_interrupted_active_state_becomes_failed(target: JobStatus) -> None:
+    job = Job.new(VideoId("dQw4w9WgXcQ"), 42)
+    _advance(job, target)
+
+    result = StartupRecoveryService(FakeRepo([job])).recover()  # type: ignore[arg-type]
+
+    assert result.pending_to_requeue == ()
+    assert result.interrupted_failed == (job,)
+    assert job.status is JobStatus.FAILED
+
+
+def test_pending_youtube_with_mismatched_source_identity_becomes_failed() -> None:
+    job = Job.new(VideoId("dQw4w9WgXcQ"), 42)
+    context = JobRequestContext(
+        job_id=job.job_id,
+        delivery_chat_id=10,
+        source_locator="https://www.youtube.com/watch?v=aaaaaaaaaaa",
+    )
+    result = StartupRecoveryService(FakeRepo([job], {job.job_id: context})).recover()  # type: ignore[arg-type]
+
+    assert result.pending_to_requeue == ()
+    assert job.status is JobStatus.FAILED
+
+
+def test_pending_without_delivery_context_becomes_failed() -> None:
+    job = Job.new(VideoId("dQw4w9WgXcQ"), 42)
+    context = JobRequestContext(
+        job_id=job.job_id,
+        delivery_chat_id=None,
+        source_locator="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    )
+    result = StartupRecoveryService(FakeRepo([job], {job.job_id: context})).recover()  # type: ignore[arg-type]
+
+    assert result.pending_to_requeue == ()
+    assert job.status is JobStatus.FAILED
+
+
+def test_pending_telegram_with_missing_staged_media_becomes_failed(tmp_path: Path) -> None:
+    job = Job.new(
+        None,
+        42,
+        media_source=MediaSource.telegram_audio("private-file-id"),
+        source_duration_seconds=12,
+    )
+    missing = tmp_path / "missing.ogg"
+    context = JobRequestContext(job.job_id, delivery_chat_id=10, source_locator=str(missing))
+
+    result = StartupRecoveryService(FakeRepo([job], {job.job_id: context})).recover()  # type: ignore[arg-type]
+
+    assert result.pending_to_requeue == ()
+    assert job.status is JobStatus.FAILED
+
+
+def test_pending_telegram_without_positive_duration_becomes_failed(tmp_path: Path) -> None:
+    staged = tmp_path / "voice.ogg"
+    staged.write_bytes(b"audio")
+    job = Job.new(
+        None,
+        42,
+        media_source=MediaSource.telegram_audio("private-file-id"),
+        source_duration_seconds=None,
+    )
+    context = JobRequestContext(job.job_id, delivery_chat_id=10, source_locator=str(staged))
+
+    result = StartupRecoveryService(FakeRepo([job], {job.job_id: context})).recover()  # type: ignore[arg-type]
+
+    assert result.pending_to_requeue == ()
+    assert job.status is JobStatus.FAILED

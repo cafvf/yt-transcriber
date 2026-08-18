@@ -7,8 +7,10 @@ from pathlib import Path
 
 import pytest
 
+from yt_transcriber_bot.application.job_request_context import JobRequestContext
 from yt_transcriber_bot.application.services.retention_policy import RetentionPolicy
 from yt_transcriber_bot.domain.entities.job import Job, JobStatus
+from yt_transcriber_bot.domain.value_objects.media_source import MediaSource
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
 from yt_transcriber_bot.infrastructure.persistence.filesystem.owned_artifact_cleanup import (
     FilesystemOwnedArtifactCleanup,
@@ -16,14 +18,25 @@ from yt_transcriber_bot.infrastructure.persistence.filesystem.owned_artifact_cle
 
 
 class FakeRepo:
-    def __init__(self, jobs: list[Job]) -> None:
+    def __init__(
+        self,
+        jobs: list[Job],
+        contexts: dict[str, JobRequestContext] | None = None,
+    ) -> None:
         self.jobs = jobs
+        self.contexts = dict(contexts or {})
 
     def list_completed_oldest_first(self) -> list[Job]:
         return list(self.jobs)
 
     def list_by_statuses_oldest_first(self, statuses: set[JobStatus]) -> list[Job]:
         return [job for job in self.jobs if job.status in statuses]
+
+    def save_request_context(self, context: JobRequestContext) -> None:
+        self.contexts[context.job_id] = context
+
+    def get_request_context(self, job_id: str) -> JobRequestContext | None:
+        return self.contexts.get(job_id)
 
     def save(self, job: Job) -> None: ...
     def get_by_id(self, job_id: str) -> Job | None: ...
@@ -167,3 +180,71 @@ def test_retention_refuses_symlink_escape(tmp_path: Path) -> None:
     assert outside.read_text(encoding="utf-8") == "keep"
     assert link.is_symlink()
     assert link not in result.removed_files
+
+
+def test_retention_preserves_canonical_snapshot_reference_and_markdown(tmp_path: Path) -> None:
+    jobs = [_job_at(tmp_path, i) for i in range(2)]
+    canonical = tmp_path / "canonical-0.json"
+    canonical.write_text('{"schema_version": 2}', encoding="utf-8")
+    jobs[0].canonical_transcript_ref = "canonical-0"
+
+    _policy(FakeRepo(jobs), tmp_path, max_jobs=1).apply()
+
+    assert jobs[0].canonical_transcript_ref == "canonical-0"
+    assert canonical.exists()
+    assert Path(jobs[0].md_path or "").exists()
+
+
+def test_retention_clears_missing_volatile_references(tmp_path: Path) -> None:
+    jobs = [_job_at(tmp_path, i) for i in range(2)]
+    Path(jobs[0].audio_path or "").unlink()
+    Path(jobs[0].log_path or "").unlink()
+
+    _policy(FakeRepo(jobs), tmp_path, max_jobs=1).apply()
+
+    assert jobs[0].audio_path is None
+    assert jobs[0].log_path is None
+    assert jobs[0].md_path is not None
+
+
+def test_retention_clears_telegram_source_context_after_owned_source_removal(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "telegram-source.ogg"
+    source.write_bytes(b"source")
+    audio = tmp_path / "telegram-converted.ogg"
+    audio.write_bytes(b"converted")
+    log = tmp_path / "telegram.log"
+    log.write_text("log", encoding="utf-8")
+    md = tmp_path / "telegram.md"
+    md.write_text("# transcript", encoding="utf-8")
+    job = Job.new(
+        None,
+        42,
+        media_source=MediaSource.telegram_audio("private-file-id"),
+        source_duration_seconds=10,
+    )
+    for status in (
+        JobStatus.ACQUIRING,
+        JobStatus.CONVERTING,
+        JobStatus.TRANSCRIBING,
+        JobStatus.DIARIZING,
+        JobStatus.RENDERING,
+        JobStatus.DELIVERING,
+        JobStatus.COMPLETED,
+    ):
+        job.transition_to(status)
+    job.audio_path = str(audio)
+    job.log_path = str(log)
+    job.md_path = str(md)
+    context = JobRequestContext(job.job_id, delivery_chat_id=10, source_locator=str(source))
+    newer = _job_at(tmp_path, 2)
+    repo = FakeRepo([job, newer], {job.job_id: context})
+
+    _policy(repo, tmp_path, max_jobs=1).apply()
+
+    assert not source.exists()
+    assert repo.contexts[job.job_id].source_locator is None
+    assert job.audio_path is None
+    assert job.log_path is None
+    assert job.md_path == str(md)

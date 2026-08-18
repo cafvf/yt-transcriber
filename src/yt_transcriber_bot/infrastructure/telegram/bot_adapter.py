@@ -1607,7 +1607,7 @@ class TelegramBotAdapter:
             video_id=_video_id_value(payload.video_id),
             user_id=payload.user_id,
         )
-        self._apply_retention_after_success()
+        await self._apply_retention_after_success(user_id=payload.user_id)
 
     def _save_job_if_possible(self, job: Job) -> None:
         if self._repository is None:
@@ -1788,7 +1788,7 @@ class TelegramBotAdapter:
             "Consulte /lasterror para recuperar os caminhos dos artefatos locais.",
         )
 
-    def _apply_retention_after_success(self) -> None:
+    async def _apply_retention_after_success(self, *, user_id: int) -> None:
         if self._operational_workflow is None:
             return
         try:
@@ -1797,6 +1797,14 @@ class TelegramBotAdapter:
             logger.warning(
                 "Falha ao aplicar retenção FIFO: %s",
                 sanitize_text(str(exc), self._settings),
+            )
+            await self._record_operational_error(
+                user_id=user_id,
+                operation="retention",
+                message="Falha ao aplicar retenção automática de artefatos voláteis.",
+                error=exc,
+                stage="retention",
+                severity="warning",
             )
             return
         if result.removed_files:

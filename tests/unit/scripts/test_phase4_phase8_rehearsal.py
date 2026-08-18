@@ -7,6 +7,7 @@ import json
 import sqlite3
 import stat
 import sys
+import tarfile
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -52,7 +53,7 @@ def _create_jobs_db(path: Path) -> None:
         )
 
 
-def test_run_backup_creates_artifacts_and_evidence_snippet(tmp_path: Path, monkeypatch) -> None:
+def test_run_backup_creates_credential_free_standard_dataset(tmp_path: Path, monkeypatch) -> None:
     script = _load_script()
     app_dir = tmp_path / "app"
     db_path = app_dir / "data" / "jobs.db"
@@ -60,22 +61,27 @@ def test_run_backup_creates_artifacts_and_evidence_snippet(tmp_path: Path, monke
     models_file = app_dir / "models" / "model.bin"
     systemd_env = tmp_path / "systemd-env"
     dotenv = app_dir / ".env"
+    cookie_file = app_dir / "data" / "cookies.txt"
+    snapshot = app_dir / "data" / "transcripts" / "canonical-1.json"
+    markdown = app_dir / "data" / "transcripts" / "canonical-1.md"
 
     _create_jobs_db(db_path)
     runtime_file.parent.mkdir(parents=True, exist_ok=True)
     runtime_file.write_text("hello", encoding="utf-8")
     models_file.parent.mkdir(parents=True, exist_ok=True)
     models_file.write_text("weights", encoding="utf-8")
-    systemd_env.write_text("TOKEN=secret\n", encoding="utf-8")
-    dotenv.write_text("FOO=bar\n", encoding="utf-8")
+    systemd_env.write_text("RUNTIME_VALUE=placeholder\n", encoding="utf-8")
+    dotenv.write_text("NONSECRET_EXAMPLE=value\n", encoding="utf-8")
+    cookie_file.write_text("cookie placeholder", encoding="utf-8")
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
+    snapshot.write_text('{"schema_version": 2}', encoding="utf-8")
+    markdown.write_text("# canonical transcript", encoding="utf-8")
     monkeypatch.setattr(script, "_git_head", lambda _app_dir: "abc123")
 
     args = SimpleNamespace(
         app_dir=app_dir,
         db_path=Path("data/jobs.db"),
-        runtime_dir=Path("data"),
-        models_dir=Path("models"),
-        systemd_env=systemd_env,
+        transcripts_dir=Path("data/transcripts"),
         service="yt-transcriber-bot",
         output_dir=tmp_path / "evidence",
         stop_service=False,
@@ -85,18 +91,47 @@ def test_run_backup_creates_artifacts_and_evidence_snippet(tmp_path: Path, monke
     snippet_path = script.run_backup(args)
 
     content = snippet_path.read_text(encoding="utf-8")
-    assert "Backup/Restore Rehearsal — Captured Evidence" in content
+    assert "Standard Credential-Free Backup" in content
+    assert "Credentials/cookies copied: `no`" in content
+    assert "TASK-P06-006" in content
     assert "abc123" in content
 
     backup_dirs = [path for path in (tmp_path / "evidence").iterdir() if path.is_dir()]
     assert len(backup_dirs) == 1
     backup_dir = backup_dirs[0]
     assert (backup_dir / "jobs.db").exists()
-    assert (backup_dir / "runtime-data.tgz").exists()
-    assert (backup_dir / "models.tgz").exists()
-    assert (backup_dir / "systemd-env").exists()
-    assert (backup_dir / "dotenv").exists()
+    assert (backup_dir / "canonical-transcripts.tgz").exists()
+    assert (backup_dir / "backup-contract.json").exists()
     assert (backup_dir / "git-revision.txt").read_text(encoding="utf-8").strip() == "abc123"
+
+    assert not (backup_dir / "runtime-data.tgz").exists()
+    assert not (backup_dir / "models.tgz").exists()
+    assert not (backup_dir / "systemd-env").exists()
+    assert not (backup_dir / "dotenv").exists()
+    assert not (backup_dir / ".env").exists()
+    assert not (backup_dir / "cookies.txt").exists()
+
+    with tarfile.open(backup_dir / "canonical-transcripts.tgz", "r:gz") as tar:
+        members = {member.name for member in tar.getmembers()}
+    assert "transcripts/canonical-1.json" in members
+    assert "transcripts/canonical-1.md" in members
+    assert all(name == "transcripts" or name.startswith("transcripts/") for name in members)
+    assert not any("logs/" in name for name in members)
+    assert not any("cookies" in name.lower() for name in members)
+
+    contract = json.loads((backup_dir / "backup-contract.json").read_text(encoding="utf-8"))
+    assert contract["included_classes"] == [
+        "sqlite_job_history",
+        "canonical_transcripts",
+        "git_revision",
+    ]
+    assert contract["credentials_reprovisioned_separately"] is True
+    assert "provider_credentials" in contract["excluded_classes"]
+    assert "authentication_cookies" in contract["excluded_classes"]
+
+    with sqlite3.connect(backup_dir / "jobs.db") as conn:
+        assert conn.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+
     assert stat.S_IMODE(backup_dir.stat().st_mode) == 0o700
     for artifact in backup_dir.iterdir():
         assert stat.S_IMODE(artifact.stat().st_mode) == 0o600
@@ -286,3 +321,28 @@ def test_run_inspect_restart_recovery_reports_jobs_and_audit(tmp_path: Path) -> 
     assert "job-delivery" in content
     assert "job_recovered_requeued" in content
     assert "job_delivery_failed" in content
+
+
+def test_standard_backup_validator_rejects_credential_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    script = _load_script()
+    app_dir = tmp_path / "app"
+    _create_jobs_db(app_dir / "data" / "jobs.db")
+    (app_dir / "data" / "transcripts").mkdir(parents=True)
+    monkeypatch.setattr(script, "_git_head", lambda _app_dir: "abc123")
+    args = SimpleNamespace(
+        app_dir=app_dir,
+        db_path=Path("data/jobs.db"),
+        transcripts_dir=Path("data/transcripts"),
+        service="yt-transcriber-bot",
+        output_dir=tmp_path / "evidence",
+        stop_service=False,
+        start_service=False,
+    )
+    script.run_backup(args)
+    backup_dir = next(path for path in (tmp_path / "evidence").iterdir() if path.is_dir())
+    (backup_dir / "dotenv").write_text("placeholder", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="credencial/cookie"):
+        script._validate_standard_backup(backup_dir)

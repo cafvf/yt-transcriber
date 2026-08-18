@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import sqlite3
 import subprocess
 import tarfile
@@ -29,11 +28,8 @@ from pathlib import Path
 DEFAULT_OUTPUT_DIR = Path("ops-evidence")
 DEFAULT_APP_DIR = Path.cwd()
 DEFAULT_DB_PATH = Path("data/jobs.db")
-DEFAULT_RUNTIME_DIR = Path("data")
-DEFAULT_MODELS_DIR = Path("models")
 DEFAULT_ERRORS_PATH = Path("data/logs/operational_errors.jsonl")
 DEFAULT_AUDIT_PATH = Path("data/logs/execution_audit.jsonl")
-DEFAULT_SYSTEMD_ENV = Path("/etc/yt-transcriber-bot/env")
 DEFAULT_SERVICE = "yt-transcriber-bot"
 
 
@@ -124,25 +120,6 @@ def _write_snippet(
     return path
 
 
-def _copy_if_exists(source: Path, dest: Path) -> bool:
-    if not source.exists():
-        return False
-    _make_private_dir(dest.parent)
-    shutil.copy2(source, dest)
-    _make_private_file(dest)
-    return True
-
-
-def _tar_dir(source_dir: Path, target_tgz: Path) -> bool:
-    if not source_dir.exists():
-        return False
-    _make_private_dir(target_tgz.parent)
-    with tarfile.open(target_tgz, "w:gz") as tar:
-        tar.add(source_dir, arcname=source_dir.name)
-    _make_private_file(target_tgz)
-    return True
-
-
 def _sqlite_backup(source: Path, target: Path) -> None:
     _make_private_dir(target.parent)
     with sqlite3.connect(source) as src, sqlite3.connect(target) as dst:
@@ -154,12 +131,108 @@ def _git_head(app_dir: Path) -> str:
     return _run(["git", "rev-parse", "HEAD"], cwd=app_dir).stdout or "<unknown>"
 
 
+def _standard_backup_contract() -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "included_classes": [
+            "sqlite_job_history",
+            "canonical_transcripts",
+            "git_revision",
+        ],
+        "excluded_classes": [
+            "raw_or_staged_media",
+            "converted_media",
+            "operational_logs",
+            "derived_summaries_exports_and_video",
+            "models_and_reconstructible_caches",
+            "provider_credentials",
+            "secret_bearing_environment_files",
+            "authentication_cookies",
+        ],
+        "credentials_reprovisioned_separately": True,
+    }
+
+
+def _tar_canonical_transcripts(source_dir: Path, target_tgz: Path) -> None:
+    _make_private_dir(target_tgz.parent)
+    with tarfile.open(target_tgz, "w:gz") as tar:
+        if source_dir.is_dir():
+            tar.add(source_dir, arcname="transcripts")
+    _make_private_file(target_tgz)
+
+
+def _write_backup_contract(path: Path) -> None:
+    path.write_text(
+        json.dumps(_standard_backup_contract(), ensure_ascii=False, indent=2, sort_keys=True)
+        + "\n",
+        encoding="utf-8",
+    )
+    _make_private_file(path)
+
+
+def _validate_standard_backup(backup_dir: Path) -> None:
+    required = {
+        "jobs.db",
+        "canonical-transcripts.tgz",
+        "backup-contract.json",
+        "git-revision.txt",
+    }
+    names = {path.name for path in backup_dir.iterdir() if path.is_file()}
+    missing = sorted(required - names)
+    if missing:
+        raise RuntimeError("Backup padrão incompleto: " + ", ".join(missing))
+
+    forbidden_names = {
+        ".env",
+        "dotenv",
+        "systemd-env",
+        "cookies.txt",
+        "cookies.sqlite",
+        "cookies.sqlite3",
+    }
+    forbidden = sorted(
+        path.name
+        for path in backup_dir.rglob("*")
+        if path.is_file() and path.name.lower() in forbidden_names
+    )
+    if forbidden:
+        raise RuntimeError(
+            "Backup padrão contém credencial/cookie reutilizável proibido: "
+            + ", ".join(forbidden)
+        )
+
+    with sqlite3.connect(backup_dir / "jobs.db") as conn:
+        integrity = conn.execute("PRAGMA integrity_check").fetchone()
+    if integrity is None or integrity[0] != "ok":
+        raise RuntimeError("Backup SQLite falhou no PRAGMA integrity_check")
+
+    contract = json.loads((backup_dir / "backup-contract.json").read_text(encoding="utf-8"))
+    if contract != _standard_backup_contract():
+        raise RuntimeError("Manifesto do backup padrão não corresponde ao contrato aprovado")
+
+    with tarfile.open(backup_dir / "canonical-transcripts.tgz", "r:gz") as tar:
+        for member in tar.getmembers():
+            parts = Path(member.name).parts
+            if not parts or parts[0] != "transcripts" or ".." in parts:
+                raise RuntimeError(
+                    f"Archive canônico contém membro fora de transcripts/: {member.name}"
+                )
+            if member.issym() or member.islnk():
+                raise RuntimeError(
+                    f"Archive canônico contém link não permitido: {member.name}"
+                )
+            if Path(member.name).name.lower() in forbidden_names:
+                raise RuntimeError(
+                    f"Archive canônico contém nome de credencial/cookie proibido: {member.name}"
+                )
+
+
 def run_backup(args: argparse.Namespace) -> Path:
     occurred_at = _utc_now()
     app_dir = args.app_dir.resolve()
     db_path = (app_dir / args.db_path).resolve()
-    runtime_dir = (app_dir / args.runtime_dir).resolve()
-    models_dir = (app_dir / args.models_dir).resolve()
+    transcripts_arg = getattr(args, "transcripts_dir", Path("data/transcripts"))
+    transcripts_dir = (app_dir / transcripts_arg).resolve()
     output_root = args.output_dir.resolve()
     _make_private_dir(output_root)
     backup_dir = output_root / f"backup-{_timestamp(occurred_at)}"
@@ -174,20 +247,19 @@ def run_backup(args: argparse.Namespace) -> Path:
             )
             service_stopped = True
 
-        db_backup = backup_dir / "jobs.db"
-        _sqlite_backup(db_path, db_backup)
-        runtime_tgz = backup_dir / "runtime-data.tgz"
-        runtime_copied = _tar_dir(runtime_dir, runtime_tgz)
-        models_tgz = backup_dir / "models.tgz"
-        models_copied = _tar_dir(models_dir, models_tgz)
-        systemd_env_backup = backup_dir / "systemd-env"
-        systemd_env_copied = _copy_if_exists(args.systemd_env, systemd_env_backup)
-        dotenv_backup = backup_dir / "dotenv"
-        dotenv_copied = _copy_if_exists(app_dir / ".env", dotenv_backup)
+        _sqlite_backup(db_path, backup_dir / "jobs.db")
+        _tar_canonical_transcripts(
+            transcripts_dir,
+            backup_dir / "canonical-transcripts.tgz",
+        )
+        _write_backup_contract(backup_dir / "backup-contract.json")
+
         git_revision = _git_head(app_dir)
         revision_path = backup_dir / "git-revision.txt"
         revision_path.write_text(git_revision + "\n", encoding="utf-8")
         _make_private_file(revision_path)
+
+        _validate_standard_backup(backup_dir)
 
         if args.start_service and service_stopped:
             command_results.append(
@@ -203,7 +275,7 @@ def run_backup(args: argparse.Namespace) -> Path:
 
     body = "\n".join(
         [
-            "# Backup/Restore Rehearsal — Captured Evidence",
+            "# Standard Credential-Free Backup — Captured Evidence",
             "",
             f"- Occurred at: {_utc_now().astimezone(UTC).isoformat(timespec='seconds')}",
             f"- App dir: `{app_dir}`",
@@ -211,10 +283,24 @@ def run_backup(args: argparse.Namespace) -> Path:
             f"- Git commit: `{git_revision}`",
             f"- Backup dir: `{backup_dir}`",
             f"- Database source: `{db_path}`",
-            f"- Runtime archived: `{'yes' if runtime_copied else 'no'}`",
-            f"- Models archived: `{'yes' if models_copied else 'no'}`",
-            f"- systemd env copied: `{'yes' if systemd_env_copied else 'no'}`",
-            f"- .env copied: `{'yes' if dotenv_copied else 'no'}`",
+            f"- Canonical transcript source: `{transcripts_dir}`",
+            "- SQLite copy mechanism: `sqlite3.Connection.backup()`",
+            "- Credentials/cookies copied: `no`",
+            "- Credential provisioning: `separate from the standard backup`",
+            "",
+            "## Included data classes",
+            "",
+            "- SQLite Job/history database (`jobs.db`).",
+            "- Canonical transcript directory: Markdown plus versioned structured snapshots.",
+            "- Git revision and machine-readable backup contract.",
+            "",
+            "## Explicitly excluded data classes",
+            "",
+            "- raw/staged/downloaded or converted media;",
+            "- operational logs;",
+            "- derived summaries/exports/video and reconstructible model/cache data;",
+            "- `.env`, systemd secret environment files and provider credentials;",
+            "- browser/YouTube authentication cookies.",
             "",
             "## Artifacts",
             "",
@@ -223,14 +309,15 @@ def run_backup(args: argparse.Namespace) -> Path:
             "## Commands Run",
             "",
             *[_format_command(result) for result in command_results],
-            "## Operator Follow-up",
+            "## Evidence boundary",
             "",
-            "- Run restore against staging or stopped service and record `/healthcheck`, `/status`, `/list` after start.",
+            "- This helper validates backup composition and SQLite integrity only.",
+            "- A real restore rehearsal is owned by TASK-P06-006 and must not be inferred here.",
         ]
     )
     return _write_snippet(
         output_dir=output_root,
-        section="backup-restore-rehearsal",
+        section="standard-backup",
         body=body,
         occurred_at=occurred_at,
     )
@@ -429,9 +516,7 @@ def _parse_args() -> argparse.Namespace:
     )
     backup.add_argument("--app-dir", type=Path, default=DEFAULT_APP_DIR)
     backup.add_argument("--db-path", type=Path, default=DEFAULT_DB_PATH)
-    backup.add_argument("--runtime-dir", type=Path, default=DEFAULT_RUNTIME_DIR)
-    backup.add_argument("--models-dir", type=Path, default=DEFAULT_MODELS_DIR)
-    backup.add_argument("--systemd-env", type=Path, default=DEFAULT_SYSTEMD_ENV)
+    backup.add_argument("--transcripts-dir", type=Path, default=Path("data/transcripts"))
     backup.add_argument("--service", default=DEFAULT_SERVICE)
     backup.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     backup.add_argument("--stop-service", action="store_true")
