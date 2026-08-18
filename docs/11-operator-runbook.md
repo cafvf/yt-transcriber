@@ -562,3 +562,48 @@ Após o restore staging, mantenha o serviço operacional com suas credenciais/co
 ```
 
 A evidência de P06-006 é composta pelo relatório do backup, relatório do restore staging e checkpoints sanitizados de health/status/history. O rehearsal real desta tarefa também pode satisfazer a evidência compatível de P06-002; não repita a mesma operação apenas para bookkeeping.
+
+## 9. PLAN-006 / P06-007 — upgrade e rollback versionados
+
+O procedimento de upgrade/rollback parte de uma revisão Git conhecida, exige backup credential-free previamente validado e não autoriza migração destrutiva silenciosa.
+
+### 9.1 Preflight read-only
+
+Antes de qualquer troca de revisão:
+
+```bash
+uv run python scripts/ops/upgrade_rollback_rehearsal.py preflight \
+  --backup-dir ~/Downloads/p06-007-backup/backup-<TIMESTAMP> \
+  --from-ref <REVISAO_ANTERIOR> \
+  --to-ref <REVISAO_ALVO> \
+  --output-dir ~/Downloads/p06-007-preflight
+```
+
+O preflight exige worktree limpo, resolve as duas revisões para SHAs, verifica que a revisão anterior é ancestral da revisão alvo, valida o contrato do backup e exige que `git-revision.txt` do backup corresponda exatamente à revisão anterior. O preflight não executa checkout, não reinicia serviço e registra `production_mutated=false`.
+
+### 9.2 Rehearsal real explicitamente opt-in
+
+O rehearsal real só deve ser executado depois que a revisão alvo estiver commitada e publicada, com o checkout de produção limpo e já na revisão alvo:
+
+```bash
+uv run python scripts/ops/upgrade_rollback_rehearsal.py rehearsal \
+  --backup-dir ~/Downloads/p06-007-backup/backup-<TIMESTAMP> \
+  --from-ref <REVISAO_ANTERIOR> \
+  --to-ref <REVISAO_ALVO> \
+  --service yt-transcriber-bot \
+  --output-dir ~/Downloads/p06-007-rehearsal \
+  --execute
+```
+
+A sequência controlada demonstra: revisão anterior conhecida → upgrade para a revisão alvo → rollback de código para a revisão anterior → validação do backup em staging isolado → retorno final à revisão alvo. O helper recusa execução sem `--execute`, worktree sujo, backup associado a outra revisão ou relação de upgrade não ancestral.
+
+O procedimento não executa rollback destrutivo de banco por padrão. Quando uma mudança futura introduzir migração incompatível/destrutiva, o deploy deve parar antes da produção até existir uma estratégia explícita e testada de dados compatíveis usando o backup aprovado.
+
+Após o rehearsal, capture no Telegram:
+
+```text
+/healthcheck
+/status
+```
+
+e preserve o relatório sanitizado de `journalctl` gerado pelo helper. Evidência de backup/restore já válida pode ser reutilizada; não repita operações apenas para bookkeeping.
