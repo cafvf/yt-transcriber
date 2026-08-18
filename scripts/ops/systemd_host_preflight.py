@@ -23,6 +23,7 @@ _SECRET_ASSIGNMENT = re.compile(
 )
 _TELEGRAM_TOKEN = re.compile(r"\b\d{6,15}:[A-Za-z0-9_-]{20,}\b")
 _HF_TOKEN = re.compile(r"\bhf_[A-Za-z0-9_-]{10,}\b")
+_PRIVATE_IDENTIFIER_ASSIGNMENT = re.compile(r"(?i)\b(user_id|chat_id)\s*=\s*(-?\d{5,20})\b")
 
 
 @dataclass(frozen=True)
@@ -35,7 +36,11 @@ class Check:
 def sanitize_evidence_text(text: str) -> str:
     value = _SECRET_ASSIGNMENT.sub(lambda m: f"{m.group(1)}=<redacted>", text)
     value = _TELEGRAM_TOKEN.sub("<telegram-token-redacted>", value)
-    return _HF_TOKEN.sub("<hf-token-redacted>", value)
+    value = _HF_TOKEN.sub("<hf-token-redacted>", value)
+    return _PRIVATE_IDENTIFIER_ASSIGNMENT.sub(
+        lambda m: f"{m.group(1)}=<private-identifier-redacted>",
+        value,
+    )
 
 
 def _run(command: Sequence[str]) -> subprocess.CompletedProcess[str]:

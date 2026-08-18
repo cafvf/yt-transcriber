@@ -99,3 +99,15 @@ def test_report_never_exposes_environment_values(monkeypatch: pytest.MonkeyPatch
     assert report["environment_file_values_exposed"] is False
     assert "EnvironmentFiles" not in report["service_properties"]
     assert "dont-print-this" not in str(report)
+
+
+def test_sanitizer_redacts_private_numeric_identifiers() -> None:
+    module = _load()
+    text = "Iniciando bot. user_id=123456789\nchat_id=-1001234567890\njobs=13 pid=180326"
+    sanitized = module.sanitize_evidence_text(text)
+    assert "user_id=123456789" not in sanitized
+    assert "chat_id=-1001234567890" not in sanitized
+    assert "user_id=<private-identifier-redacted>" in sanitized
+    assert "chat_id=<private-identifier-redacted>" in sanitized
+    assert "jobs=13" in sanitized
+    assert "pid=180326" in sanitized
