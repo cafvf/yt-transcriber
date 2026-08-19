@@ -1,11 +1,10 @@
 """Implementação de ``YouTubeDownloader`` usando ``yt-dlp``.
 
-Estratégia para auto-dub: o YouTube atualmente devolve em ``formats`` uma
-lista onde cada áudio pode ter um campo ``language`` (ex.: ``en``, ``pt-orig``).
-A faixa "original" tem o sufixo ``-orig`` no campo ``language`` ou aparece
-como ``original=True``. Quando há mais de uma faixa, escolhemos sempre a
-original e marcamos ``used_alternate_track=True`` para que o orquestrador
-possa avisar o usuário.
+A seleção de áudio separa duas verdades independentes: a existência de faixas
+alternativas nos metadados e a faixa efetivamente escolhida. Quando o provedor
+expõe uma faixa original identificável, ela é priorizada explicitamente;
+dublagens automáticas conhecidas nunca são usadas silenciosamente como
+substitutas da original.
 """
 
 from __future__ import annotations
@@ -39,6 +38,7 @@ from yt_transcriber_bot.application.ports.youtube_downloader import (
 )
 from yt_transcriber_bot.application.services.sanitization import sanitize_text
 from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
+from yt_transcriber_bot.domain.value_objects.audio_track import AudioTrackSelection
 from yt_transcriber_bot.domain.value_objects.duration import Duration
 from yt_transcriber_bot.domain.value_objects.language import Language
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
@@ -513,7 +513,7 @@ class YtDlpDownloader(YouTubeDownloader):
             return DownloadedAudio(
                 audio_path=downloaded,
                 container=ext,
-                used_alternate_track=metadata.has_alternate_audio_tracks,
+                track_selection=AudioTrackSelection.ORIGINAL,
                 metadata=metadata,
             )
 
@@ -540,12 +540,16 @@ class YtDlpDownloader(YouTubeDownloader):
 
         downloaded = self._validated_downloaded_path(info, dest_dir, video_id)
         ext = downloaded.suffix.lstrip(".").lower()
-        used_alt = self._format_is_original(info)
+        track_selection = (
+            AudioTrackSelection.ORIGINAL
+            if self._format_is_original(info)
+            else AudioTrackSelection.DEFAULT
+        )
         metadata = self._build_metadata(video_id, info)
         return DownloadedAudio(
             audio_path=downloaded,
             container=ext,
-            used_alternate_track=used_alt or metadata.has_alternate_audio_tracks,
+            track_selection=track_selection,
             metadata=metadata,
         )
 
@@ -567,6 +571,14 @@ class YtDlpDownloader(YouTubeDownloader):
             return None
 
         candidate_ids = self._select_original_audio_candidate_format_ids(listing_info)
+        alternate_languages, has_alternates = self._collect_alternate_languages(listing_info)
+        if has_alternates and not candidate_ids:
+            languages = ", ".join(language.code for language in alternate_languages)
+            raise YouTubeError(
+                "O YouTube expôs faixas de áudio alternativas, mas a faixa original "
+                "não pôde ser identificada com segurança; o bot recusou selecionar "
+                f"uma dublagem automaticamente. idiomas_alternativos={languages or 'desconhecidos'}"
+            )
         if not candidate_ids:
             return None
 

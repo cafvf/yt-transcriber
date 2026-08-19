@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 
 from yt_transcriber_bot.application.ports.youtube_downloader import YouTubeError
+from yt_transcriber_bot.domain.value_objects.audio_track import AudioTrackSelection
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
 from yt_transcriber_bot.infrastructure.youtube.yt_dlp_downloader import YtDlpDownloader
 
@@ -178,7 +179,8 @@ def test_download_audio_uses_explicit_original_before_generic_selector(tmp_path:
     assert download_formats == ["140-20"]
     assert result.metadata.original_language is not None
     assert result.metadata.original_language.code == "en"
-    assert result.used_alternate_track is True
+    assert result.track_selection is AudioTrackSelection.ORIGINAL
+    assert result.metadata.has_alternate_audio_tracks is True
 
 
 def test_explicit_original_failure_never_silently_falls_back_to_auto_dub(tmp_path: Path) -> None:

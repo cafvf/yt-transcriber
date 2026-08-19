@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
+from yt_transcriber_bot.domain.value_objects.audio_track import AudioTrackSelection
 from yt_transcriber_bot.domain.value_objects.language import Language
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
 
@@ -43,7 +44,7 @@ class DownloadedAudio:
 
     audio_path: Path
     container: str  # ex.: "m4a", "webm", "opus"
-    used_alternate_track: bool  # True se o vídeo tinha auto-dub e a original foi escolhida
+    track_selection: AudioTrackSelection
     metadata: VideoMetadata
 
 

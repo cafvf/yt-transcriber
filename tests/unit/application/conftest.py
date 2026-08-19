@@ -40,6 +40,7 @@ from yt_transcriber_bot.application.ports.youtube_downloader import (
 )
 from yt_transcriber_bot.domain.entities.job import Job, JobStatus
 from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
+from yt_transcriber_bot.domain.value_objects.audio_track import AudioTrackSelection
 from yt_transcriber_bot.domain.value_objects.duration import Duration
 from yt_transcriber_bot.domain.value_objects.language import Language
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
@@ -56,7 +57,7 @@ class FakeYouTubeDownloader(YouTubeDownloader):
     fetched_subtitle: FetchedSubtitle | None = None
     audio_payload: bytes = b"FAKE_AUDIO_BYTES"
     audio_container: str = "m4a"
-    audio_used_alternate: bool = False
+    audio_track_selection: AudioTrackSelection = AudioTrackSelection.DEFAULT
     raise_on_metadata: Exception | None = None
     raise_on_audio: Exception | None = None
     raise_on_list_subtitles: Exception | None = None
@@ -111,7 +112,7 @@ class FakeYouTubeDownloader(YouTubeDownloader):
         return DownloadedAudio(
             audio_path=path,
             container=self.audio_container,
-            used_alternate_track=self.audio_used_alternate,
+            track_selection=self.audio_track_selection,
             metadata=meta,
         )
 

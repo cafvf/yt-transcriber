@@ -487,7 +487,7 @@ class DownloadAudioStep(PipelineStep):
                 f"Vídeo sem fluxo de áudio (provavelmente live ou só vídeo): {exc}"
             ) from exc
         ctx.raw_audio_path = result.audio_path
-        ctx.audio_track_was_dubbed = result.used_alternate_track
+        ctx.audio_track_selection = result.track_selection
 
 
 class UseTelegramAudioStep(PipelineStep):

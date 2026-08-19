@@ -12,6 +12,7 @@ from yt_transcriber_bot.application.runtime_selection import RuntimePlan
 from yt_transcriber_bot.domain.entities.job import Job
 from yt_transcriber_bot.domain.entities.transcript import Transcript
 from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
+from yt_transcriber_bot.domain.value_objects.audio_track import AudioTrackSelection
 from yt_transcriber_bot.domain.value_objects.provenance import ProcessingProvenance
 
 
@@ -20,7 +21,7 @@ class PipelineContext:
     job: Job
     source_locator: str | None = None
     raw_audio_path: Path | None = None
-    audio_track_was_dubbed: bool = False
+    audio_track_selection: AudioTrackSelection = AudioTrackSelection.UNKNOWN
     metadata: VideoMetadata | None = None
     converted_audio_path: Path | None = None
     youtube_subtitle_used: bool = False

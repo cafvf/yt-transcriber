@@ -19,6 +19,7 @@ from yt_transcriber_bot.application.ports.youtube_downloader import (
     VideoUnavailableError,
     YouTubeError,
 )
+from yt_transcriber_bot.domain.value_objects.audio_track import AudioTrackSelection
 from yt_transcriber_bot.domain.value_objects.language import Language
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
 from yt_transcriber_bot.infrastructure.youtube.yt_dlp_downloader import YtDlpDownloader
@@ -684,6 +685,7 @@ class TestDownloadAudio:
         assert result.audio_path.exists()
         assert result.audio_path.parent == tmp_path
         assert result.container == "m4a"
+        assert result.track_selection is AudioTrackSelection.ORIGINAL
 
     def test_download_uses_audio_format_with_muxed_fallbacks(self, tmp_path: Path) -> None:
         info = {"title": "x", "uploader": "y", "duration": 10, "ext": "m4a"}
@@ -833,7 +835,7 @@ class TestDownloadAudio:
             "249",
         ]
 
-    def test_marks_used_alternate_track_when_orig_present(self, tmp_path: Path) -> None:
+    def test_reports_original_selection_when_alternates_exist(self, tmp_path: Path) -> None:
         info = {
             "title": "x",
             "uploader": "y",
@@ -841,14 +843,27 @@ class TestDownloadAudio:
             "ext": "m4a",
             "language": "en-orig",
             "formats": [
-                {"language": "en-orig", "ext": "m4a"},
-                {"language": "pt", "ext": "m4a"},
+                {
+                    "format_id": "140",
+                    "language": "en-orig",
+                    "ext": "m4a",
+                    "acodec": "mp4a.40.2",
+                    "vcodec": "none",
+                },
+                {
+                    "format_id": "141",
+                    "language": "pt",
+                    "ext": "m4a",
+                    "acodec": "mp4a.40.2",
+                    "vcodec": "none",
+                },
             ],
         }
         result = _make(info).download_audio(VideoId(value="dQw4w9WgXcQ"), tmp_path)
-        assert result.used_alternate_track is True
+        assert result.track_selection is AudioTrackSelection.ORIGINAL
+        assert result.metadata.has_alternate_audio_tracks is True
 
-    def test_no_orig_does_not_set_used_alternate(self, tmp_path: Path) -> None:
+    def test_ordinary_audio_reports_default_selection(self, tmp_path: Path) -> None:
         info = {
             "title": "x",
             "uploader": "y",
@@ -857,7 +872,8 @@ class TestDownloadAudio:
             "language": "en",
         }
         result = _make(info).download_audio(VideoId(value="dQw4w9WgXcQ"), tmp_path)
-        assert result.used_alternate_track is False
+        assert result.track_selection is AudioTrackSelection.DEFAULT
+        assert result.metadata.has_alternate_audio_tracks is False
 
     def test_creates_dest_dir_if_missing(self, tmp_path: Path) -> None:
         sub = tmp_path / "deep" / "path"
