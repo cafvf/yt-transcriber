@@ -24,7 +24,7 @@ dependencies = [
     # instale o comando `pre-commit` sem exigir flags extras.
     "pre-commit>=3.7,<5.0",
     # YouTube
-    "yt-dlp>=2024.5.0",
+    "yt-dlp[default]>=2026.7.4,<2027.0.0",
     # Persistência
     "sqlalchemy>=2.0,<3.0",
     # Texto

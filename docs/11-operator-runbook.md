@@ -105,7 +105,15 @@ uv sync --locked
 uv run python scripts/config/print_effective_settings.py
 uv run python - <<'PY'
 import importlib.util
-for module in ["telegram", "yt_dlp", "sqlalchemy", "torch", "whisperx", "pyannote.audio"]:
+for module in [
+    "telegram",
+    "yt_dlp",
+    "yt_dlp_ejs",
+    "sqlalchemy",
+    "torch",
+    "whisperx",
+    "pyannote.audio",
+]:
     try:
         present = importlib.util.find_spec(module) is not None
     except (ImportError, ModuleNotFoundError, ValueError):
@@ -114,6 +122,8 @@ for module in ["telegram", "yt_dlp", "sqlalchemy", "torch", "whisperx", "pyannot
 PY
 ffmpeg -version | head -1
 ffprobe -version | head -1
+if command -v deno >/dev/null 2>&1; then deno --version | head -1; fi
+if command -v node >/dev/null 2>&1; then node --version; fi
 ```
 
 Depois de iniciar o bot, valide no Telegram:
@@ -122,7 +132,7 @@ Depois de iniciar o bot, valide no Telegram:
 /healthcheck
 ```
 
-O `/healthcheck` deve ser a triagem inicial. Ele verifica configuração obrigatória, `.env` efetivo, `ffmpeg`/`ffprobe`/`yt-dlp`, módulos Python, diretórios graváveis, SQLite, espaço livre, cookies do YouTube, backend de sumarização, tokenizer e presença de `SUMMARY_MODEL` em `/v1/models` quando aplicável.
+O `/healthcheck` deve ser a triagem inicial. Ele verifica configuração obrigatória, `.env` efetivo, `ffmpeg`/`ffprobe`/`yt-dlp`, `yt-dlp-ejs`, runtime JavaScript do YouTube (Deno ou Node), módulos Python, diretórios graváveis, SQLite, espaço livre, cookies do YouTube, backend de sumarização, tokenizer e presença de `SUMMARY_MODEL` em `/v1/models` quando aplicável.
 
 ### 2.1 Como interpretar `/healthcheck`
 

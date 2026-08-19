@@ -89,6 +89,7 @@ _AUDIO_FORMAT = (
     "best/"
     "worst"
 )
+_YOUTUBE_JS_RUNTIMES = ("deno", "node")
 _FORMAT_UNAVAILABLE_MARKERS = (
     "requested format is not available",
     "no video formats found",
@@ -149,6 +150,10 @@ class YtDlpDownloader(YouTubeDownloader):
             # Evita que um ~/.config/yt-dlp/config ou /etc/yt-dlp.conf do usuário
             # injete um seletor de formato incompatível com o fluxo do bot.
             "ignoreconfig": True,
+            # O YouTube moderno exige resolução de desafios JavaScript.
+            # Deno é o runtime preferido pelo yt-dlp; Node é habilitado
+            # explicitamente como fallback quando já está instalado.
+            "js_runtimes": {runtime: {} for runtime in _YOUTUBE_JS_RUNTIMES},
         }
         if self._cookies_file:
             params["cookiefile"] = self._cookies_file
@@ -276,6 +281,22 @@ class YtDlpDownloader(YouTubeDownloader):
         )
 
     @staticmethod
+    def _format_language_base(fmt: dict[str, Any]) -> str | None:
+        language = str(fmt.get("language") or "").strip().lower()
+        match = re.match(r"^([a-z]{2})(?:[-_].*)?$", language)
+        return match.group(1) if match else None
+
+    @staticmethod
+    def _format_is_original(fmt: dict[str, Any]) -> bool:
+        language = str(fmt.get("language") or "").strip().lower()
+        if language.endswith("-orig") or fmt.get("original") is True:
+            return True
+        searchable = " ".join(
+            str(fmt.get(key) or "") for key in ("format_note", "format", "name")
+        ).lower()
+        return "original" in searchable
+
+    @staticmethod
     def _infer_original_language(info: dict[str, Any]) -> Language | None:
         # Prioridade 1: faixa de áudio com sufixo ``-orig`` ou flag ``original=True``.
         formats = info.get("formats") or []
@@ -283,10 +304,9 @@ class YtDlpDownloader(YouTubeDownloader):
             for fmt in formats:
                 if not isinstance(fmt, dict):
                     continue
-                lang = str(fmt.get("language") or "").lower()
-                if lang.endswith("-orig") or fmt.get("original") is True:
-                    base = lang.split("-")[0]
-                    if re.match(r"^[a-z]{2}$", base):
+                if YtDlpDownloader._format_is_original(fmt):
+                    base = YtDlpDownloader._format_language_base(fmt)
+                    if base is not None:
                         return Language(code=base)
 
         # Prioridade 2: campo ``language`` no nível do vídeo.
@@ -302,24 +322,22 @@ class YtDlpDownloader(YouTubeDownloader):
         info: dict[str, Any],
     ) -> tuple[tuple[Language, ...], bool]:
         formats = info.get("formats") or []
-        langs: set[str] = set()
-        original_seen = False
+        original_languages: set[str] = set()
+        alternate_languages: set[str] = set()
         if isinstance(formats, list):
             for fmt in formats:
                 if not isinstance(fmt, dict):
                     continue
-                lang = str(fmt.get("language") or "").lower()
-                if not lang:
+                base = YtDlpDownloader._format_language_base(fmt)
+                if base is None:
                     continue
-                if lang.endswith("-orig") or fmt.get("original") is True:
-                    original_seen = True
-                    continue
-                base = lang.split("-")[0]
-                if re.match(r"^[a-z]{2}$", base):
-                    langs.add(base)
-        # Se há outras faixas + a original (sufixo -orig), há auto-dub.
-        has_alt = original_seen and bool(langs)
-        return tuple(Language(code=c) for c in sorted(langs)), has_alt
+                if YtDlpDownloader._format_is_original(fmt):
+                    original_languages.add(base)
+                else:
+                    alternate_languages.add(base)
+        alternate_languages.difference_update(original_languages)
+        has_alt = bool(original_languages and alternate_languages)
+        return tuple(Language(code=code) for code in sorted(alternate_languages)), has_alt
 
     # ------------------------------------------------------------------
     # Subtitles
@@ -482,6 +500,23 @@ class YtDlpDownloader(YouTubeDownloader):
         dest_dir.mkdir(parents=True, exist_ok=True)
         last_exc: Exception | None = None
 
+        original_download = self._download_explicit_original_audio_if_available(
+            video_id,
+            dest_dir,
+            cancel_event=cancel_event,
+        )
+        if original_download is not None:
+            info, listing_info = original_download
+            downloaded = self._validated_downloaded_path(info, dest_dir, video_id)
+            ext = downloaded.suffix.lstrip(".").lower()
+            metadata = self._build_metadata(video_id, listing_info)
+            return DownloadedAudio(
+                audio_path=downloaded,
+                container=ext,
+                used_alternate_track=metadata.has_alternate_audio_tracks,
+                metadata=metadata,
+            )
+
         # 1) Tentativa rápida com seletor progressivo-first. Isto resolve a maior
         # parte dos casos e mantém compatibilidade com o comportamento anterior.
         try:
@@ -505,9 +540,7 @@ class YtDlpDownloader(YouTubeDownloader):
 
         downloaded = self._validated_downloaded_path(info, dest_dir, video_id)
         ext = downloaded.suffix.lstrip(".").lower()
-        used_alt = bool(
-            (info.get("language") or "").lower().endswith("-orig") or info.get("original") is True
-        )
+        used_alt = self._format_is_original(info)
         metadata = self._build_metadata(video_id, info)
         return DownloadedAudio(
             audio_path=downloaded,
@@ -515,6 +548,67 @@ class YtDlpDownloader(YouTubeDownloader):
             used_alternate_track=used_alt or metadata.has_alternate_audio_tracks,
             metadata=metadata,
         )
+
+    def _download_explicit_original_audio_if_available(
+        self,
+        video_id: VideoId,
+        dest_dir: Path,
+        *,
+        cancel_event: threading.Event | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any]] | None:
+        try:
+            listing_info = self._list_formats_info(video_id, cancel_event=cancel_event)
+        except Exception as exc:
+            logger.warning(
+                "não foi possível inspecionar faixas de áudio antes do download de %s: %s",
+                video_id.value,
+                self._error_sanitizer(str(exc)),
+            )
+            return None
+
+        candidate_ids = self._select_original_audio_candidate_format_ids(listing_info)
+        if not candidate_ids:
+            return None
+
+        last_exc: Exception | None = None
+        logger.info(
+            "vídeo %s expõe %d formato(s) de áudio original; priorizando a faixa original",
+            video_id.value,
+            len(candidate_ids),
+        )
+        for format_id in candidate_ids:
+            raise_if_cancelled(cancel_event)
+            try:
+                info = self._download_audio_with_selector(
+                    video_id,
+                    dest_dir,
+                    format_id,
+                    cancel_event=cancel_event,
+                )
+                self._validated_downloaded_path(info, dest_dir, video_id)
+                return info, listing_info
+            except Exception as exc:
+                mapped = self._map_exception(exc)
+                if isinstance(
+                    mapped, MembersOnlyError | AgeRestrictedError | VideoUnavailableError
+                ):
+                    raise mapped from exc
+                last_exc = exc
+                logger.warning(
+                    "formato original %s falhou para %s: %s",
+                    format_id,
+                    video_id.value,
+                    self._error_sanitizer(str(exc)),
+                )
+
+        assert last_exc is not None
+        safe_last_error = self._error_sanitizer(str(last_exc))
+        raise YouTubeError(
+            "O YouTube expôs uma faixa de áudio original, mas nenhuma variante original "
+            "pôde ser baixada; o bot recusou usar uma dublagem automática como fallback. "
+            f"video_id={video_id.value}; candidatos_originais={len(candidate_ids)}; "
+            f"último_erro={safe_last_error}"
+        ) from last_exc
 
     def _download_audio_with_selector(
         self,
@@ -696,8 +790,12 @@ class YtDlpDownloader(YouTubeDownloader):
             return str(raw) if raw not in (None, "") else None
 
         def is_original(fmt: dict[str, Any]) -> bool:
-            lang = str(fmt.get("language") or "").lower()
-            return lang.endswith("-orig") or fmt.get("original") is True
+            return YtDlpDownloader._format_is_original(fmt)
+
+        def is_drc(fmt: dict[str, Any]) -> bool:
+            fid = str(format_id(fmt) or "").lower()
+            note = str(fmt.get("format_note") or "").lower()
+            return fid.endswith("-drc") or "drc" in note
 
         def ext_rank(fmt: dict[str, Any]) -> int:
             ext = str(fmt.get("ext") or "").lower()
@@ -735,7 +833,13 @@ class YtDlpDownloader(YouTubeDownloader):
         # equivalentes, prefira m4a/mp4 e bitrate razoável. Se esses falharem por
         # restrição do YouTube, os progressivos pequenos entram logo depois.
         audio_only.sort(
-            key=lambda f: (not is_original(f), ext_rank(f), -abr_value(f), size_value(f))
+            key=lambda f: (
+                not is_original(f),
+                is_drc(f),
+                ext_rank(f),
+                -abr_value(f),
+                size_value(f),
+            )
         )
         progressive.sort(
             key=lambda f: (
@@ -754,6 +858,24 @@ class YtDlpDownloader(YouTubeDownloader):
                 if fid and fid not in selected:
                     selected.append(fid)
         return tuple(selected[:24])
+
+    @staticmethod
+    def _select_original_audio_candidate_format_ids(info: dict[str, Any]) -> tuple[str, ...]:
+        formats = info.get("formats") or []
+        if not isinstance(formats, list):
+            return ()
+        original_ids: set[str] = set()
+        for fmt in formats:
+            if not isinstance(fmt, dict) or not YtDlpDownloader._format_is_original(fmt):
+                continue
+            acodec = str(fmt.get("acodec") or "").lower()
+            raw_id = fmt.get("format_id")
+            if acodec and acodec != "none" and raw_id not in (None, ""):
+                original_ids.add(str(raw_id))
+        if not original_ids:
+            return ()
+        ordered = YtDlpDownloader._select_audio_candidate_format_ids(info)
+        return tuple(format_id for format_id in ordered if format_id in original_ids)
 
     @staticmethod
     def _cleanup_previous_downloads(dest_dir: Path, video_id: VideoId) -> None:

@@ -112,8 +112,22 @@ class HealthCheckService:
                     "encontrado no PATH." if present else "não encontrado no PATH.",
                 )
             )
+        if any(name in facts.executable_available for name in ("deno", "node")):
+            js_runtimes = tuple(
+                name for name in ("deno", "node") if facts.executable_available.get(name, False)
+            )
+            items.append(
+                HealthCheckItem(
+                    "Runtime JS do YouTube",
+                    "ok" if js_runtimes else "fail",
+                    f"disponível: {', '.join(js_runtimes)}."
+                    if js_runtimes
+                    else "nenhum runtime suportado encontrado (Deno ou Node).",
+                )
+            )
         labels = {
             "yt_dlp": "yt-dlp",
+            "yt_dlp_ejs": "yt-dlp EJS",
             "telegram": "python-telegram-bot",
             "sqlalchemy": "SQLAlchemy",
             "whisperx": "WhisperX",
@@ -121,6 +135,8 @@ class HealthCheckService:
             "transformers": "transformers",
         }
         for module, label in labels.items():
+            if module == "yt_dlp_ejs" and module not in facts.module_available:
+                continue
             present = facts.module_available.get(module, False)
             items.append(
                 HealthCheckItem(
@@ -190,7 +206,9 @@ class HealthCheckService:
         else:
             items.append(
                 HealthCheckItem(
-                    "Cookies YouTube", "warn", "não configurados; vídeos restritos podem falhar."
+                    "Cookies YouTube",
+                    "warn",
+                    "não configurados; o YouTube pode exigir autenticação anti-bot ou restringir vídeos.",
                 )
             )
         items.extend(self._summary_items(facts))

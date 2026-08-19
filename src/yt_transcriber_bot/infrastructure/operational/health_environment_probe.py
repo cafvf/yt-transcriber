@@ -46,12 +46,14 @@ class LocalHealthEnvironmentProbe(HealthEnvironmentProbe):
         import platform
 
         executables = {
-            name: self._find(name) is not None for name in ("ffmpeg", "ffprobe", "yt-dlp")
+            name: self._find(name) is not None
+            for name in ("ffmpeg", "ffprobe", "yt-dlp", "deno", "node")
         }
         modules = {
             name: self._module(name)
             for name in (
                 "yt_dlp",
+                "yt_dlp_ejs",
                 "telegram",
                 "sqlalchemy",
                 "whisperx",

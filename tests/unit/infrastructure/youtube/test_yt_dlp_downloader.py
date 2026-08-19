@@ -691,7 +691,11 @@ class TestDownloadAudio:
         downloader.download_audio(VideoId(value="dQw4w9WgXcQ"), tmp_path)
 
         captured = downloader._ydl_factory.captured  # type: ignore[attr-defined]
-        assert captured[0].params["format"] == (
+        assert captured[0].params["listformats"] is True
+        assert captured[0].params["simulate"] is True
+        assert captured[0].params["skip_download"] is True
+        assert "format" not in captured[0].params
+        assert captured[1].params["format"] == (
             "18/22/"
             "best[ext=mp4][acodec!=none][vcodec!=none]/"
             "worst[acodec!=none][vcodec!=none]/"
@@ -701,6 +705,7 @@ class TestDownloadAudio:
             "best/"
             "worst"
         )
+        assert captured[1].params["skip_download"] is False
 
     def test_format_unavailable_download_falls_back_to_discovered_progressive_format(
         self, tmp_path: Path
@@ -735,15 +740,25 @@ class TestDownloadAudio:
             "format_id": "18",
             "formats": listing_info["formats"],
         }
+        expected_format = (
+            "18/22/"
+            "best[ext=mp4][acodec!=none][vcodec!=none]/"
+            "worst[acodec!=none][vcodec!=none]/"
+            "best[acodec!=none][vcodec!=none]/"
+            "bestaudio/"
+            "best[acodec!=none]/"
+            "best/"
+            "worst"
+        )
         calls: list[_FakeYDL] = []
 
         def factory(params: dict[str, Any]) -> _FakeYDL:
             fmt = params.get("format")
             download = params.get("skip_download") is False
-            if not calls and download:
-                payload: Any = RuntimeError("Requested format is not available")
-            elif not download:
-                payload = listing_info
+            if not download:
+                payload: Any = listing_info
+            elif fmt == expected_format:
+                payload = RuntimeError("Requested format is not available")
             elif fmt == "140":
                 payload = RuntimeError("HTTP Error 403: Forbidden")
             elif fmt == "18":
@@ -761,20 +776,16 @@ class TestDownloadAudio:
         assert result.audio_path.exists()
         assert result.container == "mp4"
         assert [call.params.get("format") for call in calls] == [
-            "18/22/"
-            "best[ext=mp4][acodec!=none][vcodec!=none]/"
-            "worst[acodec!=none][vcodec!=none]/"
-            "best[acodec!=none][vcodec!=none]/"
-            "bestaudio/"
-            "best[acodec!=none]/"
-            "best/"
-            "worst",
+            None,
+            expected_format,
             None,
             "140",
             "18",
         ]
-        assert calls[1].params["listformats"] is True
-        assert calls[1].params["simulate"] is True
+        assert calls[0].params["listformats"] is True
+        assert calls[0].params["simulate"] is True
+        assert calls[2].params["listformats"] is True
+        assert calls[2].params["simulate"] is True
 
     def test_discovered_formats_failure_reports_diagnostic_without_default_selector(
         self, tmp_path: Path

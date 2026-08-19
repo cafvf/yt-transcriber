@@ -34,7 +34,19 @@ A instalação base leva cerca de 30–60 minutos, dominada pelo download dos mo
 > sudo dnf install ffmpeg
 > ```
 
-### 1.4 (Opcional) GPU NVIDIA
+### 1.4 Runtime JavaScript para YouTube
+
+O suporte atual do `yt-dlp` ao YouTube depende de resolução de desafios JavaScript. A instalação suportada deve ter pelo menos um runtime compatível: **Deno** ou **Node.js 22+**. O adapter habilita ambos quando disponíveis; Node é habilitado explicitamente além do comportamento padrão do yt-dlp.
+
+Valide antes de iniciar o bot:
+
+```bash
+deno --version || node --version
+```
+
+O `uv sync` também instala `yt-dlp` com os extras padrão, incluindo `yt-dlp-ejs`, necessários para o solver de challenges.
+
+### 1.5 (Opcional) GPU NVIDIA
 Se for usar GPU:
 - Drivers proprietários NVIDIA instalados (`nvidia-smi` deve funcionar).
 - CUDA Toolkit **não é necessário** instalar manualmente — o PyTorch traz suas próprias bibliotecas via `pip`.
@@ -164,10 +176,11 @@ O serviço systemd lê as variáveis de um **arquivo separado** (não do `~/.bas
 
 ## 8. (Opcional) Configurar cookies do YouTube
 
-Use cookies se quiser acessar:
+Use cookies quando o YouTube exigir uma sessão autenticada, inclusive:
 - Vídeos members-only de canais aos quais você é assinante.
 - Vídeos idade-restritos.
-- Algum cenário em que o YouTube esteja exigindo "Sign in to confirm you're not a bot".
+- Cenários de proteção anti-bot, como "Sign in to confirm you're not a bot".
+- Hosts/IPs em que extração anônima receba 429/403 e o diagnóstico confirme que cookies resolvem o acesso.
 
 Há duas formas:
 
