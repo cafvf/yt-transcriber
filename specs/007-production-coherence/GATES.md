@@ -1,8 +1,8 @@
 # PLAN-007 — Cumulative Gate Model
 
-Version: **0.1.0**
-Status: **Draft — pending explicit approval**
-Prepared: **2026-08-19**
+Version: **1.0.0**
+Status: **Approved**
+Approved: **2026-08-19**
 
 ## 1. Purpose
 

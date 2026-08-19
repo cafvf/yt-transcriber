@@ -1,7 +1,7 @@
 # PLAN-007 — Cumulative Gate Matrix
 
-Version: **0.1.0**
-Status: **Draft — companion to `GATES.md`**
+Version: **1.0.0**
+Status: **Approved — companion to `GATES.md`**
 
 Legend: **I** inherited, **N** new primary contract, **V** final validation emphasis.
 
