@@ -166,3 +166,19 @@ passes on one exact revision.
 artifact integrity fails or cannot be trusted.
 
 There is no internal Gate A `PASS WITH RESERVATION` for such defects.
+
+<!-- PLAN-007:GATE-A:QUALITY-EVIDENCE:2026-08-21 -->
+## Executed closure evidence — 2026-08-21
+
+- **Pre-commit cumulative Gate A validation:** 21 PASS, 0 FAIL, 0 SKIP.
+- **Independent post-commit validation:** 12 PASS, 0 FAIL.
+- Ruff lint/format: PASS.
+- production mypy: PASS, 143 source files, zero issues.
+- complete conformance: 157 passed.
+- Gate A SQLite integration with explicit marker override: 2 passed.
+- configured pytest suite: 994 passed, 37 deselected.
+- pre-commit: PASS.
+- Gitleaks: no leaks found.
+- committed working tree: clean.
+
+Detailed evidence and closure interpretation: [`GATE-A-CLOSURE.md`](GATE-A-CLOSURE.md).

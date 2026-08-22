@@ -252,3 +252,10 @@ This preserves the direction:
 ```text
 architecture → gate → behavior → task → use case → test → evidence
 ```
+
+<!-- PLAN-007:GATE-A:STATUS:2026-08-21 -->
+## Gate closure ledger — 2026-08-21
+
+| Gate | Status | Evidence | Next |
+| --- | --- | --- | --- |
+| GATE-P07-A — Truthful Canonical Semantics | **CLOSED / PASS** | [`GATE-A-CLOSURE.md`](GATE-A-CLOSURE.md), implementation `cd5f71d` | GATE-P07-B |

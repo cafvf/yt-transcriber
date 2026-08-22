@@ -52,3 +52,16 @@ Status: **Approved for execution**
   exit codes and unexecuted checks.
 - **GATE-P07-E:** PASS / PASS WITH RESERVATION / BLOCKED. Type/test/architecture/security/artifact/
   clean-install failures cannot be downgraded to reservations.
+
+<!-- PLAN-007:GATE-A:TASK-STATUS:2026-08-21 -->
+## Gate A execution ledger — 2026-08-21
+
+| Task | Status | Canonical outcome |
+| --- | --- | --- |
+| P07-001 | **DONE** | `AudioTrackSelection` canonical semantics implemented and validated |
+| P07-002 | **DONE** | `MediaMetadata` canonical entity implemented and validated |
+| P07-003 | **DONE** | typed language values enforced in core/application boundaries |
+| P07-004 | **DONE** | `processing_fingerprint` canonicalized; SQL compatibility isolated |
+| P07-005 | **DONE** | duration/artifact taxonomy canonicalized; external compatibility isolated |
+
+Gate-level closure evidence is recorded in [`GATE-A-CLOSURE.md`](GATE-A-CLOSURE.md).

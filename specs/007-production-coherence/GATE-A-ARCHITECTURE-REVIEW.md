@@ -45,3 +45,10 @@ The repository architecture auditor is `scripts/quality/gate_a_architecture_rule
 ## Gate A static-analysis scope
 
 The blocking mypy scope for Gate A is the production package (`src`) plus the permanent Gate A architecture auditor (`scripts/quality/gate_a_architecture_rules.py`). A broader strict-mypy inventory over historical tests and operational scripts is collected as non-gating debt evidence because that wider surface had no clean pre-Gate baseline. This does not weaken the typed-boundary AST audit, focused/conformance tests, full pytest, or the requirement that production code and installed Gate A tooling are type-clean.
+
+<!-- PLAN-007:GATE-A:ARCH-CLOSURE:2026-08-21 -->
+## Final architecture closure — 2026-08-21
+
+The canonical taxonomy described in this review is implemented in `cd5f71d` and reproduced cleanly in post-commit validation. The permanent architecture contract, typed-boundary checks, direct-call and `**kwargs` consumer audits, stale-expectation audit, and layer-dependency audit all passed in the final cumulative run.
+
+Gate decision: **GATE-P07-A CLOSED / PASS**. See [`GATE-A-CLOSURE.md`](GATE-A-CLOSURE.md) for the complete evidence ledger.

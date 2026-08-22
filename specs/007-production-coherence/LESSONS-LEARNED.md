@@ -299,3 +299,16 @@ A permanent auditor or validator installed into the repository must itself satis
 ## LL-041 — Gate correctness and repository-wide debt inventory are distinct evidence
 
 A gate may block on its documented production/tooling type scope while separately collecting non-gating repository-wide test/script mypy debt. The report must label that distinction explicitly rather than presenting debt as either silently waived or falsely gate-clean.
+
+<!-- PLAN-007:GATE-A:LESSONS-042-044 -->
+## LL-042 — Deletions are first-class staged-scope entries
+
+A staging/commit automation must validate deletions explicitly. Staging only paths that still exist can leave validated deletions outside the index even when every content check is green. Staged-scope tests must include additions, modifications, and deletions.
+
+## LL-043 — Physical path audits must disable Git rename detection
+
+When a quality gate reasons about the exact physical path set, Git rename detection can collapse a deletion/addition pair into one logical rename entry and change cardinality. Physical scope verification must use `--no-renames` (or equivalent explicit path accounting) rather than treating rename-aware display output as a path ledger.
+
+## LL-044 — Gate closure requires reproduction on committed bytes
+
+A gate that passes only before commit is not yet fully evidenced. After the intended commit is created, rerun an independent validation on the committed tree and confirm a clean working tree. This distinguishes validated content from assumptions about staging/commit behavior.
