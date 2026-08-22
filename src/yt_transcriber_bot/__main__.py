@@ -25,6 +25,7 @@ from yt_transcriber_bot.application.ports.incoming_media import (
     IncomingMediaKind,
 )
 from yt_transcriber_bot.composition_root import build_runtime, configure_runtime_logging
+from yt_transcriber_bot.configuration.runtime_settings import load_runtime_settings
 
 
 def _missing_runtime_ml_dependencies() -> list[str]:
@@ -73,7 +74,7 @@ def _validate_environment(settings: AppSettings) -> None:
 
 
 async def _run() -> None:
-    settings = AppSettings()
+    settings = load_runtime_settings()
     configure_runtime_logging(settings)
     _validate_environment(settings)
 

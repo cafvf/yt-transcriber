@@ -345,3 +345,34 @@ A non-secret local discriminator must not use credential-shaped vocabulary such 
 
 ## LL-055 — remediation dry-runs should execute candidate quality tools
 When repository quality tools are available, the semantic dry-run should execute the gate's formatter/linter/static checks on the candidate snapshot before mutating the real checkout. Package-only syntax checks are not sufficient evidence that the applied candidate is formatted and lint-clean.
+
+<!-- PLAN-007:LL-056-057:2026-08-22 -->
+## LL-056 — installed runtime configuration must not depend on arbitrary CWD or repository metadata
+A packaged runtime must not silently discover production configuration by walking from CWD, reading a neighboring `pyproject.toml`, or loading an arbitrary `CWD/.env`. Source-checkout `.env` discovery is a development-only edge behavior; production configuration is explicit or injected into the process environment.
+
+## LL-057 — credential ownership audits distinguish declarations from injection parameters
+A provider adapter or backend parameter such as `hf_token` is not a second configuration owner. Ownership audits must inspect configuration declarations and construction boundaries rather than matching credential-shaped parameter names globally.
+
+## LL-058 — stale-import audits inspect imported aliases, not co-occurring file text
+A file may legitimately import `AppSettings` from `application.config` while importing runtime-source names from another module. Migration audits must inspect the aliases of the exact `ImportFrom` node instead of correlating unrelated tokens that happen to occur in the same file.
+
+## LL-059 — generated brownfield candidates must be normalized with the repository formatter before mutation
+Exact-text transforms can preserve semantics while still producing import-order or formatting drift. A convergence package should apply the repository Ruff fixes/formatter to the temporary archive candidate first, re-run static checks there, and only then repeat the same deterministic normalization on the real checkout.
+
+## LL-060 — quality tools must not pollute the scope they are proving
+A dry-run that compares an exact candidate file set must run quality tools without writing caches or other auxiliary artifacts into that candidate. Ruff therefore runs with `--no-cache`; pytest cache remains disabled. Do not weaken scope comparison merely to hide tool-generated files.
+
+<!-- PLAN-007:LL-060-061:2026-08-22 -->
+## LL-060 — quality tools must not pollute the scope they are proving
+A dry-run that compares an exact candidate file set must run quality tools without writing caches or other auxiliary artifacts into that candidate. Ruff therefore runs with `--no-cache`; pytest cache remains disabled. Do not weaken scope comparison merely to hide tool-generated files.
+
+## LL-061 — live repository state outranks a previous runner narrative
+When a later preflight observes an exact, known dirty candidate even though an earlier report described the checkout as untouched, the current Git state is the source of truth. Reconstruct and validate that dirty candidate in a temporary snapshot, then continue with a residual flow; do not reset, replay the full migration, or infer cleanliness from an older report.
+
+<!-- PLAN-007:LL-062:2026-08-22 -->
+## LL-062 — cache non-pollution evidence must account for pre-existing ignored artifacts
+`--no-cache` proves that a quality-tool invocation does not need or create cache state; it does not imply that an old ignored cache directory is absent. On a clean archive snapshot, absence is a valid invariant. On a live checkout, record the pre-existing ignored cache fingerprint and require it to remain unchanged across the quality-tool step instead of deleting it or failing merely because it already exists.
+
+<!-- PLAN-007:LL-063:2026-08-22 -->
+## LL-063 — changing a composition seam requires migrating its test seams and focused validation set
+When an entrypoint stops constructing a dependency directly and delegates to a loader or factory, tests that monkeypatch the old construction symbol must be discovered and migrated even if the product-facing API did not change. Treat that as a composition-seam migration: search `src/tests/scripts` for stale monkeypatches/callers, move them to the new boundary, and include those caller tests in the focused validation set. Direct tests of the new loader are not sufficient evidence by themselves.

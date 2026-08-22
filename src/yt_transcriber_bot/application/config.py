@@ -6,7 +6,6 @@ Parâmetros não-sensíveis podem vir de ``.env`` ou variáveis de ambiente.
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -15,85 +14,6 @@ from pydantic import AliasChoices, Field, PrivateAttr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from yt_transcriber_bot.configuration.credentials import ProviderCredentials
-
-SETTINGS_ENV_FILE_ENV_VAR = "YT_TRANSCRIBER_ENV_FILE"
-PROJECT_NAME = "yt-transcriber-bot"
-
-
-def _is_runtime_env_file(path: Path) -> bool:
-    """Impede que templates sejam usados como configuração efetiva.
-
-    ``.env.example`` é documentação de onboarding e pode conter valores
-    ilustrativos. Carregá-lo em runtime mascara erros de configuração, como
-    usar o modelo de exemplo em vez do ``SUMMARY_MODEL`` real.
-    """
-
-    return path.name != ".env.example"
-
-
-def _looks_like_project_root(path: Path) -> bool:
-    pyproject = path / "pyproject.toml"
-    if not pyproject.exists():
-        return False
-    try:
-        content = pyproject.read_text(encoding="utf-8", errors="ignore")
-    except OSError:
-        return False
-    return f'name = "{PROJECT_NAME}"' in content or f"name = '{PROJECT_NAME}'" in content
-
-
-def find_project_root(start: Path | None = None) -> Path | None:
-    """Encontra a raiz do projeto a partir de ``start`` ou do diretório atual."""
-
-    current = (start or Path.cwd()).expanduser().resolve()
-    if current.is_file():
-        current = current.parent
-    for candidate in (current, *current.parents):
-        if _looks_like_project_root(candidate):
-            return candidate
-    return None
-
-
-def get_forced_settings_env_file() -> Path | None:
-    """Retorna o ``.env`` explicitamente escolhido pelo operador, se houver."""
-
-    value = os.environ.get(SETTINGS_ENV_FILE_ENV_VAR, "").strip()
-    if not value:
-        return None
-    path = Path(value).expanduser()
-    if not path.is_absolute():
-        path = Path.cwd() / path
-    return path.resolve()
-
-
-def resolve_settings_env_file() -> Path:
-    """Resolve o arquivo ``.env`` efetivo sem recorrer a ``.env.example``.
-
-    Ordem de descoberta do arquivo dotenv:
-
-    1. ``YT_TRANSCRIBER_ENV_FILE``, se definido;
-    2. ``.env`` da raiz do projeto encontrada a partir do diretório atual;
-    3. ``.env`` da raiz do projeto encontrada a partir deste arquivo Python;
-    4. ``.env`` do diretório atual como fallback para instalações fora do repo.
-
-    As variáveis reais do ambiente continuam tendo precedência sobre valores do
-    arquivo dotenv, conforme o comportamento do pydantic-settings.
-    """
-
-    forced = get_forced_settings_env_file()
-    if forced is not None:
-        if not _is_runtime_env_file(forced):
-            raise ValueError(
-                "YT_TRANSCRIBER_ENV_FILE aponta para .env.example. "
-                "Esse arquivo é apenas template; copie-o para .env e edite os valores reais."
-            )
-        return forced
-
-    for root in (find_project_root(Path.cwd()), find_project_root(Path(__file__))):
-        if root is not None:
-            return root / ".env"
-
-    return Path.cwd() / ".env"
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,10 +44,7 @@ class AppSettings(BaseSettings):
     _credentials: ProviderCredentials = PrivateAttr()
 
     def __init__(self, **values: Any) -> None:
-        if "_env_file" not in values:
-            values["_env_file"] = resolve_settings_env_file()
-
-        env_file = values["_env_file"]
+        env_file = values.get("_env_file")
         credential_values: dict[str, Any] = {}
         for field_name in ProviderCredentials.model_fields:
             if field_name in values:

@@ -6,11 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from yt_transcriber_bot.application.config import (
-    AppSettings,
-    find_project_root,
-    resolve_settings_env_file,
-)
+from yt_transcriber_bot.application.config import AppSettings
 from yt_transcriber_bot.application.services.processing_fingerprint import (
     compute_processing_fingerprint,
 )
@@ -282,77 +278,36 @@ def test_summary_model_guard_can_be_disabled_from_env(
     assert settings.summary_strict_model_match is False
 
 
-def test_summary_model_is_loaded_from_detected_project_root_dotenv(
-    env_no_dotenv: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_explicit_env_file_loads_settings_and_credentials(
+    env_no_dotenv: None, tmp_path: Path
 ) -> None:
-    (tmp_path / "pyproject.toml").write_text(
-        '[project]\nname = "yt-transcriber-bot"\n', encoding="utf-8"
+    env_file = tmp_path / "private.env"
+    env_file.write_text(
+        "SUMMARY_MODEL=modelo-do-dotenv\n"
+        "TELEGRAM_BOT_TOKEN=telegram-unit-test-value\n"
+        "HF_TOKEN=unit-test-hf-value\n",
+        encoding="utf-8",
     )
-    (tmp_path / ".env").write_text("SUMMARY_MODEL=modelo-do-dotenv\n", encoding="utf-8")
-    monkeypatch.delenv("YT_TRANSCRIBER_ENV_FILE", raising=False)
 
-    settings = AppSettings()
+    settings = AppSettings(_env_file=env_file)
 
-    assert find_project_root() == tmp_path
-    assert resolve_settings_env_file() == tmp_path / ".env"
     assert settings.summary_model == "modelo-do-dotenv"
+    assert settings.telegram_bot_token == "telegram-unit-test-value"
+    assert settings.hf_token == "unit-test-hf-value"
 
 
-def test_summary_model_can_be_forced_with_env_file_override(
+def test_process_environment_overrides_explicit_env_file(
     env_no_dotenv: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    forced_env = tmp_path / "config" / "bot.env"
-    forced_env.parent.mkdir()
-    forced_env.write_text("SUMMARY_MODEL=modelo-forcado\n", encoding="utf-8")
-    other_cwd = tmp_path / "other-cwd"
-    other_cwd.mkdir()
-    monkeypatch.chdir(other_cwd)
-    monkeypatch.setenv("YT_TRANSCRIBER_ENV_FILE", str(forced_env))
-
-    settings = AppSettings()
-
-    assert settings.summary_model == "modelo-forcado"
-
-
-def test_env_example_is_not_loaded_as_runtime_default(env_no_dotenv: None, tmp_path: Path) -> None:
-    (tmp_path / "pyproject.toml").write_text(
-        '[project]\nname = "yt-transcriber-bot"\n', encoding="utf-8"
+    env_file = tmp_path / "private.env"
+    env_file.write_text(
+        "SUMMARY_MODEL=modelo-do-dotenv\nHF_TOKEN=dotenv-hf-value\n",
+        encoding="utf-8",
     )
-    (tmp_path / ".env.example").write_text(
-        "SUMMARY_MODEL=modelo-errado-do-example\n", encoding="utf-8"
-    )
-
-    settings = AppSettings()
-
-    assert resolve_settings_env_file() == tmp_path / ".env"
-    _assert_defined(settings.summary_model)
-    assert settings.summary_model != "modelo-errado-do-example"
-
-
-def test_forced_env_file_rejects_env_example(
-    env_no_dotenv: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    example = tmp_path / ".env.example"
-    example.write_text("SUMMARY_MODEL=modelo-errado-do-example\n", encoding="utf-8")
-    monkeypatch.setenv("YT_TRANSCRIBER_ENV_FILE", str(example))
-
-    with pytest.raises(ValueError, match=r"\.env\.example"):
-        AppSettings()
-
-
-def test_summary_model_real_environment_overrides_dotenv_and_is_diagnosable(
-    env_no_dotenv: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    (tmp_path / ".env").write_text("SUMMARY_MODEL=modelo-do-dotenv\n", encoding="utf-8")
     monkeypatch.setenv("SUMMARY_MODEL", "modelo-do-ambiente-real")
+    monkeypatch.setenv("HF_TOKEN", "process-hf-value")
 
-    settings = AppSettings()
+    settings = AppSettings(_env_file=env_file)
 
     assert settings.summary_model == "modelo-do-ambiente-real"
-
-    from scripts.config.print_effective_settings import build_report_lines
-
-    report = "\n".join(build_report_lines(settings))
-    assert "summary_model=modelo-do-ambiente-real" in report
-    assert "origem: ambiente real SUMMARY_MODEL" in report
-    assert "sobrescreve .env" in report
+    assert settings.hf_token == "process-hf-value"

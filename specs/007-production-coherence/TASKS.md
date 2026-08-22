@@ -91,3 +91,15 @@ Gate closure is determined only by the cumulative runner and its post-commit rep
 Gate-level closure evidence is recorded in [`GATE-B-CLOSURE.md`](GATE-B-CLOSURE.md).
 
 Next task group: **P07-C — Configuration, packaging and distribution (P07-010…014)**.
+
+<!-- PLAN-007:GATE-C1:IMPLEMENTATION:2026-08-22 -->
+## Gate C1 implementation ledger — 2026-08-22
+
+| Task | C1 implementation |
+| --- | --- |
+| P07-010 | production env policy converged with `/etc/yt-transcriber-bot/env`; installed runtime no longer discovers arbitrary CWD `.env` or repository metadata; checkout `.env` remains development-only |
+| P07-011 | `ProviderCredentials` retained as single configuration declaration owner; one selected dotenv source feeds settings and credentials while process environment keeps precedence |
+
+C1 is an implementation sub-gate only. It does **not** close GATE-P07-C. P07-012, P07-013 and P07-014 remain open and cumulative Gate A/B/C evidence must pass before Gate C closure.
+
+Detailed C1 review: [`GATE-C-CONFIGURATION-REVIEW.md`](GATE-C-CONFIGURATION-REVIEW.md).

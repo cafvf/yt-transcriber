@@ -133,7 +133,7 @@ async def registered_commands(
         assert credentials is settings.credentials
         return runtime
 
-    monkeypatch.setattr(entrypoint, "AppSettings", lambda: settings)
+    monkeypatch.setattr(entrypoint, "load_runtime_settings", lambda: settings)
     monkeypatch.setattr(entrypoint, "configure_runtime_logging", lambda _settings: None)
     monkeypatch.setattr(entrypoint, "_validate_environment", lambda _settings: None)
     monkeypatch.setattr(entrypoint, "build_runtime", fake_build_runtime)

@@ -4,14 +4,14 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, Protocol
 
-from yt_transcriber_bot.application.config import (
-    AppSettings,
-    find_project_root,
-    resolve_settings_env_file,
-)
+from yt_transcriber_bot.application.config import AppSettings
 from yt_transcriber_bot.application.ports.health_probe import (
     HealthEnvironmentProbe,
     HealthEnvironmentSnapshot,
+)
+from yt_transcriber_bot.configuration.runtime_settings import (
+    find_development_checkout_root,
+    resolve_runtime_settings_source,
 )
 from yt_transcriber_bot.infrastructure.persistence.filesystem.operational_error_store import (
     JsonlOperationalErrorStore,
@@ -105,18 +105,22 @@ class LocalHealthEnvironmentProbe(HealthEnvironmentProbe):
             except Exception as exc:
                 model_error = str(exc)
         try:
-            env = resolve_settings_env_file()
-            env_state = (
-                "arquivo runtime encontrado."
-                if env.exists()
-                else "arquivo runtime não existe; usando ambiente/defaults."
-            )
+            source = resolve_runtime_settings_source()
+            env = source.env_file
+            if env is None:
+                env_state = "nenhum dotenv implícito; usando ambiente/defaults."
+            else:
+                env_state = (
+                    "arquivo runtime encontrado."
+                    if env.exists()
+                    else "arquivo runtime não existe; usando ambiente/defaults."
+                )
         except ValueError as exc:
             env_state = str(exc)
 
         return HealthEnvironmentSnapshot(
             python_detail=f"{platform.python_implementation()} {platform.python_version()} em {platform.system()} {platform.machine()}.",
-            project_root_found=find_project_root(Path.cwd()) is not None,
+            project_root_found=find_development_checkout_root() is not None,
             env_file_state=env_state,
             executable_available=executables,
             module_available=modules,

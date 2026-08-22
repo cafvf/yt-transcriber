@@ -21,9 +21,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_ROOT = REPO_ROOT / "src" / PROJECT_PACKAGE
 
 # AC-04 routing metadata, not a dependency-violation allowlist.
-_GOVERNED_APPLICATION_IO_HOTSPOTS = {
-    "application/config.py": "REQ-ARC-010",
-}
+_GOVERNED_APPLICATION_IO_HOTSPOTS: dict[str, str] = {}
 
 _DIRECT_IO_MODULE_ROOTS = {
     "ftplib",

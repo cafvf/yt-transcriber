@@ -1,12 +1,4 @@
-"""Mostra configurações efetivas carregadas pelo bot, mascarando segredos.
-
-Use na raiz do projeto:
-
-    uv run python scripts/config/print_effective_settings.py
-
-O objetivo é confirmar se o arquivo .env e as variáveis de ambiente estão sendo
-lidos pela mesma configuração que o bot usa em produção.
-"""
+"""Show effective runtime settings while masking credential values."""
 
 from __future__ import annotations
 
@@ -15,12 +7,12 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 
-from yt_transcriber_bot.application.config import (
+from yt_transcriber_bot.application.config import AppSettings
+from yt_transcriber_bot.configuration.runtime_settings import (
     SETTINGS_ENV_FILE_ENV_VAR,
-    AppSettings,
-    find_project_root,
-    get_forced_settings_env_file,
-    resolve_settings_env_file,
+    RuntimeSettingsSource,
+    load_runtime_settings,
+    resolve_runtime_settings_source,
 )
 
 _SECRET_FIELDS = {
@@ -78,10 +70,6 @@ def _mask(value: object) -> str:
     return f"{text[:4]}...{text[-4:]}"
 
 
-def _settings_env_file_path() -> Path:
-    return resolve_settings_env_file()
-
-
 def _lookup_case_insensitive(mapping: dict[str, object], key: str) -> tuple[str, object] | None:
     key_upper = key.upper()
     for actual_key, value in mapping.items():
@@ -90,7 +78,18 @@ def _lookup_case_insensitive(mapping: dict[str, object], key: str) -> tuple[str,
     return None
 
 
-def _source_for_field(field: str, env_path: Path, dotenv_data: dict[str, object]) -> str:
+def _dotenv_data(source: RuntimeSettingsSource) -> dict[str, object]:
+    path = source.env_file
+    if path is None or not path.exists():
+        return {}
+    return dict(dotenv_values(path))
+
+
+def _source_for_field(
+    field: str,
+    source: RuntimeSettingsSource,
+    dotenv_data: dict[str, object],
+) -> str:
     env_names = (
         ("MAX_MEDIA_DURATION_MIN", "MAX_VIDEO_DURATION_MIN")
         if field == "max_media_duration_min"
@@ -100,52 +99,74 @@ def _source_for_field(field: str, env_path: Path, dotenv_data: dict[str, object]
     for env_name in env_names:
         real_env = _lookup_case_insensitive(real_environment, env_name)
         if real_env is not None:
-            actual_key, _ = real_env
-            return f"ambiente real {actual_key} (sobrescreve .env)"
-    for env_name in env_names:
-        dotenv_hit = _lookup_case_insensitive(dotenv_data, env_name)
-        if dotenv_hit is not None:
-            actual_key, _ = dotenv_hit
-            return f"arquivo {env_path} ({actual_key})"
+            actual_key, value = real_env
+            if source.env_file is not None:
+                dotenv_hit = _lookup_case_insensitive(dotenv_data, env_name)
+                if dotenv_hit is not None and str(dotenv_hit[1]) == str(value):
+                    return f"ambiente real {actual_key} (valor igual ao arquivo de ambiente)"
+                return f"ambiente real {actual_key} (sobrescreve arquivo de ambiente)"
+            return f"ambiente real {actual_key}"
+
+    if source.env_file is not None:
+        for env_name in env_names:
+            dotenv_hit = _lookup_case_insensitive(dotenv_data, env_name)
+            if dotenv_hit is not None:
+                actual_key, _ = dotenv_hit
+                return f"arquivo {source.env_file} ({actual_key})"
     return "valor padrão ou argumento explícito"
 
 
-def build_report_lines(settings: AppSettings | None = None) -> list[str]:
-    settings = settings or AppSettings()
-    env_path = _settings_env_file_path().expanduser().resolve()
-    dotenv_data = dict(dotenv_values(env_path)) if env_path.exists() else {}
-
+def build_report_lines(
+    settings: AppSettings | None = None,
+    source: RuntimeSettingsSource | None = None,
+) -> list[str]:
+    resolved = source or resolve_runtime_settings_source()
+    settings = settings or load_runtime_settings(resolved)
+    dotenv_data = _dotenv_data(resolved)
     forced_env_file = os.environ.get(SETTINGS_ENV_FILE_ENV_VAR, "").strip()
-    project_root_from_cwd = find_project_root(Path.cwd())
-    project_root_from_code = find_project_root(Path(__file__))
-    forced_path = get_forced_settings_env_file()
+
+    source_detail = resolved.kind.value
+    if resolved.env_file is not None:
+        source_detail += f": {resolved.env_file}"
+
     lines = [
         "Configuração efetiva do yt-transcriber-bot",
         f"Diretório atual: {Path.cwd()}",
-        f"Raiz detectada pelo diretório atual: {project_root_from_cwd or '<não encontrada>'}",
-        f"Raiz detectada pelo código: {project_root_from_code or '<não encontrada>'}",
+        f"Fonte runtime: {source_detail}",
         f"{SETTINGS_ENV_FILE_ENV_VAR}: {forced_env_file or '<não definido>'}",
-        f"Arquivo forçado resolvido: {forced_path or '<não definido>'}",
-        f".env usado para diagnóstico/runtime: {env_path}",
-        f".env existe: {'sim' if env_path.exists() else 'não'}",
+        (
+            "Arquivo dotenv efetivo: "
+            + (str(resolved.env_file) if resolved.env_file is not None else "<nenhum>")
+        ),
         ".env.example: nunca é usado como configuração runtime.",
-        "Prioridade: variáveis do ambiente real sobrescrevem valores do .env.",
+        (
+            "Produção via systemd: /etc/yt-transcriber-bot/env é injetado no "
+            "process environment pelo EnvironmentFile."
+        ),
+        (
+            "Instalação fora do checkout não procura .env no CWD; "
+            "use ambiente real ou YT_TRANSCRIBER_ENV_FILE explícito."
+        ),
+        "Prioridade: variáveis do ambiente real sobrescrevem valores do arquivo dotenv.",
         "",
     ]
     for field in _FIELDS:
         value = getattr(settings, field)
-        source = _source_for_field(field, env_path, dotenv_data)
-        lines.append(f"{field}={value}  # origem: {source}")
+        origin = _source_for_field(field, resolved, dotenv_data)
+        lines.append(f"{field}={value}  # origem: {origin}")
+
     lines.append("")
     for field in sorted(_SECRET_FIELDS):
         value = getattr(settings, field)
-        source = _source_for_field(field, env_path, dotenv_data)
-        lines.append(f"{field}={_mask(value)}  # origem: {source}")
+        origin = _source_for_field(field, resolved, dotenv_data)
+        lines.append(f"{field}={_mask(value)}  # origem: {origin}")
     return lines
 
 
 def main() -> int:
-    for line in build_report_lines():
+    source = resolve_runtime_settings_source()
+    settings = load_runtime_settings(source)
+    for line in build_report_lines(settings, source):
         print(line)
     return 0
 
