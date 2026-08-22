@@ -359,9 +359,6 @@ A file may legitimately import `AppSettings` from `application.config` while imp
 ## LL-059 — generated brownfield candidates must be normalized with the repository formatter before mutation
 Exact-text transforms can preserve semantics while still producing import-order or formatting drift. A convergence package should apply the repository Ruff fixes/formatter to the temporary archive candidate first, re-run static checks there, and only then repeat the same deterministic normalization on the real checkout.
 
-## LL-060 — quality tools must not pollute the scope they are proving
-A dry-run that compares an exact candidate file set must run quality tools without writing caches or other auxiliary artifacts into that candidate. Ruff therefore runs with `--no-cache`; pytest cache remains disabled. Do not weaken scope comparison merely to hide tool-generated files.
-
 <!-- PLAN-007:LL-060-061:2026-08-22 -->
 ## LL-060 — quality tools must not pollute the scope they are proving
 A dry-run that compares an exact candidate file set must run quality tools without writing caches or other auxiliary artifacts into that candidate. Ruff therefore runs with `--no-cache`; pytest cache remains disabled. Do not weaken scope comparison merely to hide tool-generated files.
