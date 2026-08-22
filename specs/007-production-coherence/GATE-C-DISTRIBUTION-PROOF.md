@@ -1,8 +1,8 @@
 # PLAN-007 — Gate C3 Installed Distribution Proof
 
-Status: implementation/proof package for **P07-014**. Gate C is closed only
-after the cumulative committed reproduction succeeds and the closure
-documentation is reconciled.
+Status: **P07-014 COMPLETE / PASS**. C3 implementation was reproduced on committed bytes and
+published at `612a95636fd9cf1b2a5ce4229df456dc53a8049c`. Final cumulative Gate C closure is recorded in
+[`GATE-C-CLOSURE.md`](GATE-C-CLOSURE.md).
 
 ## Contract
 

@@ -1,6 +1,6 @@
 # PLAN-007 — Gate C1 Configuration Boundary Review
 
-Status: implementation evidence for **P07-010 + P07-011**; Gate C remains OPEN.
+Status: historical C1 implementation evidence for **P07-010 + P07-011**. Gate C later closed PASS after cumulative C1+C2+C3 reproduction; see [`GATE-C-CLOSURE.md`](GATE-C-CLOSURE.md).
 
 ## Runtime configuration source
 
@@ -49,4 +49,4 @@ C1 does not claim Gate C PASS. The following remain owned by later Gate C packag
 - P07-013 deterministic yt-dlp/EJS + supported Deno/Node preflight;
 - P07-014 installed CLI/preflight, systemd checkout independence, and final clean-install proof.
 
-Gate C closure remains cumulative over Gate A + Gate B + all Gate C packages.
+Gate C closure was subsequently completed cumulatively over Gate A + Gate B + C1 + C2 + C3 and is recorded in [`GATE-C-CLOSURE.md`](GATE-C-CLOSURE.md).

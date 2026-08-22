@@ -126,3 +126,18 @@ Detailed C2 review: [`GATE-C-RUNTIME-READINESS-REVIEW.md`](GATE-C-RUNTIME-READIN
 C3 performs the final distributable-runtime proof. Gate C closure documentation should be reconciled only after the committed post-install reproduction passes.
 
 Detailed C3 proof contract: [`GATE-C-DISTRIBUTION-PROOF.md`](GATE-C-DISTRIBUTION-PROOF.md).
+
+<!-- PLAN-007:GATE-C:TASK-CLOSURE:2026-08-22 -->
+## Gate C task closure ledger — 2026-08-22
+
+| Task | Status | Canonical outcome |
+| --- | --- | --- |
+| P07-010 | **DONE** | private production configuration boundary independent of arbitrary CWD/repository discovery |
+| P07-011 | **DONE** | single credential declaration ownership with process-environment precedence and redacted diagnostics |
+| P07-012 | **DONE** | dev-only tooling removed from production dependency metadata |
+| P07-013 | **DONE** | version-aware yt-dlp/EJS + supported Deno/Node runtime readiness |
+| P07-014 | **DONE** | installed console CLI, checkout-independent systemd contract, wheel build and clean Python 3.12 install/preflight proof |
+
+Gate-level closure evidence is recorded in [`GATE-C-CLOSURE.md`](GATE-C-CLOSURE.md).
+
+Next task group: **P07-D — Documentation and onboarding (P07-015…017)**.
