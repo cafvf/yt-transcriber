@@ -195,3 +195,53 @@ async def test_unstarted_ptb_resources_are_not_stopped_when_adapter_start_fails(
         "adapter-stop",
         "ptb-exit",
     ]
+
+
+# PLAN-007:C3-PREFLIGHT-CLI-TESTS
+def test_preflight_cli_does_not_start_polling(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    settings = object()
+    facts = object()
+
+    class Report:
+        passed = True
+
+        @staticmethod
+        def render_json() -> str:
+            return '{"passed": true}'
+
+        @staticmethod
+        def render_text() -> str:
+            return "result: PASS"
+
+    monkeypatch.setattr(entrypoint, "load_runtime_settings", lambda: settings)
+    monkeypatch.setattr(entrypoint, "collect_runtime_preflight_facts", lambda: facts)
+    monkeypatch.setattr(
+        entrypoint,
+        "build_runtime_preflight",
+        lambda actual_settings, actual_facts: (
+            Report()
+            if actual_settings is settings and actual_facts is facts
+            else pytest.fail("unexpected preflight inputs")
+        ),
+    )
+    monkeypatch.setattr(
+        entrypoint.asyncio,
+        "run",
+        lambda _coroutine: pytest.fail("preflight must not start asyncio/polling"),
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        entrypoint.main(["--preflight", "--json"])
+
+    assert exc.value.code == 0
+    assert '"passed": true' in capsys.readouterr().out
+
+
+def test_installed_startup_guidance_has_no_uv_sync_or_lock() -> None:
+    source = Path("src/yt_transcriber_bot/__main__.py").read_text(encoding="utf-8")
+    assert "uv sync" not in source
+    assert "uv lock" not in source
+    assert "Reinstale a distribuicao completa" in source

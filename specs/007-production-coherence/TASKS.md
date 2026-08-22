@@ -115,3 +115,14 @@ Detailed C1 review: [`GATE-C-CONFIGURATION-REVIEW.md`](GATE-C-CONFIGURATION-REVI
 C2 establishes the reusable readiness core. Installed `--preflight` and final clean-install/systemd proof remain P07-014 / C3 work.
 
 Detailed C2 review: [`GATE-C-RUNTIME-READINESS-REVIEW.md`](GATE-C-RUNTIME-READINESS-REVIEW.md).
+
+<!-- PLAN-007:GATE-C3:IMPLEMENTATION:2026-08-22 -->
+## Gate C3 implementation ledger — 2026-08-22
+
+| Task | C3 implementation |
+| --- | --- |
+| P07-014 | installed `yt-transcriber-bot --preflight`; systemd uses installed console script and `/var/lib` state directory; clean Python 3.12 wheel install is executed from unrelated CWD with no dev dependencies |
+
+C3 performs the final distributable-runtime proof. Gate C closure documentation should be reconciled only after the committed post-install reproduction passes.
+
+Detailed C3 proof contract: [`GATE-C-DISTRIBUTION-PROOF.md`](GATE-C-DISTRIBUTION-PROOF.md).

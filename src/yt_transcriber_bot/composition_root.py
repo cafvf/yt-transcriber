@@ -21,6 +21,9 @@ from yt_transcriber_bot.application.services.healthcheck import HealthCheckServi
 from yt_transcriber_bot.application.services.last_error import LastErrorService
 from yt_transcriber_bot.application.services.rename_speakers import RenameSpeakersService
 from yt_transcriber_bot.application.services.retention_policy import RetentionPolicy
+from yt_transcriber_bot.application.services.runtime_preflight import (
+    RuntimePreflightFacts,
+)
 from yt_transcriber_bot.application.services.sanitization import sanitize_text
 from yt_transcriber_bot.application.services.search_indexing import SearchIndexingService
 from yt_transcriber_bot.application.services.startup_recovery import StartupRecoveryService
@@ -68,6 +71,9 @@ from yt_transcriber_bot.infrastructure.operational.health_probes import (
     local_disk_usage,
     module_available,
     probe_openai_compatible_models,
+)
+from yt_transcriber_bot.infrastructure.operational.local_runtime_preflight import (
+    collect_local_runtime_preflight,
 )
 from yt_transcriber_bot.infrastructure.persistence.filesystem.canonical_markdown_writer import (
     FilesystemCanonicalMarkdownWriter,
@@ -128,6 +134,10 @@ def configure_runtime_logging(settings: AppSettings) -> None:
         max_bytes=settings.operational_log_max_bytes,
         backup_count=settings.operational_log_backup_count,
     )
+
+
+def collect_runtime_preflight_facts() -> RuntimePreflightFacts:
+    return collect_local_runtime_preflight()
 
 
 def _bound_error_sanitizer(settings: AppSettings) -> Callable[[str], str]:

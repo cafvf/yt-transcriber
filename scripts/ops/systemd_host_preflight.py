@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import platform
 import pwd
 import re
@@ -16,7 +17,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 SUPPORTED_PYTHON = {(3, 11), (3, 12)}
-REQUIRED_BINARIES = ("uv", "ffmpeg", "ffprobe", "systemctl", "journalctl")
+REQUIRED_BINARIES = ("ffmpeg", "ffprobe", "systemctl", "journalctl")
 _SECRET_ASSIGNMENT = re.compile(
     r"(?im)\b([A-Z][A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|COOKIE)[A-Z0-9_]*)"
     r"\s*=\s*([^\s]+)"
@@ -64,6 +65,15 @@ def _mode_is_restrictive(mode: int) -> bool:
     return stat.S_IMODE(mode) & 0o077 == 0
 
 
+def _exec_start_path(raw: str) -> Path | None:
+    match = re.search(r"(?:path=)?(/[^\s;{}]+yt-transcriber-bot)\b", raw)
+    return Path(match.group(1)) if match else None
+
+
+def _working_directory_is_runtime(path: Path) -> bool:
+    return path.is_dir() and not (path / ".git").exists() and not (path / "pyproject.toml").exists()
+
+
 def _check_prerequisites() -> list[Check]:
     checks = [
         Check("linux", platform.system() == "Linux", platform.system()),
@@ -93,15 +103,35 @@ def _check_service(service: str) -> tuple[list[Check], dict[str, str]]:
     }
     user = props["User"]
     group = props["Group"]
+    working_directory = Path(props["WorkingDirectory"]) if props["WorkingDirectory"] else None
+    exec_path = _exec_start_path(props["ExecStart"])
+    exec_is_installed_console = (
+        exec_path is not None
+        and exec_path.name == "yt-transcriber-bot"
+        and exec_path.is_file()
+        and os.access(exec_path, os.X_OK)
+        and "uv run" not in props["ExecStart"]
+        and "python -m" not in props["ExecStart"]
+    )
     checks = [
         Check("service-user", bool(user) and user != "root", user or "<empty>"),
         Check("service-group", group != "root", group or "<default>"),
         Check(
             "working-directory",
-            bool(props["WorkingDirectory"]) and Path(props["WorkingDirectory"]).is_dir(),
+            working_directory is not None and working_directory.is_dir(),
+            props["WorkingDirectory"] or "<empty>",
+        ),
+        Check(
+            "working-directory-not-source-checkout",
+            working_directory is not None and _working_directory_is_runtime(working_directory),
             props["WorkingDirectory"] or "<empty>",
         ),
         Check("exec-start", bool(props["ExecStart"]), props["ExecStart"] or "<empty>"),
+        Check(
+            "exec-start-installed-console",
+            exec_is_installed_console,
+            str(exec_path) if exec_path is not None else "<unresolved>",
+        ),
         Check(
             "fragment-path",
             bool(props["FragmentPath"]) and Path(props["FragmentPath"]).is_file(),

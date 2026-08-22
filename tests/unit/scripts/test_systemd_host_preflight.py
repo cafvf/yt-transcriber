@@ -141,3 +141,25 @@ def test_write_report_protects_parent_created_by_helper(tmp_path: Path) -> None:
 
     assert stat.S_IMODE(parent.stat().st_mode) == 0o700
     assert stat.S_IMODE(output.stat().st_mode) == 0o600
+
+
+# PLAN-007:C3-SYSTEMD-TESTS
+def test_exec_start_parser_resolves_installed_console_script() -> None:
+    module = _load()
+    raw = (
+        "{ path=/opt/yt-transcriber-bot/venv/bin/yt-transcriber-bot ; "
+        "argv[]=/opt/yt-transcriber-bot/venv/bin/yt-transcriber-bot ; }"
+    )
+    assert module._exec_start_path(raw) == Path(
+        "/opt/yt-transcriber-bot/venv/bin/yt-transcriber-bot"
+    )
+
+
+def test_deploy_unit_uses_installed_console_and_state_directory() -> None:
+    source = Path("deploy/yt-transcriber-bot.service").read_text(encoding="utf-8")
+    assert "WorkingDirectory=/var/lib/yt-transcriber-bot" in source
+    assert "StateDirectory=yt-transcriber-bot" in source
+    assert "StateDirectoryMode=0700" in source
+    assert "ExecStart=/opt/yt-transcriber-bot/venv/bin/yt-transcriber-bot" in source
+    assert "uv run" not in source
+    assert "python -m yt_transcriber_bot" not in source

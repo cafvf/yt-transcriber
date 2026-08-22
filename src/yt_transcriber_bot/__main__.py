@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import contextlib
 import importlib.util
 import logging
 import shutil
 import sys
+from collections.abc import Sequence
 
 from telegram import Update
 from telegram.ext import (
@@ -24,7 +26,14 @@ from yt_transcriber_bot.application.ports.incoming_media import (
     IncomingMedia,
     IncomingMediaKind,
 )
-from yt_transcriber_bot.composition_root import build_runtime, configure_runtime_logging
+from yt_transcriber_bot.application.services.runtime_preflight import (
+    build_runtime_preflight,
+)
+from yt_transcriber_bot.composition_root import (
+    build_runtime,
+    collect_runtime_preflight_facts,
+    configure_runtime_logging,
+)
 from yt_transcriber_bot.configuration.runtime_settings import load_runtime_settings
 
 
@@ -62,8 +71,8 @@ def _validate_environment(settings: AppSettings) -> None:
         problems.append(
             "Dependencias de ML ausentes: "
             + ", ".join(missing_ml)
-            + ". Rode: uv sync. Em pacotes antigos, use: uv sync --extra ml. "
-            "Se o lock estiver desatualizado, rode: uv lock && uv sync."
+            + ". Reinstale a distribuicao completa do yt-transcriber-bot "
+            "com as dependencias de producao."
         )
 
     if problems:
@@ -71,6 +80,31 @@ def _validate_environment(settings: AppSettings) -> None:
         for p in problems:
             sys.stderr.write(f"  - {p}\n")
         sys.exit(2)
+
+
+def _build_cli_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="yt-transcriber-bot")
+    parser.add_argument(
+        "--preflight",
+        action="store_true",
+        help="verifica a distribuicao instalada sem iniciar o bot",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="emite o preflight em JSON; requer --preflight",
+    )
+    return parser
+
+
+def _run_distribution_preflight(*, json_output: bool) -> int:
+    settings = load_runtime_settings()
+    facts = collect_runtime_preflight_facts()
+    report = build_runtime_preflight(settings, facts)
+    rendered = report.render_json() if json_output else report.render_text()
+    sys.stdout.write(rendered + "\n")
+    return 0 if report.passed else 2
 
 
 async def _run() -> None:
@@ -318,7 +352,14 @@ async def _run() -> None:
                 await application.stop()
 
 
-def main() -> None:
+def main(argv: Sequence[str] | None = None) -> None:
+    parser = _build_cli_parser()
+    args = parser.parse_args(argv)
+    if args.json_output and not args.preflight:
+        parser.error("--json requer --preflight")
+    if args.preflight:
+        raise SystemExit(_run_distribution_preflight(json_output=args.json_output))
+
     try:
         asyncio.run(_run())
     except KeyboardInterrupt:

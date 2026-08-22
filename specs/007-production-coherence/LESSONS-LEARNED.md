@@ -381,3 +381,23 @@ A binary on `PATH` is not evidence that a provider integration can use it. When 
 <!-- PLAN-007:LL-065:2026-08-22 -->
 ## LL-065 — semantic dry-runs that execute history-aware tests must preserve Git metadata
 A `git archive` snapshot is sufficient for file-content checks but not for tests or tools that reconstruct historical evidence with commands such as `git show`. When the candidate validation includes history-aware tests, build the temporary candidate as a real detached Git clone (or equivalent repository with object history) and compare only working-tree file hashes, excluding `.git`. Do not skip the history-aware test merely because the original dry-run representation discarded repository metadata.
+
+<!-- PLAN-007:LL-066:2026-08-22 -->
+## LL-066 — synchronize local and remote state explicitly at major subgate boundaries
+Before generating the next major convergence package (for example C1 -> C2 -> C3), run an explicit remote synchronization: `git fetch`, inspect the clean working tree, perform `git pull --ff-only`, and prove local HEAD equals the target remote branch SHA. A package may still re-check the baseline, but it must not be generated from an assumed remote state or silently create a merge commit.
+
+<!-- PLAN-007:LL-067:2026-08-22 -->
+## LL-067 — convergence package self-tests must execute transformations against the exact baseline shape
+A package that only compiles and checks its own markers can still contain patch anchors that are syntactically valid but impossible to match, such as accidentally serialized literal `\n` sequences. For brownfield convergence packages, package QA must execute the transformation functions against fixtures reproducing the exact baseline snippets for every mutated legacy file before delivery.
+
+<!-- PLAN-007:LL-068:2026-08-22 -->
+## LL-068 — operational CLI paths must preserve composition-root ownership
+Adding an operational command such as installed `--preflight` does not exempt the entrypoint from the hexagonal composition boundary. Concrete infrastructure fact collectors must be wired by `composition_root.py` (or an equivalent outward composition boundary); `__main__.py` may consume the composed callable/report but must not import `yt_transcriber_bot.infrastructure` directly. The composition-ownership conformance test belongs in the focused validation set whenever entrypoint wiring changes.
+
+<!-- PLAN-007:LL-069:2026-08-22 -->
+## LL-069 — clean-install proofs must scrub Python source-path injection before imports
+Creating a fresh virtual environment is not sufficient evidence of source-checkout independence if the validation subprocess inherits `PYTHONPATH`, `PYTHONHOME`, `PYTHONSTARTUP`, or equivalent source-path injection from the candidate test harness. Before importing the installed package, sanitize those variables, disable user site packages, and prove positively that both `sys.executable` and the package `__file__` resolve inside the newly created production virtual environment. Also reject any candidate/repository path that remains on `sys.path`.
+
+<!-- PLAN-007:LL-070:2026-08-22 -->
+## LL-070 — virtualenv proof must use `sys.prefix`, not a resolved interpreter symlink
+A virtual environment may expose `venv/bin/python` as a symlink to a base interpreter outside the environment. Therefore `Path(sys.executable).resolve()` is not valid evidence that the venv was bypassed. Prove virtualenv activation with `sys.prefix` equal to the clean environment, the lexical `sys.executable` located under that environment's `bin`, `sys.base_prefix` distinct from `sys.prefix`, the installed package located under the environment's site-packages, and no checkout path present in `sys.path`.
