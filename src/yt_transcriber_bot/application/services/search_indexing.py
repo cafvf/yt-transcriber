@@ -51,7 +51,7 @@ class SearchIndexingService:
                 normalize_artifact_text(record.metadata.channel),
                 record.metadata.source_label,
                 job.video_id.value if job.video_id is not None else "",
-                job.requested_language or "",
+                job.requested_language.code if job.requested_language is not None else None or "",
                 " ".join(aliases.values()),
             )
             if value

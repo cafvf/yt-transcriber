@@ -6,8 +6,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from yt_transcriber_bot.domain.entities.media_metadata import MediaMetadata
 from yt_transcriber_bot.domain.entities.transcript import Transcript
-from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
 from yt_transcriber_bot.domain.value_objects.provenance import ProcessingProvenance
 
 
@@ -37,7 +37,7 @@ class TranscriptRenderContext:
 class CanonicalTranscriptRecord:
     """Structured evidence persisted under an explicit canonical reference."""
 
-    metadata: VideoMetadata
+    metadata: MediaMetadata
     transcript: Transcript
     context: TranscriptRenderContext
     processing_fingerprint: str = ""
@@ -59,13 +59,13 @@ class CanonicalTranscriptStore(ABC):
     def load(self, reference: str) -> CanonicalTranscriptRecord | None: ...
 
     @abstractmethod
-    def load_metadata(self, reference: str) -> VideoMetadata | None: ...
+    def load_metadata(self, reference: str) -> MediaMetadata | None: ...
 
     @abstractmethod
     def load_metadata_many(
         self,
         references: tuple[str, ...],
-    ) -> dict[str, VideoMetadata]: ...
+    ) -> dict[str, MediaMetadata]: ...
 
     def require(self, reference: str) -> CanonicalTranscriptRecord:
         record = self.load(reference)

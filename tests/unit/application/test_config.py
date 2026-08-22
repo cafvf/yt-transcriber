@@ -11,6 +11,9 @@ from yt_transcriber_bot.application.config import (
     find_project_root,
     resolve_settings_env_file,
 )
+from yt_transcriber_bot.application.services.processing_fingerprint import (
+    compute_processing_fingerprint,
+)
 
 
 def _assert_defined(value: str) -> None:
@@ -35,6 +38,7 @@ def env_no_dotenv(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         "DEVICE",
         "COMPUTE_TYPE",
         "AUDIO_BITRATE_KBPS",
+        "MAX_MEDIA_DURATION_MIN",
         "MAX_VIDEO_DURATION_MIN",
         "RETENTION_COUNT",
         "SUMMARY_MODEL",
@@ -60,7 +64,7 @@ class TestAppSettingsDefaults:
         assert s.compute_type == "auto"
         assert s.audio_bitrate_kbps == 32
         assert s.audio_sample_rate_hz == 16000
-        assert s.max_video_duration_min == 180
+        assert s.max_media_duration_min == 180
         assert s.retention_count == 5
         assert s.allowed_languages == ("pt", "en")
 
@@ -98,8 +102,8 @@ class TestAppSettingsValidation:
             AppSettings(audio_bitrate_kbps=256)
 
     def test_max_duration_min_positive(self, env_no_dotenv: None) -> None:
-        with pytest.raises(ValueError, match="max_video_duration_min"):
-            AppSettings(max_video_duration_min=0)
+        with pytest.raises(ValueError, match=r"(?i)max_media_duration_min"):
+            AppSettings(max_media_duration_min=0)
 
 
 class TestAppSettingsEnvLoading:
@@ -162,31 +166,46 @@ class TestRuntimeSecretsValidation:
         assert len(s.validate_runtime_secrets()) == 3
 
 
-class TestTranscriptionSignature:
-    def test_signature_is_stable_for_same_inputs(self, env_no_dotenv: None) -> None:
+class TestProcessingFingerprint:
+    def test_fingerprint_is_stable_for_same_inputs(
+        self,
+        env_no_dotenv: None,
+    ) -> None:
         s1 = AppSettings(whisper_model="small")
         s2 = AppSettings(whisper_model="small")
-        assert s1.transcription_signature() == s2.transcription_signature()
+        assert compute_processing_fingerprint(s1) == compute_processing_fingerprint(s2)
 
-    def test_signature_changes_when_model_changes(self, env_no_dotenv: None) -> None:
+    def test_fingerprint_changes_when_model_changes(
+        self,
+        env_no_dotenv: None,
+    ) -> None:
         s1 = AppSettings(whisper_model="small")
         s2 = AppSettings(whisper_model="medium")
-        assert s1.transcription_signature() != s2.transcription_signature()
+        assert compute_processing_fingerprint(s1) != compute_processing_fingerprint(s2)
 
-    def test_signature_changes_when_language_model_changes(self, env_no_dotenv: None) -> None:
+    def test_fingerprint_changes_when_language_model_changes(
+        self,
+        env_no_dotenv: None,
+    ) -> None:
         s1 = AppSettings(whisper_model="auto", whisper_model_pt="large-v3")
         s2 = AppSettings(whisper_model="auto", whisper_model_pt="medium")
-        assert s1.transcription_signature() != s2.transcription_signature()
+        assert compute_processing_fingerprint(s1) != compute_processing_fingerprint(s2)
 
-    def test_signature_changes_when_compute_type_changes(self, env_no_dotenv: None) -> None:
+    def test_fingerprint_changes_when_compute_type_changes(
+        self,
+        env_no_dotenv: None,
+    ) -> None:
         s1 = AppSettings(compute_type="auto")
         s2 = AppSettings(compute_type="int8")
-        assert s1.transcription_signature() != s2.transcription_signature()
+        assert compute_processing_fingerprint(s1) != compute_processing_fingerprint(s2)
 
-    def test_signature_changes_when_bitrate_changes(self, env_no_dotenv: None) -> None:
+    def test_fingerprint_changes_when_bitrate_changes(
+        self,
+        env_no_dotenv: None,
+    ) -> None:
         s1 = AppSettings(audio_bitrate_kbps=32)
         s2 = AppSettings(audio_bitrate_kbps=64)
-        assert s1.transcription_signature() != s2.transcription_signature()
+        assert compute_processing_fingerprint(s1) != compute_processing_fingerprint(s2)
 
 
 def test_summary_settings_defaults_are_lm_studio_compatible(

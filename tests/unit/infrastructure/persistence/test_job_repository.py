@@ -14,6 +14,7 @@ from sqlalchemy import text
 
 from yt_transcriber_bot.application.job_request_context import JobRequestContext
 from yt_transcriber_bot.domain.entities.job import Job, JobStatus
+from yt_transcriber_bot.domain.value_objects.language import Language
 from yt_transcriber_bot.domain.value_objects.media_source import MediaSource
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
 from yt_transcriber_bot.infrastructure.persistence.sqlalchemy.job_repository import (
@@ -32,8 +33,7 @@ def _make_job(user_id: int = 1, video: str = "dQw4w9WgXcQ") -> Job:
     return Job.new(
         VideoId(value=video),
         user_id=user_id,
-        requested_language="pt",
-        artifact_policy="audio+markdown",
+        requested_language=Language("pt"),
     )
 
 
@@ -122,8 +122,7 @@ class TestRoundtrip:
         loaded = repo.get_by_id(job.job_id)
         context = repo.get_request_context(job.job_id)
         assert loaded is not None
-        assert loaded.requested_language == "pt"
-        assert loaded.artifact_policy == "audio+markdown"
+        assert loaded.requested_language == Language("pt")
         assert context == JobRequestContext(job.job_id, 1001, "https://youtu.be/dQw4w9WgXcQ")
 
     def test_persists_default_youtube_media_source(self, repo: SqlAlchemyJobRepository) -> None:
@@ -313,8 +312,7 @@ def test_migrates_existing_sqlite_database_with_phase2_columns(tmp_path: Path) -
     context = repo.get_request_context(job.job_id)
 
     assert loaded is not None
-    assert loaded.requested_language == "pt"
-    assert loaded.artifact_policy == "audio+markdown"
+    assert loaded.requested_language == Language("pt")
     assert context == JobRequestContext(job.job_id, 1001, "https://youtu.be/dQw4w9WgXcQ")
 
 

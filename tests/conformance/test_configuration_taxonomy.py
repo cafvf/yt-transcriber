@@ -12,7 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_ROOT = REPO_ROOT / "src" / "yt_transcriber_bot"
 APPLICATION_ROOT = PACKAGE_ROOT / "application"
 CONFIG_PATH = APPLICATION_ROOT / "config.py"
-FINGERPRINT_PATH = APPLICATION_ROOT / "services" / "config_signature.py"
+FINGERPRINT_PATH = APPLICATION_ROOT / "services" / "processing_fingerprint.py"
 
 _CREDENTIAL_FIELDS = {
     "telegram_bot_token",
@@ -56,36 +56,11 @@ def test_processing_fingerprint_field_selection_has_single_authority() -> None:
                     names.append(node.target.id)
                 if "SIGNIFICANT_FIELDS" in names:
                     owners.append(path.relative_to(PACKAGE_ROOT).as_posix())
-    assert owners == ["application/services/config_signature.py"]
+    assert owners == ["application/services/processing_fingerprint.py"]
 
 
-def test_compatibility_signature_delegates_to_canonical_fingerprint() -> None:
-    config_tree = ast.parse(CONFIG_PATH.read_text(encoding="utf-8"), filename=str(CONFIG_PATH))
-    methods = [
-        node
-        for node in ast.walk(config_tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "transcription_signature"
-    ]
-    assert len(methods) == 1
-    calls = {
-        node.func.id
-        for node in ast.walk(methods[0])
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-    }
-    assert "compute_processing_fingerprint" in calls
-
-    fingerprint_tree = ast.parse(
-        FINGERPRINT_PATH.read_text(encoding="utf-8"), filename=str(FINGERPRINT_PATH)
-    )
-    compatibility = [
-        node
-        for node in ast.walk(fingerprint_tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "compute_config_signature"
-    ]
-    assert len(compatibility) == 1
-    compatibility_calls = {
-        node.func.id
-        for node in ast.walk(compatibility[0])
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-    }
-    assert "compute_processing_fingerprint" in compatibility_calls
+def test_legacy_signature_compatibility_api_is_removed() -> None:
+    config_source = CONFIG_PATH.read_text(encoding="utf-8")
+    fingerprint_source = FINGERPRINT_PATH.read_text(encoding="utf-8")
+    assert "transcription_" + "signature" not in config_source
+    assert "compute_config_" + "signature" not in fingerprint_source

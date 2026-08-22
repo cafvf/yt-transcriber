@@ -6,11 +6,11 @@ from datetime import UTC, date, datetime
 
 import pytest
 
+from yt_transcriber_bot.domain.entities.media_metadata import MediaMetadata
 from yt_transcriber_bot.domain.entities.transcript import (
     Transcript,
     TranscriptSegment,
 )
-from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
 from yt_transcriber_bot.domain.value_objects.duration import Duration
 from yt_transcriber_bot.domain.value_objects.language import Language
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
@@ -20,8 +20,8 @@ from yt_transcriber_bot.infrastructure.rendering.markdown_renderer import (
 )
 
 
-def _meta() -> VideoMetadata:
-    return VideoMetadata(
+def _meta() -> MediaMetadata:
+    return MediaMetadata(
         video_id=VideoId(value="dQw4w9WgXcQ"),
         title="Entrevista com Fulano",
         channel="Canal Exemplo",
@@ -123,7 +123,7 @@ class TestHeader:
         assert "Legendas manuais do YouTube" in md
 
     def test_unknown_upload_date(self) -> None:
-        meta = VideoMetadata(
+        meta = MediaMetadata(
             video_id=VideoId(value="dQw4w9WgXcQ"),
             title="X",
             channel="Y",

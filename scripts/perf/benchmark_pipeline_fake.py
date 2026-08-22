@@ -18,12 +18,12 @@ from yt_transcriber_bot.application.services.transcript_summary import (
     _snapshot_to_text,
 )
 from yt_transcriber_bot.domain.entities.job import Job, JobStatus
+from yt_transcriber_bot.domain.entities.media_metadata import MediaMetadata
 from yt_transcriber_bot.domain.entities.transcript import (
     SpeakerTurn,
     Transcript,
     TranscriptSegment,
 )
-from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
 from yt_transcriber_bot.domain.value_objects.duration import Duration
 from yt_transcriber_bot.domain.value_objects.language import Language
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
@@ -161,7 +161,7 @@ def _measure(iterations: int, fn: Callable[[], object]) -> BenchmarkSummary:
 def _pipeline_fake(
     renderer: MarkdownTranscriptRenderer,
     transcript: Transcript,
-    metadata: VideoMetadata,
+    metadata: MediaMetadata,
     context: RenderContext,
 ) -> str:
     rendered = renderer.render(metadata, transcript, context)
@@ -233,8 +233,8 @@ def _build_transcript(*, segment_count: int) -> Transcript:
     )
 
 
-def _build_metadata(slug: str) -> VideoMetadata:
-    return VideoMetadata(
+def _build_metadata(slug: str) -> MediaMetadata:
+    return MediaMetadata(
         video_id=VideoId(slug[:11].ljust(11, "x")),
         title=f"Título {slug}",
         channel="Canal Benchmark",

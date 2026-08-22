@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from yt_transcriber_bot.domain.entities.media_metadata import MediaMetadata
 from yt_transcriber_bot.domain.entities.transcript import Transcript, TranscriptSegment
-from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
 from yt_transcriber_bot.domain.value_objects.duration import Duration
 from yt_transcriber_bot.domain.value_objects.language import Language, LanguageSource
 from yt_transcriber_bot.domain.value_objects.provenance import ProcessingProvenance
@@ -23,7 +23,7 @@ from yt_transcriber_bot.infrastructure.rendering.markdown_renderer import Render
 
 
 def _make_snapshot() -> TranscriptSnapshot:
-    metadata = VideoMetadata(
+    metadata = MediaMetadata(
         video_id=VideoId("dQw4w9WgXcQ"),
         title="Hello World",
         channel="Test Channel",
@@ -66,7 +66,7 @@ def _make_snapshot() -> TranscriptSnapshot:
             diarization_backend="pyannote",
             diarization_model="pyannote/speaker-diarization-community-1",
             diarization_fallback_used=True,
-            language_source="asr",
+            language_source=LanguageSource.ASR,
         ),
     )
 
@@ -104,7 +104,7 @@ def test_telegram_snapshot_does_not_persist_synthetic_youtube_identity(tmp_path:
     repo = TranscriptSnapshotRepository(tmp_path)
     original = _make_snapshot()
     snap = TranscriptSnapshot(
-        metadata=VideoMetadata(
+        metadata=MediaMetadata(
             video_id=None,
             title="Mensagem de voz",
             channel="Telegram",
@@ -172,7 +172,7 @@ def test_unknown_duration_language_and_confidence_round_trip_as_unknown(tmp_path
     repo = TranscriptSnapshotRepository(tmp_path)
     original = _make_snapshot()
     snapshot = TranscriptSnapshot(
-        metadata=VideoMetadata(
+        metadata=MediaMetadata(
             video_id=VideoId("dQw4w9WgXcQ"),
             title="Unknown facts",
             channel="Channel",

@@ -62,6 +62,7 @@ _FIELDS = (
     "summary_validate_model",
     "summary_strict_model_match",
     "summaries_dir_name",
+    "max_media_duration_min",
     "telegram_max_queue_size",
     "max_video_subtitles_duration_min",
     "max_video_subtitles_size_mb",
@@ -90,15 +91,22 @@ def _lookup_case_insensitive(mapping: dict[str, object], key: str) -> tuple[str,
 
 
 def _source_for_field(field: str, env_path: Path, dotenv_data: dict[str, object]) -> str:
-    env_name = field.upper()
-    real_env = _lookup_case_insensitive(dict(os.environ), env_name)
-    if real_env is not None:
-        actual_key, _ = real_env
-        return f"ambiente real {actual_key} (sobrescreve .env)"
-    dotenv_hit = _lookup_case_insensitive(dotenv_data, env_name)
-    if dotenv_hit is not None:
-        actual_key, _ = dotenv_hit
-        return f"arquivo {env_path} ({actual_key})"
+    env_names = (
+        ("MAX_MEDIA_DURATION_MIN", "MAX_VIDEO_DURATION_MIN")
+        if field == "max_media_duration_min"
+        else (field.upper(),)
+    )
+    real_environment = dict(os.environ)
+    for env_name in env_names:
+        real_env = _lookup_case_insensitive(real_environment, env_name)
+        if real_env is not None:
+            actual_key, _ = real_env
+            return f"ambiente real {actual_key} (sobrescreve .env)"
+    for env_name in env_names:
+        dotenv_hit = _lookup_case_insensitive(dotenv_data, env_name)
+        if dotenv_hit is not None:
+            actual_key, _ = dotenv_hit
+            return f"arquivo {env_path} ({actual_key})"
     return "valor padrão ou argumento explícito"
 
 

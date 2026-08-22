@@ -110,8 +110,8 @@ class LastErrorService:
             f"Solicitado em: {job.requested_at.strftime('%Y-%m-%d %H:%M:%S %Z')}",
             f"Atualizado em: {job.updated_at.strftime('%Y-%m-%d %H:%M:%S %Z')}",
         ]
-        if job.config_signature:
-            lines.append(f"Assinatura de configuração: {job.config_signature}")
+        if job.processing_fingerprint:
+            lines.append(f"Assinatura de configuração: {job.processing_fingerprint}")
         if job.error_message:
             lines.extend(["", "Erro:", sanitize_text(job.error_message, self._settings)])
         available_artifacts: list[str] = []

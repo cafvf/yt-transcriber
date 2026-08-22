@@ -6,13 +6,13 @@ from pathlib import Path
 from typing import Protocol
 
 from yt_transcriber_bot.domain.entities.job import Job
-from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
+from yt_transcriber_bot.domain.entities.media_metadata import MediaMetadata
 
 
 class HistoryTitleSource(Protocol):
     """Optional canonical metadata reader used only for presentation titles."""
 
-    def metadata_for(self, slug: str) -> VideoMetadata | None: ...
+    def metadata_for(self, slug: str) -> MediaMetadata | None: ...
 
 
 class HistoryPresentation:

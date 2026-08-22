@@ -10,9 +10,10 @@ from pathlib import Path
 from yt_transcriber_bot.application.ports.transcription_engine import TranscribedSegment
 from yt_transcriber_bot.application.runtime_selection import RuntimePlan
 from yt_transcriber_bot.domain.entities.job import Job
+from yt_transcriber_bot.domain.entities.media_metadata import MediaMetadata
 from yt_transcriber_bot.domain.entities.transcript import Transcript
-from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
 from yt_transcriber_bot.domain.value_objects.audio_track import AudioTrackSelection
+from yt_transcriber_bot.domain.value_objects.language import Language, LanguageSource
 from yt_transcriber_bot.domain.value_objects.provenance import ProcessingProvenance
 
 
@@ -22,16 +23,15 @@ class PipelineContext:
     source_locator: str | None = None
     raw_audio_path: Path | None = None
     audio_track_selection: AudioTrackSelection = AudioTrackSelection.UNKNOWN
-    metadata: VideoMetadata | None = None
+    metadata: MediaMetadata | None = None
     converted_audio_path: Path | None = None
     youtube_subtitle_used: bool = False
-    youtube_subtitle_kind: str | None = None
-    requested_language: str | None = None
-    language_source: str | None = None
+    requested_language: Language | None = None
+    language_source: LanguageSource = LanguageSource.UNKNOWN
     transcribed_segments: tuple[TranscribedSegment, ...] = ()
-    transcription_language: str | None = None
+    transcription_language: Language | None = None
     transcription_confidence: float | None = None
-    observed_language: str | None = None
+    observed_language: Language | None = None
     observed_language_confidence: float | None = None
     transcript: Transcript | None = None
     runtime_plan: RuntimePlan | None = None

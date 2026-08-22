@@ -37,7 +37,7 @@ from yt_transcriber_bot.application.ports.youtube_downloader import (
     YouTubeError,
 )
 from yt_transcriber_bot.application.services.sanitization import sanitize_text
-from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
+from yt_transcriber_bot.domain.entities.media_metadata import MediaMetadata
 from yt_transcriber_bot.domain.value_objects.audio_track import AudioTrackSelection
 from yt_transcriber_bot.domain.value_objects.duration import Duration
 from yt_transcriber_bot.domain.value_objects.language import Language
@@ -165,7 +165,7 @@ class YtDlpDownloader(YouTubeDownloader):
     # Metadata
     # ------------------------------------------------------------------
 
-    def fetch_metadata(self, video_id: VideoId) -> VideoMetadata:
+    def fetch_metadata(self, video_id: VideoId) -> MediaMetadata:
         info = self._extract_info(
             video_id,
             download=False,
@@ -240,7 +240,7 @@ class YtDlpDownloader(YouTubeDownloader):
         return any(marker in msg for marker in _FORMAT_UNAVAILABLE_MARKERS)
 
     @staticmethod
-    def _build_metadata(video_id: VideoId, info: dict[str, Any]) -> VideoMetadata:
+    def _build_metadata(video_id: VideoId, info: dict[str, Any]) -> MediaMetadata:
         title = str(info.get("title") or "").strip()
         if not title:
             raise YouTubeError("metadados sem título")
@@ -269,7 +269,7 @@ class YtDlpDownloader(YouTubeDownloader):
         original_language = YtDlpDownloader._infer_original_language(info)
         alt_languages, has_alt = YtDlpDownloader._collect_alternate_languages(info)
 
-        return VideoMetadata(
+        return MediaMetadata(
             video_id=video_id,
             title=title,
             channel=channel,

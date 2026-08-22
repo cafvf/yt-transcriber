@@ -10,16 +10,16 @@ import pytest
 
 from yt_transcriber_bot.application.config import AppSettings
 from yt_transcriber_bot.application.job_request_context import JobRequestContext
-from yt_transcriber_bot.application.services.config_signature import (
+from yt_transcriber_bot.application.services.processing_fingerprint import (
     compute_processing_fingerprint,
     processing_fingerprint_payload,
 )
 from yt_transcriber_bot.domain.entities.job import Job, JobStatus
+from yt_transcriber_bot.domain.entities.media_metadata import MediaMetadata
 from yt_transcriber_bot.domain.entities.transcript import Transcript, TranscriptSegment
-from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
 from yt_transcriber_bot.domain.value_objects.artifact import ArtifactClass
-from yt_transcriber_bot.domain.value_objects.language import LanguageSource
-from yt_transcriber_bot.domain.value_objects.media_source import MediaSource
+from yt_transcriber_bot.domain.value_objects.language import Language, LanguageSource
+from yt_transcriber_bot.domain.value_objects.media_source import MediaSource, MediaSourceType
 from yt_transcriber_bot.domain.value_objects.provenance import ProcessingProvenance
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
 from yt_transcriber_bot.infrastructure.persistence.filesystem.transcript_snapshot import (
@@ -67,7 +67,7 @@ def test_source_identity_is_canonical_and_source_neutral() -> None:
 
 
 def test_unknown_language_duration_and_confidence_remain_unknown() -> None:
-    metadata = VideoMetadata(
+    metadata = MediaMetadata(
         video_id=VideoId("dQw4w9WgXcQ"),
         title="Unknown facts",
         channel="Channel",
@@ -119,11 +119,11 @@ def test_fingerprint_excludes_credentials_paths_and_runtime_bookkeeping(tmp_path
 
     assert compute_processing_fingerprint(settings) == compute_processing_fingerprint(changed)
     assert compute_processing_fingerprint(
-        settings, requested_language="pt"
+        settings, requested_language=Language("pt")
     ) != compute_processing_fingerprint(settings)
     assert compute_processing_fingerprint(
-        settings, source_type="youtube"
-    ) != compute_processing_fingerprint(settings, source_type="telegram_audio")
+        settings, source_type=MediaSourceType.YOUTUBE
+    ) != compute_processing_fingerprint(settings, source_type=MediaSourceType.TELEGRAM_AUDIO)
     payload = processing_fingerprint_payload(settings)
     for forbidden in (
         "telegram_bot_token",
@@ -152,7 +152,7 @@ def test_snapshot_v2_writes_truthful_unknowns_and_v1_remains_readable(tmp_path: 
         transcription_source="whisperx",
     )
     snapshot = TranscriptSnapshot(
-        metadata=VideoMetadata(
+        metadata=MediaMetadata(
             video_id=VideoId("dQw4w9WgXcQ"),
             title="Unknown",
             channel="Channel",

@@ -39,7 +39,7 @@ from yt_transcriber_bot.application.ports.youtube_downloader import (
     YouTubeDownloader,
 )
 from yt_transcriber_bot.domain.entities.job import Job, JobStatus
-from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
+from yt_transcriber_bot.domain.entities.media_metadata import MediaMetadata
 from yt_transcriber_bot.domain.value_objects.audio_track import AudioTrackSelection
 from yt_transcriber_bot.domain.value_objects.duration import Duration
 from yt_transcriber_bot.domain.value_objects.language import Language
@@ -52,7 +52,7 @@ from yt_transcriber_bot.domain.value_objects.video_id import VideoId
 
 @dataclass
 class FakeYouTubeDownloader(YouTubeDownloader):
-    metadata: VideoMetadata | None = None
+    metadata: MediaMetadata | None = None
     subtitles: tuple[SubtitleTrack, ...] = ()
     fetched_subtitle: FetchedSubtitle | None = None
     audio_payload: bytes = b"FAKE_AUDIO_BYTES"
@@ -62,11 +62,11 @@ class FakeYouTubeDownloader(YouTubeDownloader):
     raise_on_audio: Exception | None = None
     raise_on_list_subtitles: Exception | None = None
 
-    def fetch_metadata(self, video_id: VideoId) -> VideoMetadata:
+    def fetch_metadata(self, video_id: VideoId) -> MediaMetadata:
         if self.raise_on_metadata is not None:
             raise self.raise_on_metadata
         if self.metadata is None:
-            self.metadata = VideoMetadata(
+            self.metadata = MediaMetadata(
                 video_id=video_id,
                 title="Video de Teste",
                 channel="Canal Fake",

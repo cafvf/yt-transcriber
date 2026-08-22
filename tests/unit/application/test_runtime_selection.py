@@ -13,6 +13,7 @@ from yt_transcriber_bot.application.runtime_selection import (
 )
 from yt_transcriber_bot.domain.value_objects.compute_type import ComputeKind
 from yt_transcriber_bot.domain.value_objects.device import DeviceKind
+from yt_transcriber_bot.domain.value_objects.language import Language
 from yt_transcriber_bot.domain.value_objects.model_name import ModelName
 
 
@@ -176,7 +177,7 @@ class TestLanguageAwareModelPolicy:
         plan = select_runtime(
             settings,
             _hw(has_cuda=False),
-            language_code="pt",
+            language=Language("pt"),
         )
         assert plan.model.name == settings.whisper_model_pt
         assert "idioma pt" in plan.reason
@@ -186,7 +187,7 @@ class TestLanguageAwareModelPolicy:
         plan = select_runtime(
             settings,
             _hw(has_cuda=False),
-            language_code="en",
+            language=Language("en"),
         )
         assert plan.model.name == settings.whisper_model_en
         assert "idioma en" in plan.reason
@@ -195,7 +196,7 @@ class TestLanguageAwareModelPolicy:
         plan = select_runtime(
             _settings(whisper_model="small"),
             _hw(has_cuda=False),
-            language_code="pt",
+            language=Language("pt"),
         )
         assert plan.model.name == "small"
         assert "modelo fixo" in plan.reason

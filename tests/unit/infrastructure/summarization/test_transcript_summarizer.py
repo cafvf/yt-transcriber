@@ -7,8 +7,8 @@ from types import ModuleType
 
 import pytest
 
+from yt_transcriber_bot.domain.entities.media_metadata import MediaMetadata
 from yt_transcriber_bot.domain.entities.transcript import Transcript, TranscriptSegment
-from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
 from yt_transcriber_bot.domain.value_objects.duration import Duration
 from yt_transcriber_bot.domain.value_objects.language import Language
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
@@ -51,7 +51,7 @@ def _snapshot_repo(tmp_path: Path) -> TranscriptSnapshotRepository:
     repo.save(
         "video",
         TranscriptSnapshot(
-            metadata=VideoMetadata(
+            metadata=MediaMetadata(
                 video_id=VideoId("dQw4w9WgXcQ"),
                 title="Vídeo de Teste",
                 channel="Canal",
@@ -162,7 +162,7 @@ def test_summary_service_normalizes_entities_from_canonical_segments(
     repo.save(
         "video",
         TranscriptSnapshot(
-            metadata=VideoMetadata(
+            metadata=MediaMetadata(
                 video_id=VideoId("dQw4w9WgXcQ"),
                 title="Vídeo de Teste",
                 channel="Canal",

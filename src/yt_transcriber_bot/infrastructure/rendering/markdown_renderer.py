@@ -18,8 +18,8 @@ from yt_transcriber_bot.application.ports.transcript_renderer import (
     TranscriptRenderer,
     TranscriptRenderRequest,
 )
+from yt_transcriber_bot.domain.entities.media_metadata import MediaMetadata
 from yt_transcriber_bot.domain.entities.transcript import SpeakerTurn, Transcript
-from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
 from yt_transcriber_bot.domain.value_objects.duration import Duration
 from yt_transcriber_bot.infrastructure.text.normalization import normalize_artifact_text
 
@@ -27,7 +27,7 @@ RenderContext = TranscriptRenderContext
 
 
 class MarkdownTranscriptRenderer(TranscriptRenderer):
-    """Converte (VideoMetadata, Transcript, RenderContext) em string Markdown.
+    """Converte (MediaMetadata, Transcript, RenderContext) em string Markdown.
 
     A saída é otimizada para leitura humana, não apenas para arquivamento:
     turnos muito longos são quebrados em blocos menores e o texto é
@@ -50,7 +50,7 @@ class MarkdownTranscriptRenderer(TranscriptRenderer):
 
     def render(
         self,
-        metadata: VideoMetadata,
+        metadata: MediaMetadata,
         transcript: Transcript,
         context: RenderContext,
         *,
@@ -77,7 +77,7 @@ class MarkdownTranscriptRenderer(TranscriptRenderer):
 
     def _render_header(
         self,
-        metadata: VideoMetadata,
+        metadata: MediaMetadata,
         transcript: Transcript,
         context: RenderContext,
         aliases: Mapping[str, str] | None = None,

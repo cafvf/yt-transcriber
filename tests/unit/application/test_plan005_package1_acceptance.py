@@ -35,7 +35,7 @@ from yt_transcriber_bot.application.workflows.admission import (
 from yt_transcriber_bot.application.workflows.execution import ExecutionLifecycleService
 from yt_transcriber_bot.application.workflows.history import CompletedHistoryWorkflow
 from yt_transcriber_bot.domain.entities.job import Job, JobStatus
-from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
+from yt_transcriber_bot.domain.entities.media_metadata import MediaMetadata
 from yt_transcriber_bot.domain.value_objects.media_source import MediaSource
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
 from yt_transcriber_bot.infrastructure.logging.execution_audit import ExecutionAuditLogger
@@ -159,7 +159,7 @@ def test_p05_001_and_p05_005_unknown_youtube_duration_stops_before_expensive_wor
     fake_diarization: FakeDiarizationEngine,
 ) -> None:
     video_id = VideoId("dQw4w9WgXcQ")
-    fake_downloader.metadata = VideoMetadata(
+    fake_downloader.metadata = MediaMetadata(
         video_id=video_id,
         title="Duração desconhecida",
         channel="Canal",
@@ -283,7 +283,7 @@ def test_p05_004_terminal_history_does_not_block_fresh_submission(
         delivery_chat_id=10,
         requested_language=None,
         reprocess=False,
-        config_signature="package1",
+        processing_fingerprint="package1",
     )
 
     assert isinstance(result, YoutubeAdmission)

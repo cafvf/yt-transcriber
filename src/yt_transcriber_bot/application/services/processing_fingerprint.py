@@ -5,14 +5,13 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from yt_transcriber_bot.application.config import AppSettings
+from yt_transcriber_bot.application.config import AppSettings
+from yt_transcriber_bot.domain.value_objects.language import Language
+from yt_transcriber_bot.domain.value_objects.media_source import MediaSourceType
 
 PROCESSING_FINGERPRINT_VERSION = 1
 
-# Apenas parâmetros de configuração que podem alterar o resultado/evidência.
 SIGNIFICANT_FIELDS: tuple[str, ...] = (
     "whisper_model",
     "whisper_model_pt",
@@ -42,15 +41,23 @@ class ConfigChange:
     new_value: str
 
 
+def _language_code(value: Language | None) -> str | None:
+    return value.code if value is not None else None
+
+
+def _source_type_value(value: MediaSourceType | None) -> str | None:
+    return value.value if value is not None else None
+
+
 def processing_fingerprint_payload(
     settings: AppSettings,
     *,
-    requested_language: str | None = None,
-    source_type: str | None = None,
+    requested_language: Language | None = None,
+    source_type: MediaSourceType | None = None,
 ) -> dict[str, object]:
     payload: dict[str, object] = dict(_FIXED_PROCESSING_POLICY)
-    payload["requested_language"] = (requested_language or "").strip().lower() or None
-    payload["source_type"] = (source_type or "").strip().lower() or None
+    payload["requested_language"] = _language_code(requested_language)
+    payload["source_type"] = _source_type_value(source_type)
     for field in SIGNIFICANT_FIELDS:
         value = getattr(settings, field)
         payload[field] = list(value) if isinstance(value, tuple) else value
@@ -60,24 +67,20 @@ def processing_fingerprint_payload(
 def compute_processing_fingerprint(
     settings: AppSettings,
     *,
-    requested_language: str | None = None,
-    source_type: str | None = None,
+    requested_language: Language | None = None,
+    source_type: MediaSourceType | None = None,
 ) -> str:
     raw = json.dumps(
         processing_fingerprint_payload(
-            settings, requested_language=requested_language, source_type=source_type
+            settings,
+            requested_language=requested_language,
+            source_type=source_type,
         ),
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=True,
     ).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()[:16]
-
-
-def compute_config_signature(settings: AppSettings) -> str:
-    """Nome de compatibilidade; delega ao único fingerprint canônico."""
-
-    return compute_processing_fingerprint(settings)
 
 
 def describe_config(settings: AppSettings) -> dict[str, str]:
@@ -90,5 +93,11 @@ def diff_configs(old: dict[str, str], new: dict[str, str]) -> tuple[ConfigChange
         old_v = old.get(field, "<n/a>")
         new_v = new.get(field, "<n/a>")
         if old_v != new_v:
-            changes.append(ConfigChange(field=field, old_value=old_v, new_value=new_v))
+            changes.append(
+                ConfigChange(
+                    field=field,
+                    old_value=old_v,
+                    new_value=new_v,
+                )
+            )
     return tuple(changes)

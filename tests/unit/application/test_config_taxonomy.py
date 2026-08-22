@@ -19,6 +19,7 @@ def isolated_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         "SUMMARY_API_KEY",
         "YOUTUBE_COOKIES_FILE",
         "YOUTUBE_COOKIES_BROWSER",
+        "MAX_MEDIA_DURATION_MIN",
         "MAX_VIDEO_DURATION_MIN",
         "YT_TRANSCRIBER_ENV_FILE",
     ):
@@ -72,11 +73,11 @@ def test_approved_operator_environment_names_remain_accepted(
     assert settings.credentials.summary_api_key == "env-key"
     assert settings.credentials.youtube_cookies_file == "/tmp/env-cookies.txt"
     assert settings.credentials.youtube_cookies_browser == "firefox"
-    assert settings.max_video_duration_min == 17
+    assert settings.max_media_duration_min == 17
 
 
 def test_generic_media_view_uses_source_neutral_internal_name(isolated_env: None) -> None:
-    settings = AppSettings(max_video_duration_min=23)
+    settings = AppSettings(max_media_duration_min=23)
     media = settings.media_processing
     assert isinstance(media, MediaProcessingSettings)
     assert media.max_media_duration_min == 23

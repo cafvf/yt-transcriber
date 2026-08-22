@@ -26,8 +26,8 @@ from yt_transcriber_bot.application.ports.transcript_renderer import (
     TranscriptRenderRequest,
 )
 from yt_transcriber_bot.application.services.rename_speakers import RenameSpeakersService
+from yt_transcriber_bot.domain.entities.media_metadata import MediaMetadata
 from yt_transcriber_bot.domain.entities.transcript import Transcript, TranscriptSegment
-from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
 from yt_transcriber_bot.domain.value_objects.duration import Duration
 from yt_transcriber_bot.domain.value_objects.language import Language
 from yt_transcriber_bot.domain.value_objects.provenance import ProcessingProvenance
@@ -67,14 +67,14 @@ class InMemoryCanonicalTranscriptStore(CanonicalTranscriptStore):
     def load(self, reference: str) -> CanonicalTranscriptRecord | None:
         return self.records.get(reference)
 
-    def load_metadata(self, reference: str) -> VideoMetadata | None:
+    def load_metadata(self, reference: str) -> MediaMetadata | None:
         record = self.load(reference)
         return record.metadata if record is not None else None
 
     def load_metadata_many(
         self,
         references: tuple[str, ...],
-    ) -> dict[str, VideoMetadata]:
+    ) -> dict[str, MediaMetadata]:
         return {
             reference: record.metadata
             for reference in references
@@ -125,7 +125,7 @@ class FakeTokenizer:
 
 def _record() -> CanonicalTranscriptRecord:
     return CanonicalTranscriptRecord(
-        metadata=VideoMetadata(
+        metadata=MediaMetadata(
             video_id=VideoId("dQw4w9WgXcQ"),
             title="Contrato canônico",
             channel="Canal",

@@ -12,6 +12,7 @@ from yt_transcriber_bot.application.services.startup_recovery import (
     StartupRecoveryService,
 )
 from yt_transcriber_bot.domain.entities.job import Job, JobStatus
+from yt_transcriber_bot.domain.value_objects.language import Language
 from yt_transcriber_bot.domain.value_objects.media_source import MediaSource
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
 
@@ -57,7 +58,7 @@ def _advance(job: Job, target: JobStatus) -> None:
 
 
 def test_pending_youtube_with_valid_request_context_is_requeued() -> None:
-    job = Job.new(VideoId("dQw4w9WgXcQ"), 42, requested_language="pt")
+    job = Job.new(VideoId("dQw4w9WgXcQ"), 42, requested_language=Language("pt"))
     context = JobRequestContext(
         job_id=job.job_id,
         delivery_chat_id=10,

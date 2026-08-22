@@ -12,11 +12,7 @@ from yt_transcriber_bot.domain.value_objects.video_id import VideoId
 
 @dataclass(frozen=True, slots=True)
 class MediaMetadata:
-    """Metadados conhecidos; fatos ausentes permanecem ``None``.
-
-    O nome histórico ``VideoMetadata`` é mantido como alias abaixo para evitar
-    uma migração puramente nominal em consumidores internos nesta fase.
-    """
+    """Metadados conhecidos; fatos ausentes permanecem ``None``."""
 
     video_id: VideoId | None
     title: str
@@ -43,7 +39,3 @@ class MediaMetadata:
         if self.video_id is None:
             raise ValueError("Mídia sem URL canônica")
         return self.video_id.canonical_url()
-
-
-# Compatibilidade de import durante a migração interna.
-VideoMetadata = MediaMetadata

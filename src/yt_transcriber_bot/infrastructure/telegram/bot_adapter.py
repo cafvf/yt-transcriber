@@ -38,7 +38,7 @@ from yt_transcriber_bot.application.ports.incoming_media import (
 from yt_transcriber_bot.application.ports.job_repository import JobRepository
 from yt_transcriber_bot.application.ports.staging_cleanup import PrivateStagingCleanup
 from yt_transcriber_bot.application.ports.text_generation import TextGenerationError
-from yt_transcriber_bot.application.services.config_signature import (
+from yt_transcriber_bot.application.services.processing_fingerprint import (
     compute_processing_fingerprint,
 )
 from yt_transcriber_bot.application.services.rename_speakers import RenameResult
@@ -87,6 +87,7 @@ from yt_transcriber_bot.application.workflows.operations import OperationalWorkf
 from yt_transcriber_bot.application.workflows.summary import SummaryWorkflow
 from yt_transcriber_bot.application.workflows.text_search import TextSearchWorkflow
 from yt_transcriber_bot.domain.entities.job import Job
+from yt_transcriber_bot.domain.value_objects.language import Language
 from yt_transcriber_bot.domain.value_objects.media_source import MediaSource, MediaSourceType
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
 from yt_transcriber_bot.infrastructure.logging.execution_audit import ExecutionAuditLogger
@@ -372,7 +373,7 @@ class TelegramBotAdapter:
         media_rejection = validate_media_submission(
             media,
             max_media_size_bytes=self._settings.telegram_max_media_size_mb * 1024 * 1024,
-            max_duration_seconds=self._settings.max_video_duration_min * 60,
+            max_duration_seconds=self._settings.max_media_duration_min * 60,
         )
         if media_rejection is not None:
             await self._send_text(chat_id, self._media_admission_rejection_text(media_rejection))
@@ -385,9 +386,9 @@ class TelegramBotAdapter:
             queue_state=self._queue_admission_state(),
             media=media,
             user_id=user_id,
-            config_signature=compute_processing_fingerprint(
+            processing_fingerprint=compute_processing_fingerprint(
                 self._settings,
-                source_type=MediaSourceType.TELEGRAM_AUDIO.value,
+                source_type=MediaSourceType.TELEGRAM_AUDIO,
             ),
         )
         if isinstance(prepared, AdmissionRejection):
@@ -419,7 +420,7 @@ class TelegramBotAdapter:
                 source_locator=str(path),
                 source_title=Path(media.file_name or "Áudio do Telegram").stem,
                 duration_seconds=duration_seconds,
-                max_duration_seconds=self._settings.max_video_duration_min * 60,
+                max_duration_seconds=self._settings.max_media_duration_min * 60,
                 request_context_saver=self._save_request_context_if_possible,
             )
         except Exception as exc:
@@ -494,7 +495,7 @@ class TelegramBotAdapter:
         if rejection.code is AdmissionRejectionCode.MEDIA_TOO_LARGE:
             return f"Áudio excede o limite de {self._settings.telegram_max_media_size_mb} MB."
         if rejection.code is AdmissionRejectionCode.MEDIA_TOO_LONG:
-            return f"Áudio excede o limite de {self._settings.max_video_duration_min} min."
+            return f"Áudio excede o limite de {self._settings.max_media_duration_min} min."
         return "Não foi possível validar o áudio recebido."
 
     async def _handle_text_command(self, *, chat_id: int, user_id: int, text: str) -> bool:
@@ -583,12 +584,12 @@ class TelegramBotAdapter:
             url=url,
             user_id=user_id,
             delivery_chat_id=chat_id,
-            requested_language=requested_language,
+            requested_language=(Language(requested_language) if requested_language else None),
             reprocess=redo,
-            config_signature=compute_processing_fingerprint(
+            processing_fingerprint=compute_processing_fingerprint(
                 self._settings,
-                requested_language=requested_language,
-                source_type=MediaSourceType.YOUTUBE.value,
+                requested_language=(Language(requested_language) if requested_language else None),
+                source_type=MediaSourceType.YOUTUBE,
             ),
             request_context_saver=self._save_request_context_if_possible,
         )
@@ -664,13 +665,21 @@ class TelegramBotAdapter:
             items.append(
                 QueuedSubmission(
                     video_id=current.payload.video_id,
-                    requested_language=current.payload.requested_language,
+                    requested_language=(
+                        Language(current.payload.requested_language)
+                        if current.payload.requested_language
+                        else None
+                    ),
                 )
             )
         items.extend(
             QueuedSubmission(
                 video_id=item.payload.video_id,
-                requested_language=item.payload.requested_language,
+                requested_language=(
+                    Language(item.payload.requested_language)
+                    if item.payload.requested_language
+                    else None
+                ),
             )
             for item in pending
         )
@@ -1491,7 +1500,7 @@ class TelegramBotAdapter:
             video_id=_video_id_value(payload.video_id),
             user_id=payload.user_id,
             requested_language=payload.requested_language or "auto",
-            config_signature=job.config_signature,
+            processing_fingerprint=job.processing_fingerprint,
         )
 
         def audit_cb(event: str, fields: dict[str, object]) -> None:
@@ -1512,7 +1521,9 @@ class TelegramBotAdapter:
                     progress_diarize=progress_diarize_cb,
                     audit=audit_cb,
                     cancel_event=item.cancel_event,
-                    requested_language=payload.requested_language,
+                    requested_language=(
+                        Language(payload.requested_language) if payload.requested_language else None
+                    ),
                     source_locator=payload.url,
                 ),
             )
@@ -1652,13 +1663,16 @@ class TelegramBotAdapter:
         job = Job.new(
             video_id=video_id,
             user_id=payload.user_id,
-            config_signature=compute_processing_fingerprint(
+            processing_fingerprint=compute_processing_fingerprint(
                 self._settings,
-                requested_language=payload.requested_language,
-                source_type=source_type.value,
+                requested_language=(
+                    Language(payload.requested_language) if payload.requested_language else None
+                ),
+                source_type=source_type,
             ),
-            requested_language=payload.requested_language,
-            artifact_policy="audio+markdown",
+            requested_language=(
+                Language(payload.requested_language) if payload.requested_language else None
+            ),
             media_source=media_source,
             source_title=payload.source_title,
             source_duration_seconds=payload.source_duration_seconds,
@@ -1718,8 +1732,8 @@ class TelegramBotAdapter:
         ):
             return
         lang_line = (
-            f"\n🌐 Idioma informado: {job.requested_language}"
-            if job.requested_language
+            f"\n🌐 Idioma informado: {job.requested_language.code}"
+            if job.requested_language is not None
             else "\n🌐 Idioma: automático"
         )
         message_id = await self._send_text(
@@ -1734,7 +1748,9 @@ class TelegramBotAdapter:
             url=request_context.source_locator,
             video_id=job.video_id,
             progress_message_id=message_id,
-            requested_language=job.requested_language,
+            requested_language=(
+                job.requested_language.code if job.requested_language is not None else None
+            ),
             media_source=job.media_source,
             source_title=job.source_title,
             source_duration_seconds=job.source_duration_seconds,
@@ -1745,7 +1761,9 @@ class TelegramBotAdapter:
             job_id=job.job_id,
             user_id=job.requested_by_user_id,
             video_id=_video_id_value(job.video_id),
-            requested_language=job.requested_language or "auto",
+            requested_language=(
+                job.requested_language.code if job.requested_language is not None else "auto"
+            ),
             queue_position=item.enqueued_position,
         )
         if item.enqueued_position > 1:

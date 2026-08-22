@@ -20,6 +20,7 @@ from yt_transcriber_bot.application.use_cases.transcribe_video import (
 )
 from yt_transcriber_bot.application.workflows.execution_queue import QueuedItem
 from yt_transcriber_bot.domain.entities.job import Job, JobStatus
+from yt_transcriber_bot.domain.value_objects.language import Language
 from yt_transcriber_bot.domain.value_objects.media_source import MediaSource
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
 from yt_transcriber_bot.infrastructure.persistence.sqlalchemy.job_repository import (
@@ -752,7 +753,7 @@ async def test_recovery_requeues_telegram_media_without_exposing_staging_path(
         media_source=MediaSource.telegram_audio("private-file-id"),
         source_title="Mensagem de voz",
         source_duration_seconds=37,
-        requested_language="pt",
+        requested_language=Language("pt"),
     )
     request_context = JobRequestContext(
         job.job_id, delivery_chat_id=10, source_locator="/private/staging/private-file-id.ogg"
@@ -787,8 +788,8 @@ async def test_start_recovers_pending_job_from_sqlite_file(
     pending = Job.new(
         VideoId("dQw4w9WgXcQ"),
         user_id=42,
-        config_signature="sig",
-        requested_language="pt",
+        processing_fingerprint="sig",
+        requested_language=Language("pt"),
     )
     repo.save(pending)
     repo.save_request_context(JobRequestContext(pending.job_id, 10, "https://youtu.be/dQw4w9WgXcQ"))
@@ -819,7 +820,7 @@ async def test_start_marks_interrupted_jobs_from_sqlite_file_and_notifies(
     active = Job.new(
         VideoId("dQw4w9WgXcQ"),
         user_id=42,
-        config_signature="sig",
+        processing_fingerprint="sig",
     )
     for status in (
         JobStatus.ACQUIRING,
@@ -832,7 +833,7 @@ async def test_start_marks_interrupted_jobs_from_sqlite_file_and_notifies(
     delivering = Job.new(
         VideoId("aaaaaaaaaaa"),
         user_id=42,
-        config_signature="sig",
+        processing_fingerprint="sig",
     )
     for status in (
         JobStatus.ACQUIRING,
@@ -877,7 +878,7 @@ async def test_startup_recovery_runs_only_once_per_adapter_instance(
     pending = Job.new(
         VideoId("dQw4w9WgXcQ"),
         user_id=42,
-        config_signature="sig",
+        processing_fingerprint="sig",
     )
     repo.save(pending)
     repo.save_request_context(JobRequestContext(pending.job_id, 10, "https://youtu.be/dQw4w9WgXcQ"))

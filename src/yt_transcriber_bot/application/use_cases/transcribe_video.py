@@ -16,7 +16,9 @@ from yt_transcriber_bot.application.pipeline.runner import (
     PipelineRunner,
     PipelineStep,
 )
-from yt_transcriber_bot.application.pipeline.source_acquisition import SourceAcquisitionResolver
+from yt_transcriber_bot.application.pipeline.source_acquisition import (
+    SourceAcquisitionResolver,
+)
 from yt_transcriber_bot.application.pipeline.steps import (
     ConvertAudioStep,
     DiarizeStep,
@@ -27,18 +29,23 @@ from yt_transcriber_bot.application.pipeline.steps import (
     TranscriptionStepProgress,
 )
 from yt_transcriber_bot.application.ports.audio_converter import AudioConverter
-from yt_transcriber_bot.application.ports.canonical_transcript import CanonicalTranscriptStore
+from yt_transcriber_bot.application.ports.canonical_transcript import (
+    CanonicalTranscriptStore,
+)
 from yt_transcriber_bot.application.ports.diarization_engine import DiarizationEngine
 from yt_transcriber_bot.application.ports.gpu_detector import GpuDetector
 from yt_transcriber_bot.application.ports.job_repository import JobRepository
 from yt_transcriber_bot.application.ports.transcript_renderer import TranscriptRenderer
-from yt_transcriber_bot.application.ports.transcription_engine import TranscriptionEngine
+from yt_transcriber_bot.application.ports.transcription_engine import (
+    TranscriptionEngine,
+)
 from yt_transcriber_bot.application.ports.youtube_downloader import YouTubeDownloader
-from yt_transcriber_bot.application.services.config_signature import (
+from yt_transcriber_bot.application.services.processing_fingerprint import (
     compute_processing_fingerprint,
 )
 from yt_transcriber_bot.application.services.sanitization import sanitize_text
 from yt_transcriber_bot.domain.entities.job import Job, JobStatus
+from yt_transcriber_bot.domain.value_objects.language import Language
 
 logger = logging.getLogger(__name__)
 
@@ -83,14 +90,16 @@ class TranscribeVideoUseCase:
         progress_diarize: Callable[[float, str], None] | None = None,
         audit: AuditFn | None = None,
         cancel_event: threading.Event | None = None,
-        requested_language: str | None = None,
+        requested_language: Language | None = None,
         source_locator: str | None = None,
     ) -> TranscribeVideoResult:
         deps = self._deps
-        effective_requested_language = requested_language or job.requested_language
+        effective_requested_language = (
+            requested_language if requested_language is not None else job.requested_language
+        )
         job.requested_language = effective_requested_language
-        source_type = job.media_source.source_type.value if job.media_source else None
-        job.config_signature = compute_processing_fingerprint(
+        source_type = job.media_source.source_type if job.media_source else None
+        job.processing_fingerprint = compute_processing_fingerprint(
             deps.settings,
             requested_language=effective_requested_language,
             source_type=source_type,
@@ -120,19 +129,34 @@ class TranscribeVideoUseCase:
             failure_reason = sanitize_text(str(exc), deps.settings)
             job.transition_to(JobStatus.FAILED, error=failure_reason)
             deps.repository.save(job)
-            return self._result(ctx, failure_reason=failure_reason, canonical=False)
+            return self._result(
+                ctx,
+                failure_reason=failure_reason,
+                canonical=False,
+            )
         except Exception as exc:
-            failure_reason = sanitize_text(f"{type(exc).__name__}: {exc}", deps.settings)
+            failure_reason = sanitize_text(
+                f"{type(exc).__name__}: {exc}",
+                deps.settings,
+            )
             logger.error("Pipeline falhou: %s", failure_reason)
             job.transition_to(JobStatus.FAILED, error=failure_reason)
             deps.repository.save(job)
-            return self._result(ctx, failure_reason=failure_reason, canonical=False)
+            return self._result(
+                ctx,
+                failure_reason=failure_reason,
+                canonical=False,
+            )
 
         if ctx.final_md_path is None or not job.canonical_transcript_ref:
             failure_reason = "Evidência canônica da transcrição não foi persistida."
             job.transition_to(JobStatus.FAILED, error=failure_reason)
             deps.repository.save(job)
-            return self._result(ctx, failure_reason=failure_reason, canonical=False)
+            return self._result(
+                ctx,
+                failure_reason=failure_reason,
+                canonical=False,
+            )
 
         job.transition_to(JobStatus.DELIVERING)
         deps.repository.save(job)
@@ -151,8 +175,10 @@ class TranscribeVideoUseCase:
             md_path=ctx.final_md_path if canonical else None,
             audio_path=ctx.converted_audio_path if canonical else None,
             diagnostics=tuple(ctx.diagnostics),
-            language_code=ctx.transcription_language,
-            language_source=ctx.language_source,
+            language_code=(
+                ctx.transcription_language.code if ctx.transcription_language is not None else None
+            ),
+            language_source=ctx.language_source.value,
             language_confidence=ctx.transcription_confidence,
             canceled=canceled,
             failure_reason=failure_reason,
@@ -177,13 +203,17 @@ class TranscribeVideoUseCase:
             .resolve(source.source_type)
             .steps()
         )
-        fingerprint = job.config_signature or compute_processing_fingerprint(
+        fingerprint = job.processing_fingerprint or compute_processing_fingerprint(
             deps.settings,
             requested_language=job.requested_language,
-            source_type=source.source_type.value,
+            source_type=source.source_type,
         )
         common_suffix: tuple[PipelineStep, ...] = (
-            ConvertAudioStep(deps.converter, deps.settings.processed_dir(), deps.settings),
+            ConvertAudioStep(
+                deps.converter,
+                deps.settings.processed_dir(),
+                deps.settings,
+            ),
             SelectRuntimeStep(deps.gpu_detector, deps.settings),
             TranscribeStep(
                 deps.transcription_engine,

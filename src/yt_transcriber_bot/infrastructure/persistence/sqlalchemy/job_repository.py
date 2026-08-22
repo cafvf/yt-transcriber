@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from yt_transcriber_bot.application.job_request_context import JobRequestContext
 from yt_transcriber_bot.application.ports.job_repository import JobRepository
 from yt_transcriber_bot.domain.entities.job import Job, JobStatus
+from yt_transcriber_bot.domain.value_objects.language import Language
 from yt_transcriber_bot.domain.value_objects.media_source import MediaSource, MediaSourceType
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
 from yt_transcriber_bot.infrastructure.persistence.sqlalchemy.models import (
@@ -33,13 +34,14 @@ def _to_model(job: Job, model: JobModel | None = None) -> JobModel:
     model.requested_at = _ensure_aware(job.requested_at)
     model.updated_at = _ensure_aware(job.updated_at)
     model.error_message = job.error_message
-    model.config_signature = job.config_signature
+    model.config_signature = job.processing_fingerprint
     model.source_type = media_source.source_type.value
     model.canonical_reference = media_source.canonical_reference
     model.source_title = job.source_title
     model.source_duration_seconds = job.source_duration_seconds
-    model.requested_language = job.requested_language
-    model.artifact_policy = job.artifact_policy
+    model.requested_language = (
+        job.requested_language.code if job.requested_language is not None else None
+    )
     model.canonical_transcript_ref = job.canonical_transcript_ref
     model.set_renames(job.speaker_renames)
     model.md_path = job.md_path
@@ -69,7 +71,7 @@ def _to_entity(model: JobModel) -> Job:
         requested_at=_ensure_aware(model.requested_at),
         updated_at=_ensure_aware(model.updated_at),
         error_message=model.error_message,
-        config_signature=model.config_signature,
+        processing_fingerprint=model.config_signature,
         media_source=MediaSource(
             source_type=source_type,
             canonical_reference=model.canonical_reference
@@ -77,8 +79,9 @@ def _to_entity(model: JobModel) -> Job:
         ),
         source_title=model.source_title,
         source_duration_seconds=model.source_duration_seconds,
-        requested_language=model.requested_language,
-        artifact_policy=model.artifact_policy,
+        requested_language=(
+            Language(model.requested_language) if model.requested_language else None
+        ),
         speaker_renames=model.renames_dict(),
         canonical_transcript_ref=model.canonical_transcript_ref,
         md_path=model.md_path,

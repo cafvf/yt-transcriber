@@ -43,7 +43,7 @@ from yt_transcriber_bot.application.use_cases.transcribe_video import (
     TranscribeVideoUseCase,
 )
 from yt_transcriber_bot.domain.entities.job import Job, JobStatus
-from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
+from yt_transcriber_bot.domain.entities.media_metadata import MediaMetadata
 from yt_transcriber_bot.domain.value_objects.duration import Duration
 from yt_transcriber_bot.domain.value_objects.language import Language
 from yt_transcriber_bot.domain.value_objects.media_source import MediaSource
@@ -144,7 +144,7 @@ class TestHappyPath:
         fake_transcription: FakeTranscriptionEngine,
         fake_diarization: FakeDiarizationEngine,
     ) -> None:
-        fake_downloader.metadata = VideoMetadata(
+        fake_downloader.metadata = MediaMetadata(
             video_id=VideoId(value="dQw4w9WgXcQ"),
             title="Meu Vídeo Especial",
             channel="Canal X",
@@ -473,7 +473,7 @@ class TestRejections:
         fake_diarization: FakeDiarizationEngine,
     ) -> None:
         # max default é 180 min. Vídeo de 200 min deve ser rejeitado.
-        fake_downloader.metadata = VideoMetadata(
+        fake_downloader.metadata = MediaMetadata(
             video_id=VideoId(value="dQw4w9WgXcQ"),
             title="Muito Longo",
             channel="X",
@@ -505,7 +505,7 @@ class TestRejections:
         fake_transcription: FakeTranscriptionEngine,
         fake_diarization: FakeDiarizationEngine,
     ) -> None:
-        fake_downloader.metadata = VideoMetadata(
+        fake_downloader.metadata = MediaMetadata(
             video_id=VideoId(value="dQw4w9WgXcQ"),
             title="Espanhol",
             channel="X",
@@ -537,7 +537,7 @@ class TestRejections:
         fake_diarization: FakeDiarizationEngine,
     ) -> None:
         # Quando idioma original é desconhecido (None), deixa passar para o Whisper detectar
-        fake_downloader.metadata = VideoMetadata(
+        fake_downloader.metadata = MediaMetadata(
             video_id=VideoId(value="dQw4w9WgXcQ"),
             title="Indeterminado",
             channel="X",

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from pydantic import Field, PrivateAttr, field_validator
+from pydantic import AliasChoices, Field, PrivateAttr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from yt_transcriber_bot.configuration.credentials import ProviderCredentials
@@ -118,6 +118,7 @@ class AppSettings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
+        populate_by_name=True,
     )
 
     _credentials: ProviderCredentials = PrivateAttr()
@@ -172,7 +173,17 @@ class AppSettings(BaseSettings):
     audio_sample_rate_hz: int = Field(default=16000, ge=8000, le=48000)
 
     # ===== Limites e retenção =====
-    max_video_duration_min: int = Field(default=180, ge=1, le=720)
+    max_media_duration_min: int = Field(
+        default=180,
+        ge=1,
+        le=720,
+        validation_alias=AliasChoices(
+            "MAX_MEDIA_DURATION_MIN",
+            "MAX_VIDEO_DURATION_MIN",
+            "max_media_duration_min",
+            "max_video_duration_min",
+        ),
+    )
     retention_count: int = Field(
         default=5, ge=1, le=100, description="N de jobs mantidos antes da política FIFO"
     )
@@ -475,7 +486,7 @@ class AppSettings(BaseSettings):
         """Source-neutral internal view over generic media-processing policy."""
 
         return MediaProcessingSettings(
-            max_media_duration_min=self.max_video_duration_min,
+            max_media_duration_min=self.max_media_duration_min,
             audio_bitrate_kbps=self.audio_bitrate_kbps,
             audio_sample_rate_hz=self.audio_sample_rate_hz,
             allowed_languages=self.allowed_languages,
@@ -498,15 +509,6 @@ class AppSettings(BaseSettings):
 
     def summaries_dir(self) -> Path:
         return self.base_dir / self.summaries_dir_name
-
-    def transcription_signature(self) -> str:
-        """Nome compatível para o fingerprint canônico de processamento."""
-
-        from yt_transcriber_bot.application.services.config_signature import (
-            compute_processing_fingerprint,
-        )
-
-        return compute_processing_fingerprint(self)
 
     def validate_runtime_secrets(self) -> list[str]:
         """Compatibility API delegating validation to the credential owner."""

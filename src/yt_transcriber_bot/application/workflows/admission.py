@@ -1,9 +1,4 @@
-"""Application-owned submission/admission workflow.
-
-This module owns portable admission decisions. It deliberately consumes a
-transport-neutral queue snapshot; TASK-P04-002 may replace the queue mechanism
-without changing these rules.
-"""
+"""Application-owned submission/admission workflow."""
 
 from __future__ import annotations
 
@@ -14,11 +9,18 @@ from enum import StrEnum
 from pathlib import Path
 
 from yt_transcriber_bot.application.job_request_context import JobRequestContext
-from yt_transcriber_bot.application.ports.incoming_media import IncomingMedia, IncomingMediaKind
+from yt_transcriber_bot.application.ports.incoming_media import (
+    IncomingMedia,
+    IncomingMediaKind,
+)
 from yt_transcriber_bot.application.ports.job_repository import JobRepository
 from yt_transcriber_bot.domain.entities.job import Job
+from yt_transcriber_bot.domain.value_objects.language import Language
 from yt_transcriber_bot.domain.value_objects.media_source import MediaSource
-from yt_transcriber_bot.domain.value_objects.video_id import InvalidYouTubeUrlError, VideoId
+from yt_transcriber_bot.domain.value_objects.video_id import (
+    InvalidYouTubeUrlError,
+    VideoId,
+)
 
 RequestContextSaver = Callable[[JobRequestContext], None]
 
@@ -47,7 +49,7 @@ class AdmissionRejection:
 @dataclass(frozen=True, slots=True)
 class QueuedSubmission:
     video_id: VideoId | None
-    requested_language: str | None
+    requested_language: Language | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,17 +90,18 @@ def admit_youtube_submission(
     url: str,
     user_id: int,
     delivery_chat_id: int,
-    requested_language: str | None,
+    requested_language: Language | None,
     reprocess: bool,
-    config_signature: str,
+    processing_fingerprint: str,
     request_context_saver: RequestContextSaver | None = None,
 ) -> YoutubeAdmission | AdmissionRejection:
-    """Validate and persist one YouTube admission without transport classes."""
-
     try:
         video_id = VideoId.from_url(url)
     except (InvalidYouTubeUrlError, ValueError) as exc:
-        return AdmissionRejection(AdmissionRejectionCode.INVALID_SOURCE, str(exc))
+        return AdmissionRejection(
+            AdmissionRejectionCode.INVALID_SOURCE,
+            str(exc),
+        )
 
     if repository is None:
         return AdmissionRejection(AdmissionRejectionCode.PERSISTENCE_UNAVAILABLE)
@@ -112,14 +115,11 @@ def admit_youtube_submission(
     if queue_state.is_full():
         return AdmissionRejection(AdmissionRejectionCode.QUEUE_FULL)
 
-    # Explicit reprocess means "create another Job", not "reuse history".
-    # Both ordinary and reprocess admissions construct a fresh aggregate.
     job = Job.new(
         video_id=video_id,
         user_id=user_id,
-        config_signature=config_signature,
+        processing_fingerprint=processing_fingerprint,
         requested_language=requested_language,
-        artifact_policy="audio+markdown",
     )
     repository.save(job)
     context = JobRequestContext(
@@ -131,7 +131,11 @@ def admit_youtube_submission(
         request_context_saver(context)
     else:
         repository.save_request_context(context)
-    return YoutubeAdmission(job=job, video_id=video_id, is_reprocess=reprocess)
+    return YoutubeAdmission(
+        job=job,
+        video_id=video_id,
+        is_reprocess=reprocess,
+    )
 
 
 def validate_media_submission(
@@ -140,9 +144,15 @@ def validate_media_submission(
     max_media_size_bytes: int,
     max_duration_seconds: int,
 ) -> AdmissionRejection | None:
-    """Apply portable metadata admission rules to incoming audio."""
-
-    allowed_extensions = {".mp3", ".m4a", ".ogg", ".opus", ".wav", ".flac", ".webm"}
+    allowed_extensions = {
+        ".mp3",
+        ".m4a",
+        ".ogg",
+        ".opus",
+        ".wav",
+        ".flac",
+        ".webm",
+    }
     allowed_mimes = {
         "audio/mpeg",
         "audio/mp4",
@@ -175,17 +185,14 @@ def prepare_validated_media_submission(
     queue_state: QueueAdmissionState,
     media: IncomingMedia,
     user_id: int,
-    config_signature: str,
+    processing_fingerprint: str,
 ) -> PreparedMediaAdmission | AdmissionRejection:
-    """Reserve a fresh Job identity after metadata validation, before staging."""
-
     if queue_state.is_full():
         return AdmissionRejection(AdmissionRejectionCode.QUEUE_FULL)
     job = Job.new(
         video_id=None,
         user_id=user_id,
-        config_signature=config_signature,
-        artifact_policy="audio+markdown",
+        processing_fingerprint=processing_fingerprint,
         media_source=MediaSource.telegram_audio(media.file_id),
     )
     return PreparedMediaAdmission(job=job, media=media)
@@ -202,8 +209,6 @@ def commit_media_submission(
     max_duration_seconds: int,
     request_context_saver: RequestContextSaver | None = None,
 ) -> MediaAdmission | AdmissionRejection:
-    """Persist a staged media admission only after duration is known and valid."""
-
     if duration_seconds is None or duration_seconds <= 0:
         return AdmissionRejection(AdmissionRejectionCode.INVALID_MEDIA_DURATION)
     if duration_seconds > max_duration_seconds:

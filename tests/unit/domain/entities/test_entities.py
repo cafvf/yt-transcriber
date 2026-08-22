@@ -7,23 +7,23 @@ from datetime import date
 import pytest
 
 from yt_transcriber_bot.domain.entities.job import Job, JobStatus
+from yt_transcriber_bot.domain.entities.media_metadata import MediaMetadata
 from yt_transcriber_bot.domain.entities.transcript import (
     Transcript,
     TranscriptSegment,
 )
-from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
 from yt_transcriber_bot.domain.value_objects.duration import Duration
 from yt_transcriber_bot.domain.value_objects.language import Language
 from yt_transcriber_bot.domain.value_objects.media_source import MediaSource
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
 
 # ----------------------------------------------------------------------
-# VideoMetadata
+# MediaMetadata
 # ----------------------------------------------------------------------
 
 
-class TestVideoMetadata:
-    def _make(self, **overrides: object) -> VideoMetadata:
+class TestMediaMetadata:
+    def _make(self, **overrides: object) -> MediaMetadata:
         defaults: dict[str, object] = {
             "video_id": VideoId(value="dQw4w9WgXcQ"),
             "title": "Sample Title",
@@ -33,7 +33,7 @@ class TestVideoMetadata:
             "original_language": Language.en(),
         }
         defaults.update(overrides)
-        return VideoMetadata(**defaults)  # type: ignore[arg-type]
+        return MediaMetadata(**defaults)  # type: ignore[arg-type]
 
     def test_construction_with_all_fields(self) -> None:
         meta = self._make()

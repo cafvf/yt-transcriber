@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import uuid4
 
+from yt_transcriber_bot.domain.value_objects.language import Language
 from yt_transcriber_bot.domain.value_objects.media_source import MediaSource, MediaSourceType
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
 
@@ -67,12 +68,7 @@ _ALLOWED_TRANSITIONS: dict[JobStatus, frozenset[JobStatus]] = {
 
 @dataclass
 class Job:
-    """Agregado que registra identidade e ciclo de vida do trabalho.
-
-    A identidade canônica da mídia fica em ``media_source``. Localizadores de
-    aquisição/staging e roteamento de entrega pertencem ao contexto da
-    aplicação e não fazem parte deste agregado.
-    """
+    """Agregado que registra identidade e ciclo de vida do trabalho."""
 
     job_id: str
     video_id: VideoId | None
@@ -81,12 +77,11 @@ class Job:
     requested_at: datetime
     updated_at: datetime
     error_message: str | None = None
-    config_signature: str = ""
+    processing_fingerprint: str = ""
     media_source: MediaSource | None = None
     source_title: str | None = None
     source_duration_seconds: int | None = None
-    requested_language: str | None = None
-    artifact_policy: str = "audio+markdown"
+    requested_language: Language | None = None
     speaker_renames: dict[str, str] = field(default_factory=dict)
     canonical_transcript_ref: str | None = None
     md_path: str | None = None
@@ -94,10 +89,16 @@ class Job:
     log_path: str | None = None
 
     def __post_init__(self) -> None:
+        if self.requested_language is not None and not isinstance(
+            self.requested_language, Language
+        ):
+            raise TypeError("Job.requested_language exige Language | None")
+
         if self.media_source is None:
             if self.video_id is None:
                 raise ValueError("Job sem video_id exige media_source explícito")
             self.media_source = MediaSource.youtube(self.video_id)
+
         if self.media_source.source_type is MediaSourceType.YOUTUBE:
             if self.video_id is None:
                 raise ValueError("Job YouTube exige video_id")
@@ -112,13 +113,12 @@ class Job:
         cls,
         video_id: VideoId | None,
         user_id: int,
-        config_signature: str = "",
+        processing_fingerprint: str = "",
         *,
         media_source: MediaSource | None = None,
         source_title: str | None = None,
         source_duration_seconds: int | None = None,
-        requested_language: str | None = None,
-        artifact_policy: str = "audio+markdown",
+        requested_language: Language | None = None,
     ) -> Job:
         now = datetime.now(UTC)
         return cls(
@@ -128,20 +128,15 @@ class Job:
             requested_by_user_id=user_id,
             requested_at=now,
             updated_at=now,
-            config_signature=config_signature,
+            processing_fingerprint=processing_fingerprint,
             media_source=media_source,
             source_title=source_title,
             source_duration_seconds=source_duration_seconds,
             requested_language=requested_language,
-            artifact_policy=artifact_policy,
         )
 
     def transition_to(self, new_status: JobStatus, error: str | None = None) -> None:
-        """Aplica uma transição legal da máquina de estados.
-
-        Atribuir o mesmo estado é idempotente e não constitui transição
-        semântica: timestamp e erro permanecem inalterados.
-        """
+        """Aplica uma transição legal da máquina de estados."""
 
         if new_status is self.status:
             return

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
+
+from yt_transcriber_bot.domain.value_objects.language import LanguageSource
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,14 +18,33 @@ class ProcessingProvenance:
     diarization_backend: str | None = None
     diarization_model: str | None = None
     diarization_fallback_used: bool | None = None
-    language_source: str | None = None
+    language_source: LanguageSource | None = None
+
+    def __post_init__(self) -> None:
+        if self.language_source is not None and not isinstance(
+            self.language_source, LanguageSource
+        ):
+            raise TypeError("ProcessingProvenance.language_source exige LanguageSource | None")
 
     @classmethod
     def unknown(cls) -> ProcessingProvenance:
         return cls()
 
     def as_dict(self) -> dict[str, str | bool | None]:
-        return asdict(self)
+        return {
+            "processing_path": self.processing_path,
+            "transcription_backend": self.transcription_backend,
+            "transcription_model": self.transcription_model,
+            "device": self.device,
+            "compute_type": self.compute_type,
+            "asr_fallback_used": self.asr_fallback_used,
+            "diarization_backend": self.diarization_backend,
+            "diarization_model": self.diarization_model,
+            "diarization_fallback_used": self.diarization_fallback_used,
+            "language_source": (
+                self.language_source.value if self.language_source is not None else None
+            ),
+        }
 
     @classmethod
     def from_dict(cls, value: object) -> ProcessingProvenance:
@@ -33,6 +54,14 @@ class ProcessingProvenance:
         def text(key: str) -> str | None:
             raw = value.get(key)
             return str(raw) if isinstance(raw, str) and raw else None
+
+        language_source_raw = text("language_source")
+        try:
+            language_source = (
+                LanguageSource(language_source_raw) if language_source_raw is not None else None
+            )
+        except ValueError:
+            language_source = None
 
         asr_fallback = value.get("asr_fallback_used")
         diarization_fallback = value.get("diarization_fallback_used")
@@ -48,5 +77,5 @@ class ProcessingProvenance:
             diarization_fallback_used=(
                 diarization_fallback if isinstance(diarization_fallback, bool) else None
             ),
-            language_source=text("language_source"),
+            language_source=language_source,
         )

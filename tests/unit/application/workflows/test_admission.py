@@ -19,6 +19,7 @@ from yt_transcriber_bot.application.workflows.admission import (
     validate_media_submission,
 )
 from yt_transcriber_bot.domain.entities.job import Job, JobStatus
+from yt_transcriber_bot.domain.value_objects.language import Language
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
 
 
@@ -100,7 +101,7 @@ def test_invalid_youtube_source_is_rejected_before_persistence() -> None:
         delivery_chat_id=11,
         requested_language=None,
         reprocess=False,
-        config_signature="sig",
+        processing_fingerprint="sig",
     )
 
     assert isinstance(result, AdmissionRejection)
@@ -114,13 +115,13 @@ def test_duplicate_is_decided_from_transport_neutral_queue_state() -> None:
 
     result = admit_youtube_submission(
         repository=repository,
-        queue_state=_queue(QueuedSubmission(video_id, "pt")),
+        queue_state=_queue(QueuedSubmission(video_id, Language("pt"))),
         url="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
         user_id=7,
         delivery_chat_id=11,
-        requested_language="pt",
+        requested_language=Language("pt"),
         reprocess=False,
-        config_signature="sig",
+        processing_fingerprint="sig",
     )
 
     assert isinstance(result, AdmissionRejection)
@@ -134,13 +135,13 @@ def test_same_video_with_different_language_remains_admissible() -> None:
 
     result = admit_youtube_submission(
         repository=repository,
-        queue_state=_queue(QueuedSubmission(video_id, "en")),
+        queue_state=_queue(QueuedSubmission(video_id, Language("en"))),
         url="https://youtu.be/dQw4w9WgXcQ",
         user_id=7,
         delivery_chat_id=11,
-        requested_language="pt",
+        requested_language=Language("pt"),
         reprocess=False,
-        config_signature="sig",
+        processing_fingerprint="sig",
     )
 
     assert isinstance(result, YoutubeAdmission)
@@ -158,7 +159,7 @@ def test_queue_capacity_is_application_admission_policy() -> None:
         delivery_chat_id=11,
         requested_language=None,
         reprocess=False,
-        config_signature="sig",
+        processing_fingerprint="sig",
     )
 
     assert isinstance(result, AdmissionRejection)
@@ -173,8 +174,8 @@ def test_reprocess_creates_a_fresh_job_instead_of_reusing_history() -> None:
         "url": "https://youtu.be/dQw4w9WgXcQ",
         "user_id": 7,
         "delivery_chat_id": 11,
-        "requested_language": "pt",
-        "config_signature": "sig",
+        "requested_language": Language("pt"),
+        "processing_fingerprint": "sig",
     }
 
     first = admit_youtube_submission(**kwargs, reprocess=False)
@@ -223,7 +224,7 @@ def test_private_media_is_prepared_then_committed_after_duration_resolution() ->
         queue_state=_queue(),
         media=media,
         user_id=7,
-        config_signature="sig-private",
+        processing_fingerprint="sig-private",
     )
     assert isinstance(prepared, PreparedMediaAdmission)
     assert repository.jobs == {}
@@ -251,7 +252,7 @@ def test_invalid_resolved_duration_never_persists_private_media() -> None:
         queue_state=_queue(),
         media=_media(duration_seconds=None),
         user_id=7,
-        config_signature="sig-private",
+        processing_fingerprint="sig-private",
     )
     assert isinstance(prepared, PreparedMediaAdmission)
 

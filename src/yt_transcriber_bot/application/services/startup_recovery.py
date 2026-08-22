@@ -97,7 +97,6 @@ class StartupRecoveryService:
         if (
             request_context is None
             or request_context.delivery_chat_id is None
-            or not job.artifact_policy.strip()
             or not request_context.source_locator
             or not request_context.source_locator.strip()
             or job.media_source is None

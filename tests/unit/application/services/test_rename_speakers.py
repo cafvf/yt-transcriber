@@ -10,11 +10,11 @@ import pytest
 from yt_transcriber_bot.application.services.rename_speakers import (
     RenameSpeakersService,
 )
+from yt_transcriber_bot.domain.entities.media_metadata import MediaMetadata
 from yt_transcriber_bot.domain.entities.transcript import (
     Transcript,
     TranscriptSegment,
 )
-from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
 from yt_transcriber_bot.domain.value_objects.duration import Duration
 from yt_transcriber_bot.domain.value_objects.language import Language
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
@@ -34,7 +34,7 @@ from yt_transcriber_bot.infrastructure.rendering.markdown_renderer import (
 @pytest.fixture
 def snapshot() -> TranscriptSnapshot:
     return TranscriptSnapshot(
-        metadata=VideoMetadata(
+        metadata=MediaMetadata(
             video_id=VideoId("dQw4w9WgXcQ"),
             title="Teste Rename",
             channel="Ch",

@@ -13,8 +13,8 @@ from yt_transcriber_bot.application.ports.canonical_transcript import (
     CanonicalTranscriptStore,
     TranscriptRenderContext,
 )
+from yt_transcriber_bot.domain.entities.media_metadata import MediaMetadata
 from yt_transcriber_bot.domain.entities.transcript import Transcript, TranscriptSegment
-from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
 from yt_transcriber_bot.domain.value_objects.duration import Duration
 from yt_transcriber_bot.domain.value_objects.language import Language, LanguageSource
 from yt_transcriber_bot.domain.value_objects.provenance import ProcessingProvenance
@@ -72,7 +72,7 @@ class TranscriptSnapshotRepository(CanonicalTranscriptStore):
     def load_reference(self, reference: str) -> TranscriptSnapshot | None:
         return self.load(reference)
 
-    def load_metadata(self, reference: str) -> VideoMetadata | None:
+    def load_metadata(self, reference: str) -> MediaMetadata | None:
         path = self.path_for(reference)
         if not path.is_file():
             return None
@@ -87,8 +87,8 @@ class TranscriptSnapshotRepository(CanonicalTranscriptStore):
         except (KeyError, TypeError, ValueError) as exc:
             raise CanonicalTranscriptCorruptError("snapshot inválido: metadata corrompida") from exc
 
-    def load_metadata_many(self, references: tuple[str, ...]) -> dict[str, VideoMetadata]:
-        metadata: dict[str, VideoMetadata] = {}
+    def load_metadata_many(self, references: tuple[str, ...]) -> dict[str, MediaMetadata]:
+        metadata: dict[str, MediaMetadata] = {}
         for reference in references:
             loaded = self.load_metadata(reference)
             if loaded is not None:
@@ -225,7 +225,7 @@ class TranscriptSnapshotRepository(CanonicalTranscriptStore):
         )
 
     @staticmethod
-    def _decode_metadata(raw: dict[str, object]) -> VideoMetadata:
+    def _decode_metadata(raw: dict[str, object]) -> MediaMetadata:
         upload = raw.get("upload_date")
         original_lang = raw.get("original_language")
         alt_langs = raw.get("alternate_languages", [])
@@ -246,7 +246,7 @@ class TranscriptSnapshotRepository(CanonicalTranscriptStore):
             if duration_seconds is not None and duration_seconds > 0
             else None
         )
-        return VideoMetadata(
+        return MediaMetadata(
             video_id=VideoId(str(raw_video_id)) if raw_video_id else None,
             title=str(raw["title"]),
             channel=str(raw["channel"]),

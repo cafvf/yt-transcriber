@@ -35,6 +35,7 @@ if str(ROOT / "src") not in sys.path:
 from yt_transcriber_bot.application.config import AppSettings
 from yt_transcriber_bot.application.ports.diarization_engine import (
     DiarizationEngine,
+    DiarizationRequest,
     DiarizationResult,
     DiarizedSpeakerSegment,
 )
@@ -50,7 +51,8 @@ from yt_transcriber_bot.application.use_cases.transcribe_video import (
 )
 from yt_transcriber_bot.composition_root import build
 from yt_transcriber_bot.domain.entities.job import Job
-from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
+from yt_transcriber_bot.domain.entities.media_metadata import MediaMetadata
+from yt_transcriber_bot.domain.value_objects.audio_track import AudioTrackSelection
 from yt_transcriber_bot.domain.value_objects.duration import Duration
 from yt_transcriber_bot.domain.value_objects.language import Language
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
@@ -64,8 +66,8 @@ class StubYouTubeDownloader(YouTubeDownloader):
         self._audio_path = audio_path
         self._title = title
 
-    def fetch_metadata(self, video_id: VideoId) -> VideoMetadata:
-        return VideoMetadata(
+    def fetch_metadata(self, video_id: VideoId) -> MediaMetadata:
+        return MediaMetadata(
             video_id=self._vid,
             title=self._title,
             channel="AMI Corpus (E2E sandbox)",
@@ -77,10 +79,22 @@ class StubYouTubeDownloader(YouTubeDownloader):
     def list_subtitles(self, video_id: VideoId) -> tuple[SubtitleTrack, ...]:
         return ()  # nada de legenda — força transcrição real
 
-    def fetch_subtitle(self, video_id: VideoId, track: SubtitleTrack) -> FetchedSubtitle:
+    def fetch_subtitle(
+        self,
+        video_id: VideoId,
+        track: SubtitleTrack,
+        *,
+        cancel_event=None,
+    ) -> FetchedSubtitle:
         raise NotImplementedError
 
-    def download_audio(self, video_id: VideoId, dest_dir: Path) -> DownloadedAudio:
+    def download_audio(
+        self,
+        video_id: VideoId,
+        dest_dir: Path,
+        *,
+        cancel_event=None,
+    ) -> DownloadedAudio:
         # Copia o arquivo original para dest_dir mantendo o container
         import shutil
 
@@ -90,7 +104,7 @@ class StubYouTubeDownloader(YouTubeDownloader):
         return DownloadedAudio(
             audio_path=dest,
             container="wav",
-            used_alternate_track=False,
+            track_selection=AudioTrackSelection.DEFAULT,
             metadata=self.fetch_metadata(video_id),
         )
 
@@ -104,13 +118,9 @@ class StubDiarizationEngine(DiarizationEngine):
 
     def diarize(
         self,
-        audio_path: Path,
-        *,
-        device: str,
-        hf_token: str,
-        min_speakers: int | None = None,
-        max_speakers: int | None = None,
+        request: DiarizationRequest,
     ) -> DiarizationResult:
+        audio_path = request.audio_path
         from contextlib import suppress
 
         # Descobre duração via ffprobe se possível, senão assume 120s
@@ -212,7 +222,7 @@ def main() -> int:
     job = Job.new(
         video_id=video_id,
         user_id=0,
-        config_signature="e2e-sandbox",
+        processing_fingerprint="e2e-sandbox",
     )
 
     logger = logging.getLogger("e2e")

@@ -9,8 +9,8 @@ from yt_transcriber_bot.application.ports.canonical_transcript import (
 )
 from yt_transcriber_bot.application.ports.text_generation import TextGenerationRequest
 from yt_transcriber_bot.application.services.transcript_summary import TranscriptSummaryService
+from yt_transcriber_bot.domain.entities.media_metadata import MediaMetadata
 from yt_transcriber_bot.domain.entities.transcript import Transcript, TranscriptSegment
-from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
 from yt_transcriber_bot.domain.value_objects.language import Language
 
 
@@ -28,11 +28,11 @@ class CanonicalStore(CanonicalTranscriptStore):
     def load(self, reference: str) -> CanonicalTranscriptRecord | None:
         return self.record if reference == "canonical" else None
 
-    def load_metadata(self, reference: str) -> VideoMetadata | None:
+    def load_metadata(self, reference: str) -> MediaMetadata | None:
         record = self.load(reference)
         return record.metadata if record else None
 
-    def load_metadata_many(self, references: tuple[str, ...]) -> dict[str, VideoMetadata]:
+    def load_metadata_many(self, references: tuple[str, ...]) -> dict[str, MediaMetadata]:
         return {
             reference: self.record.metadata for reference in references if reference == "canonical"
         }
@@ -63,7 +63,7 @@ class Tokenizer:
 
 def _record() -> CanonicalTranscriptRecord:
     return CanonicalTranscriptRecord(
-        metadata=VideoMetadata(
+        metadata=MediaMetadata(
             video_id=None,
             title="Áudio de teste",
             channel="Telegram",

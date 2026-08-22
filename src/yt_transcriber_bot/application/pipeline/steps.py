@@ -56,11 +56,11 @@ from yt_transcriber_bot.application.services.text_integrity import (
     text_has_unresolved_corruption,
 )
 from yt_transcriber_bot.domain.entities.job import JobStatus
+from yt_transcriber_bot.domain.entities.media_metadata import MediaMetadata
 from yt_transcriber_bot.domain.entities.transcript import (
     Transcript,
     TranscriptSegment,
 )
-from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
 from yt_transcriber_bot.domain.specifications.concrete import (
     DurationWithinLimit,
     LanguageAllowed,
@@ -135,14 +135,14 @@ class FetchMetadataStep(PipelineStep):
 
         allowed = frozenset(Language(code=c) for c in self._settings.allowed_languages)
         if ctx.requested_language is not None:
-            requested = Language(code=ctx.requested_language)
+            requested = ctx.requested_language
             if not LanguageAllowed(allowed).is_satisfied_by(requested):
                 raise LanguageNotAllowedError(
                     f"Idioma informado '{requested.code}' fora da allowlist "
                     f"{sorted(self._settings.allowed_languages)}"
                 )
-            ctx.transcription_language = requested.code
-            ctx.language_source = LanguageSource.REQUESTED.value
+            ctx.transcription_language = requested
+            ctx.language_source = LanguageSource.REQUESTED
             if meta.original_language is not None and meta.original_language.code != requested.code:
                 ctx.add_diagnostic(
                     f"Idioma dos metadados: {meta.original_language.code}; "
@@ -158,8 +158,8 @@ class FetchMetadataStep(PipelineStep):
                 )
             # Usado para escolher legendas e modelo, mas a transcrição por áudio
             # continua livre para detectar o idioma no WhisperX.
-            ctx.transcription_language = meta.original_language.code
-            ctx.language_source = LanguageSource.METADATA.value
+            ctx.transcription_language = meta.original_language
+            ctx.language_source = LanguageSource.METADATA
             ctx.add_diagnostic(f"Idioma inferido dos metadados: {meta.original_language.code}.")
         else:
             ctx.add_diagnostic("Idioma original indeterminado; deixando o WhisperX detectar.")
@@ -196,9 +196,7 @@ class TryYouTubeSubtitlesStep(PipelineStep):
         meta = ctx.metadata
         if meta is None:
             return
-        target_language = ctx.requested_language or (
-            meta.original_language.code if meta.original_language else None
-        )
+        target_language = ctx.requested_language or meta.original_language
         if target_language is None:
             return
 
@@ -209,7 +207,7 @@ class TryYouTubeSubtitlesStep(PipelineStep):
             ctx.add_diagnostic(f"Falha ao listar legendas: {exc}")
             return
 
-        chosen = self._pick_best(tracks, Language(code=target_language))
+        chosen = self._pick_best(tracks, target_language)
         if chosen is None:
             ctx.add_diagnostic("Sem legendas elegíveis no idioma original.")
             return
@@ -266,8 +264,12 @@ class TryYouTubeSubtitlesStep(PipelineStep):
         ctx.youtube_subtitle_used = True
         subtitle_kind = "auto" if chosen.is_auto_generated else "manual"
         source = "youtube_auto" if chosen.is_auto_generated else "youtube_manual"
-        ctx.youtube_subtitle_kind = subtitle_kind
-        ctx.language_source = source
+        ctx.language_source = (
+            LanguageSource.YOUTUBE_AUTO
+            if chosen.is_auto_generated
+            else LanguageSource.YOUTUBE_MANUAL
+        )
+        source = ctx.language_source.value
         ctx.transcript = Transcript(
             segments=tuple(
                 TranscriptSegment(
@@ -279,26 +281,20 @@ class TryYouTubeSubtitlesStep(PipelineStep):
                 for segment in ctx.transcribed_segments
                 if segment.text.strip() and segment.end_seconds > segment.start_seconds
             ),
-            language=Language(code=target_language),
+            language=target_language,
             language_confidence=None,
             source=source,
-            requested_language=(
-                Language(ctx.requested_language) if ctx.requested_language else None
-            ),
+            requested_language=ctx.requested_language,
             observed_language=None,
             observed_language_confidence=None,
-            language_source=(
-                LanguageSource.YOUTUBE_AUTO
-                if chosen.is_auto_generated
-                else LanguageSource.YOUTUBE_MANUAL
-            ),
+            language_source=ctx.language_source,
         )
         ctx.processing_provenance = ProcessingProvenance(
             processing_path="youtube_subtitle",
             language_source=ctx.language_source,
         )
         ctx.add_diagnostic(
-            f"Usando legendas do YouTube ({ctx.youtube_subtitle_kind}, idioma={target_language})."
+            f"Usando legendas do YouTube ({subtitle_kind}, idioma={target_language})."
         )
 
     @staticmethod
@@ -511,7 +507,7 @@ class UseTelegramAudioStep(PipelineStep):
         ctx.job.transition_to(JobStatus.ACQUIRING)
         ctx.started_at = datetime.now(UTC)
         ctx.raw_audio_path = path
-        ctx.metadata = VideoMetadata(
+        ctx.metadata = MediaMetadata(
             video_id=None,
             title=ctx.job.source_title or "Áudio do Telegram",
             channel="Telegram",
@@ -593,15 +589,16 @@ class SelectRuntimeStep(PipelineStep):
         return not ctx.youtube_subtitle_used
 
     def execute(self, ctx: PipelineContext) -> None:
-        language_code = None
-        if ctx.requested_language:
-            language_code = ctx.requested_language
-        elif ctx.transcription_language:
-            language_code = ctx.transcription_language
-        elif ctx.metadata is not None and ctx.metadata.original_language is not None:
-            language_code = ctx.metadata.original_language.code
-
-        plan = select_runtime(self._settings, self._gpu.detect(), language_code=language_code)
+        language = (
+            ctx.requested_language
+            or ctx.transcription_language
+            or (ctx.metadata.original_language if ctx.metadata is not None else None)
+        )
+        plan = select_runtime(
+            self._settings,
+            self._gpu.detect(),
+            language=language,
+        )
         ctx.runtime_plan = plan
         ctx.add_diagnostic(f"Runtime escolhido: {plan.reason}")
 
@@ -624,9 +621,7 @@ def _transcription_request(
 ) -> TranscriptionRequest:
     if ctx.converted_audio_path is None:
         raise RuntimeError("TranscribeStep sem áudio convertido")
-    requested_language = (
-        Language(code=ctx.requested_language) if ctx.requested_language is not None else None
-    )
+    requested_language = ctx.requested_language
     return TranscriptionRequest(
         audio_path=ctx.converted_audio_path,
         processing_profile=plan.to_transcription_profile(),
@@ -688,13 +683,11 @@ class TranscribeStep(PipelineStep):
             )
 
         ctx.transcribed_segments = result.segments
-        ctx.transcription_language = (
-            result.detected_language.code if result.detected_language else None
-        )
+        ctx.transcription_language = result.detected_language
         ctx.transcription_confidence = result.language_confidence
-        ctx.observed_language = result.observed_language.code if result.observed_language else None
+        ctx.observed_language = result.observed_language
         ctx.observed_language_confidence = result.observed_language_confidence
-        ctx.language_source = result.language_source.value
+        ctx.language_source = result.language_source
         actual_plan = ctx.runtime_plan
         assert actual_plan is not None
         ctx.processing_provenance = replace(
@@ -815,22 +808,16 @@ class DiarizeStep(PipelineStep):
                 + (f": backend efetivo={observed.backend}." if observed.backend else ".")
             )
 
-        source = "whisperx"
-        if ctx.youtube_subtitle_used:
-            source = "youtube_manual" if ctx.youtube_subtitle_kind == "manual" else "youtube_auto"
+        source = ctx.language_source.value if ctx.youtube_subtitle_used else "whisperx"
         ctx.transcript = Transcript(
             segments=tuple(segments),
-            language=(
-                Language(code=ctx.transcription_language) if ctx.transcription_language else None
-            ),
+            language=ctx.transcription_language,
             language_confidence=ctx.transcription_confidence,
             source=source,
-            requested_language=(
-                Language(ctx.requested_language) if ctx.requested_language else None
-            ),
-            observed_language=(Language(ctx.observed_language) if ctx.observed_language else None),
+            requested_language=ctx.requested_language,
+            observed_language=ctx.observed_language,
             observed_language_confidence=ctx.observed_language_confidence,
-            language_source=LanguageSource(ctx.language_source or "unknown"),
+            language_source=ctx.language_source,
         )
 
 

@@ -14,7 +14,7 @@ from yt_transcriber_bot.application.ports.transcript_renderer import (
     TranscriptRenderer,
     TranscriptRenderRequest,
 )
-from yt_transcriber_bot.domain.entities.video_metadata import VideoMetadata
+from yt_transcriber_bot.domain.entities.media_metadata import MediaMetadata
 
 
 @dataclass(frozen=True)
@@ -39,11 +39,11 @@ class RenameSpeakersService:
     def list_speakers(self, slug: str) -> tuple[str, ...]:
         return self._snapshots.require(slug).transcript.speaker_labels()
 
-    def metadata_for(self, slug: str) -> VideoMetadata | None:
+    def metadata_for(self, slug: str) -> MediaMetadata | None:
         """Return canonical metadata for history display."""
         return self._snapshots.load_metadata(slug)
 
-    def metadata_for_many(self, slugs: tuple[str, ...]) -> dict[str, VideoMetadata]:
+    def metadata_for_many(self, slugs: tuple[str, ...]) -> dict[str, MediaMetadata]:
         """Load canonical metadata in batch for history commands."""
         return self._snapshots.load_metadata_many(slugs)
 
