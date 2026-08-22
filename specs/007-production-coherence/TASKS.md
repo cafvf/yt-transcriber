@@ -77,3 +77,17 @@ Gate-level closure evidence is recorded in [`GATE-A-CLOSURE.md`](GATE-A-CLOSURE.
 | P07-009 | direct application artifact-directory/write ownership removed from pipeline steps; remaining I/O reviewed by the Gate B auditor |
 
 Gate closure is determined only by the cumulative runner and its post-commit reproduction; this ledger does not pre-claim PASS.
+
+<!-- PLAN-007:GATE-B:TASK-CLOSURE:2026-08-22 -->
+## Gate B task closure ledger — 2026-08-22
+
+| Task | Status | Canonical outcome |
+| --- | --- | --- |
+| P07-006 | **DONE** | stable structured provider-neutral operational error contract |
+| P07-007 | **DONE** | deliberate exception normalization and sanitized public/operator boundaries |
+| P07-008 | **DONE** | canonical Markdown writer owns transcription Markdown persistence |
+| P07-009 | **DONE** | governed application I/O converged without speculative generic filesystem abstraction |
+
+Gate-level closure evidence is recorded in [`GATE-B-CLOSURE.md`](GATE-B-CLOSURE.md).
+
+Next task group: **P07-C — Configuration, packaging and distribution (P07-010…014)**.

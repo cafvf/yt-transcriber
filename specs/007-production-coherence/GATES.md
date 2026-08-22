@@ -259,3 +259,12 @@ architecture → gate → behavior → task → use case → test → evidence
 | Gate | Status | Evidence | Next |
 | --- | --- | --- | --- |
 | GATE-P07-A — Truthful Canonical Semantics | **CLOSED / PASS** | [`GATE-A-CLOSURE.md`](GATE-A-CLOSURE.md), implementation `cd5f71d` | GATE-P07-B |
+
+<!-- PLAN-007:GATE-B:STATUS:2026-08-22 -->
+## Gate B closure ledger — 2026-08-22
+
+| Gate | Status | Evidence | Next |
+| --- | --- | --- | --- |
+| GATE-P07-B — Safe Boundaries and Operational Error Semantics | **CLOSED / PASS** | [`GATE-B-CLOSURE.md`](GATE-B-CLOSURE.md), implementation `2bc2041` | GATE-P07-C |
+
+Gate C inherits the Gate A and Gate B invariants; neither closure may be weakened by later packaging/configuration work.

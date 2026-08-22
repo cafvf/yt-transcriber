@@ -1,6 +1,6 @@
 # PLAN-007 — Gate B Architecture Review
 
-Status: implementation evidence; closure remains conditional on the cumulative runner.
+Status: **CLOSED / PASS** — cumulative pre-commit and post-commit evidence completed on `2bc2041`.
 
 ## Error boundary
 
@@ -60,3 +60,10 @@ already own destination writes. No new direct application filesystem dependency 
 The Gate B architecture auditor blocks application→infrastructure imports, stale raw error contracts,
 Markdown direct persistence, missing writer injection, and any `TranscribeVideoDependencies(...)` consumer
 in `src/tests/scripts` that omits `markdown_writer`.
+
+<!-- PLAN-007:GATE-B:ARCH-REVIEW:CLOSURE:2026-08-22 -->
+## Closure note
+
+The cumulative residual runner completed with **51 PASS, 0 FAIL**. Gate A and Gate B architecture audits, Ruff, mypy, focused behavior tests, complete conformance, explicit SQLite compatibility integration, the configured pytest suite, Gitleaks and pre-commit all passed before commit and were reproduced on committed bytes before publication.
+
+Exact closure and publication evidence is recorded in [`GATE-B-CLOSURE.md`](GATE-B-CLOSURE.md).
