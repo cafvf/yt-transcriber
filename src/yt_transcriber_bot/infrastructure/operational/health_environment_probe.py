@@ -13,6 +13,7 @@ from yt_transcriber_bot.configuration.runtime_settings import (
     find_development_checkout_root,
     resolve_runtime_settings_source,
 )
+from yt_transcriber_bot.infrastructure.operational.health_probes import probe_executable_version
 from yt_transcriber_bot.infrastructure.persistence.filesystem.operational_error_store import (
     JsonlOperationalErrorStore,
 )
@@ -48,6 +49,11 @@ class LocalHealthEnvironmentProbe(HealthEnvironmentProbe):
         executables = {
             name: self._find(name) is not None
             for name in ("ffmpeg", "ffprobe", "yt-dlp", "deno", "node")
+        }
+        executable_versions = {
+            name: probe_executable_version(name)
+            for name in ("yt-dlp", "deno", "node")
+            if executables.get(name, False)
         }
         modules = {
             name: self._module(name)
@@ -132,6 +138,7 @@ class LocalHealthEnvironmentProbe(HealthEnvironmentProbe):
             cookies_file_exists=cookie_exists,
             model_ids=model_ids,
             model_probe_error=model_error,
+            executable_versions=executable_versions,
         )
 
 

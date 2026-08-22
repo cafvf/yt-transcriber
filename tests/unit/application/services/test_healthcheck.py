@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from yt_transcriber_bot.application.config import AppSettings
 from yt_transcriber_bot.application.ports.health_probe import (
     HealthEnvironmentProbe,
@@ -23,9 +25,16 @@ class FakeProbe(HealthEnvironmentProbe):
             python_detail="CPython test",
             project_root_found=True,
             env_file_state="arquivo runtime encontrado.",
-            executable_available={"ffmpeg": True, "ffprobe": True, "yt-dlp": True},
+            executable_available={
+                "ffmpeg": True,
+                "ffprobe": True,
+                "yt-dlp": True,
+                "deno": True,
+                "node": False,
+            },
             module_available={
                 "yt_dlp": True,
+                "yt_dlp_ejs": True,
                 "telegram": True,
                 "sqlalchemy": True,
                 "whisperx": True,
@@ -49,6 +58,7 @@ class FakeProbe(HealthEnvironmentProbe):
             cookies_file_exists=None,
             model_ids=self.model_ids,
             model_probe_error=self.model_error,
+            executable_versions={"yt-dlp": "2026.08.19", "deno": "deno 2.4.1"},
         )
 
 
@@ -92,3 +102,16 @@ def test_healthcheck_sanitizes_probe_error() -> None:
         environment_probe=FakeProbe(model_error="boom secret-value"),
     ).run()
     assert "secret-value" not in report.render(settings)
+
+
+# PLAN-007:C2-HEALTH-TESTS
+def test_healthcheck_rejects_unsupported_javascript_runtime() -> None:
+    settings = _settings()
+
+    class OldRuntimeProbe(FakeProbe):
+        def snapshot(self) -> HealthEnvironmentSnapshot:
+            return replace(super().snapshot(), executable_versions={"deno": "deno 2.2.9"})
+
+    report = HealthCheckService(settings=settings, environment_probe=OldRuntimeProbe()).run()
+    assert report.overall_status == "fail"
+    assert "abaixo do mínimo 2.3.0" in report.render(settings)

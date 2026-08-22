@@ -103,3 +103,15 @@ Next task group: **P07-C — Configuration, packaging and distribution (P07-010�
 C1 is an implementation sub-gate only. It does **not** close GATE-P07-C. P07-012, P07-013 and P07-014 remain open and cumulative Gate A/B/C evidence must pass before Gate C closure.
 
 Detailed C1 review: [`GATE-C-CONFIGURATION-REVIEW.md`](GATE-C-CONFIGURATION-REVIEW.md).
+
+<!-- PLAN-007:GATE-C2:IMPLEMENTATION:2026-08-22 -->
+## Gate C2 implementation ledger — 2026-08-22
+
+| Task | C2 implementation |
+| --- | --- |
+| P07-012 | `pre-commit` moved from production requirements to the dev dependency group; wheel metadata audited for dev-tool leakage |
+| P07-013 | YouTube readiness evaluates `yt_dlp`, `yt_dlp_ejs` and Deno >= 2.3.0 or Node >= 22.0.0; health facts include executable versions |
+
+C2 establishes the reusable readiness core. Installed `--preflight` and final clean-install/systemd proof remain P07-014 / C3 work.
+
+Detailed C2 review: [`GATE-C-RUNTIME-READINESS-REVIEW.md`](GATE-C-RUNTIME-READINESS-REVIEW.md).

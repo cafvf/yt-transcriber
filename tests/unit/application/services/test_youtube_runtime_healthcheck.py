@@ -52,6 +52,10 @@ class _Probe(HealthEnvironmentProbe):
             cookies_file_exists=None,
             model_ids=("qwen3.5-9b",),
             model_probe_error=None,
+            executable_versions={
+                "node": "v22.0.0" if self._node else None,
+                "deno": "deno 2.3.0" if self._deno else None,
+            },
         )
 
 

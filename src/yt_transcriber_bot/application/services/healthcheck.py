@@ -8,6 +8,7 @@ from yt_transcriber_bot.application.ports.health_probe import (
     HealthEnvironmentSnapshot,
 )
 from yt_transcriber_bot.application.services.sanitization import sanitize_text
+from yt_transcriber_bot.application.services.youtube_runtime_readiness import assess_youtube_runtime
 
 
 @dataclass(frozen=True)
@@ -108,23 +109,14 @@ class HealthCheckService:
             items.append(
                 HealthCheckItem(
                     executable,
-                    "ok" if present else ("warn" if executable == "yt-dlp" else "fail"),
+                    "ok" if present else "fail",
                     "encontrado no PATH." if present else "não encontrado no PATH.",
                 )
             )
-        if any(name in facts.executable_available for name in ("deno", "node")):
-            js_runtimes = tuple(
-                name for name in ("deno", "node") if facts.executable_available.get(name, False)
-            )
-            items.append(
-                HealthCheckItem(
-                    "Runtime JS do YouTube",
-                    "ok" if js_runtimes else "fail",
-                    f"disponível: {', '.join(js_runtimes)}."
-                    if js_runtimes
-                    else "nenhum runtime suportado encontrado (Deno ou Node).",
-                )
-            )
+        youtube_runtime = assess_youtube_runtime(facts)
+        items.append(
+            HealthCheckItem("Runtime JS do YouTube", youtube_runtime.status, youtube_runtime.detail)
+        )
         labels = {
             "yt_dlp": "yt-dlp",
             "yt_dlp_ejs": "yt-dlp EJS",
@@ -135,8 +127,6 @@ class HealthCheckService:
             "transformers": "transformers",
         }
         for module, label in labels.items():
-            if module == "yt_dlp_ejs" and module not in facts.module_available:
-                continue
             present = facts.module_available.get(module, False)
             items.append(
                 HealthCheckItem(

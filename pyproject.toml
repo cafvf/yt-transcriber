@@ -20,9 +20,6 @@ dependencies = [
     "pydantic>=2.7,<3.0",
     "pydantic-settings>=2.3,<3.0",
     "python-dotenv>=1.0,<2.0",
-    # Segurança local / hooks de commit. Mantido em dependências principais para que `uv sync`
-    # instale o comando `pre-commit` sem exigir flags extras.
-    "pre-commit>=3.7,<5.0",
     # YouTube
     "yt-dlp[default]>=2026.7.4,<2027.0.0",
     # Persistência
@@ -50,6 +47,7 @@ yt-transcriber-bot = "yt_transcriber_bot.__main__:main"
 
 [dependency-groups]
 dev = [
+    "pre-commit>=3.7,<5.0",
     "pytest>=8.2,<9.0",
     "pytest-asyncio>=0.23,<1.0",
     "pytest-cov>=5.0,<7.0",

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,6 +19,7 @@ class HealthEnvironmentSnapshot:
     cookies_file_exists: bool | None
     model_ids: tuple[str, ...] | None
     model_probe_error: str | None
+    executable_versions: dict[str, str | None] = field(default_factory=dict)
 
 
 class HealthEnvironmentProbe(ABC):

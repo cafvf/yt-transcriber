@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import shutil
+import subprocess
 import urllib.request
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -30,6 +31,26 @@ def probe_openai_compatible_models(
 
 def find_executable(name: str) -> str | None:
     return shutil.which(name)
+
+
+def probe_executable_version(name: str) -> str | None:
+    path = find_executable(name)
+    if path is None:
+        return None
+    try:
+        result = subprocess.run(
+            [path, "--version"],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    return next((line.strip() for line in result.stdout.splitlines() if line.strip()), None)
 
 
 def module_available(module_name: str) -> bool:

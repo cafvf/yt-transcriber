@@ -373,3 +373,11 @@ When a later preflight observes an exact, known dirty candidate even though an e
 <!-- PLAN-007:LL-063:2026-08-22 -->
 ## LL-063 — changing a composition seam requires migrating its test seams and focused validation set
 When an entrypoint stops constructing a dependency directly and delegates to a loader or factory, tests that monkeypatch the old construction symbol must be discovered and migrated even if the product-facing API did not change. Treat that as a composition-seam migration: search `src/tests/scripts` for stale monkeypatches/callers, move them to the new boundary, and include those caller tests in the focused validation set. Direct tests of the new loader are not sufficient evidence by themselves.
+
+<!-- PLAN-007:LL-064:2026-08-22 -->
+## LL-064 — external runtime readiness validates vendor-supported versions, not executable presence
+A binary on `PATH` is not evidence that a provider integration can use it. When an external provider publishes runtime support floors, preflight/health policy must capture the executable version and validate it against the supported contract. For yt-dlp EJS as checked on 2026-08-22, C2 uses Deno >= 2.3.0 or Node >= 22.0.0 and requires the companion `yt-dlp-ejs` module.
+
+<!-- PLAN-007:LL-065:2026-08-22 -->
+## LL-065 — semantic dry-runs that execute history-aware tests must preserve Git metadata
+A `git archive` snapshot is sufficient for file-content checks but not for tests or tools that reconstruct historical evidence with commands such as `git show`. When the candidate validation includes history-aware tests, build the temporary candidate as a real detached Git clone (or equivalent repository with object history) and compare only working-tree file hashes, excluding `.git`. Do not skip the history-aware test merely because the original dry-run representation discarded repository metadata.
