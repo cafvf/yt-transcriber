@@ -14,6 +14,10 @@ import pytest
 
 from yt_transcriber_bot.application.config import AppSettings
 from yt_transcriber_bot.application.job_request_context import JobRequestContext
+from yt_transcriber_bot.application.operational_errors import (
+    OperationalErrorCode,
+    error_for_code,
+)
 from yt_transcriber_bot.application.services.startup_recovery import RecoveredPendingJob
 from yt_transcriber_bot.application.use_cases.transcribe_video import (
     TranscribeVideoResult,
@@ -525,7 +529,7 @@ async def test_pipeline_exception_marks_persisted_downloading_job_failed(
     stored = repo.get_by_id(job.job_id)
     assert stored is not None
     assert stored.status is JobStatus.FAILED
-    assert stored.error_message == "Erro inesperado no pipeline: RuntimeError"
+    assert stored.error_message == "O processamento falhou por uma condição interna inesperada."
 
 
 @pytest.mark.asyncio
@@ -1192,3 +1196,47 @@ async def test_retention_failure_is_recorded_without_retroactively_failing_compl
     assert record["operation"] == "retention"
     assert record["stage"] == "retention"
     assert record["severity"] == "warning"
+
+
+@pytest.mark.asyncio
+async def test_failed_result_records_structured_gate_b_error(
+    settings: AppSettings, client: FakeBotClient
+) -> None:
+    repo = FakeRepo()
+    job = Job.new(VideoId("dQw4w9WgXcQ"), 42)
+    repo.save(job)
+    error = error_for_code(OperationalErrorCode.MEDIA_LANGUAGE_NOT_ALLOWED)
+    use_case = FakeUseCase(
+        result=TranscribeVideoResult(
+            job=job,
+            md_path=None,
+            audio_path=None,
+            diagnostics=(),
+            failure_reason=error.safe_message,
+            operational_error=error,
+        )
+    )
+    sink = FakeLastErrorService()
+    adapter = TelegramBotAdapter(
+        settings=settings,
+        client=client,
+        use_case=use_case,  # type: ignore[arg-type]
+        repository=repo,  # type: ignore[arg-type]
+        operational_workflow=FakeOperationalWorkflow(sink),  # type: ignore[arg-type]
+    )
+
+    await adapter._process_job(
+        QueuedItem(
+            payload=JobPayload(
+                job.job_id, 10, 42, "https://youtu.be/dQw4w9WgXcQ", job.video_id, 100
+            ),
+            item_id=job.job_id,
+        )
+    )
+
+    assert sink.recorded
+    record = sink.recorded[-1]
+    assert record["code"] is OperationalErrorCode.MEDIA_LANGUAGE_NOT_ALLOWED
+    assert record["category"].value == "media"
+    assert record["retryable"] is False
+    assert record["message"] == error.safe_message

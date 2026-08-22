@@ -65,3 +65,15 @@ Status: **Approved for execution**
 | P07-005 | **DONE** | duration/artifact taxonomy canonicalized; external compatibility isolated |
 
 Gate-level closure evidence is recorded in [`GATE-A-CLOSURE.md`](GATE-A-CLOSURE.md).
+
+<!-- PLAN-007:GATE-B:IMPLEMENTATION:2026-08-22 -->
+## Gate B implementation ledger — 2026-08-22
+
+| Task | Implementation |
+| --- | --- |
+| P07-006 | stable provider-neutral operational error taxonomy and structured records |
+| P07-007 | provider exceptions mapped to safe application semantics; raw details confined to sanitized technical context |
+| P07-008 | canonical Markdown writer injected into transcription rendering |
+| P07-009 | direct application artifact-directory/write ownership removed from pipeline steps; remaining I/O reviewed by the Gate B auditor |
+
+Gate closure is determined only by the cumulative runner and its post-commit reproduction; this ledger does not pre-claim PASS.

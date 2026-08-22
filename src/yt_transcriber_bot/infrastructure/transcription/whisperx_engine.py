@@ -14,6 +14,7 @@ from yt_transcriber_bot.application.cancellation import (
     raise_if_cancelled,
 )
 from yt_transcriber_bot.application.ports.transcription_engine import (
+    ObservedLanguageNotAllowedError,
     OutOfMemoryError,
     ProcessingPrecision,
     ProcessingTarget,
@@ -140,9 +141,8 @@ class WhisperXTranscriptionEngine(TranscriptionEngine):
                     f"WhisperX não retornou idioma observável válido: {raw.language!r}"
                 )
             if observed_code not in allowed_languages:
-                raise TranscriptionError(
-                    "Idioma observado pelo ASR não suportado nesta versão: "
-                    f"{observed_code}. Permitidos: {', '.join(allowed_languages)}"
+                raise ObservedLanguageNotAllowedError(
+                    "Idioma observado pelo ASR não suportado pela configuração atual."
                 )
             effective_language = Language(observed_code)
             confidence = observed_confidence

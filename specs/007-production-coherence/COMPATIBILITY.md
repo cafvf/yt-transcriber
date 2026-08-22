@@ -51,3 +51,12 @@ Do not retain these without new evidence:
 - `VideoMetadata` throughout new internal consumers;
 - raw string language state where typed VOs apply;
 - `config_signature` as canonical application/domain terminology.
+
+## COMPAT-005 — legacy operational-error JSONL
+- Canonical: `code`, `category`, `retryable`, `safe_message`, `technical_context`.
+- Need: existing `/lasterror` history may contain pre-Gate-B JSONL records with `message`, `context` and `error_type`.
+- Boundary: `JsonlOperationalErrorStore` reader only.
+- Evidence: frozen legacy JSONL compatibility test plus canonical-writer test.
+- New-code rule: writers never emit legacy keys and application behavior never branches on provider exception names.
+- Removal: after the supported operational-error retention window guarantees pre-Gate-B records have expired.
+- Target: first post-1.x retention-policy review after that window.

@@ -124,3 +124,23 @@ def test_delivery_failed_reports_missing_artifact_as_unavailable() -> None:
     )
 
     assert "Artefatos locais recuperáveis: indisponíveis" in service.latest_for_user(7).message
+
+
+def test_operational_error_context_hides_private_paths() -> None:
+    store = Store()
+    service = LastErrorService(
+        repository=Repo([]),  # type: ignore[arg-type]
+        settings=_settings(),
+        error_store=store,
+        log_reader=Logs(),
+    )
+
+    record = service.record_operation_error(
+        user_id=7,
+        operation="delivery",
+        message="falha segura",
+        context={"md_path": "/private/transcripts/final.md"},
+    )
+
+    assert record.technical_context["md_path"] == "[PRIVATE PATH]"
+    assert "/private/transcripts/final.md" not in service.latest_for_user(7).message

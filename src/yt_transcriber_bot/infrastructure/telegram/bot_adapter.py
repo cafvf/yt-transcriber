@@ -24,6 +24,11 @@ from typing import Protocol
 
 from yt_transcriber_bot.application.config import AppSettings
 from yt_transcriber_bot.application.job_request_context import JobRequestContext
+from yt_transcriber_bot.application.operational_errors import (
+    OperationalErrorCategory,
+    OperationalErrorCode,
+    classify_operational_error,
+)
 from yt_transcriber_bot.application.ports.derived_artifacts import (
     TRANSCRIPT_EXPORT_FORMATS,
     DerivativeExportError,
@@ -779,6 +784,9 @@ class TelegramBotAdapter:
         user_id: int,
         operation: str,
         message: str,
+        code: OperationalErrorCode | None = None,
+        category: OperationalErrorCategory | None = None,
+        retryable: bool | None = None,
         context: dict[str, object] | None = None,
         error: BaseException | None = None,
         stage: str = "",
@@ -786,13 +794,30 @@ class TelegramBotAdapter:
     ) -> None:
         if self._operational_workflow is None:
             return
+        resolved_context = dict(context or {})
+        if error is not None and code is None:
+            classified = classify_operational_error(
+                error,
+                sanitizer=lambda text: sanitize_text(text, self._settings),
+            )
+            code = classified.code
+            category = classified.category
+            retryable = classified.retryable
+            message = classified.safe_message
+            resolved_context.update(classified.technical_context)
+        code = code or OperationalErrorCode.INTERNAL_INVARIANT_VIOLATION
+        category = category or OperationalErrorCategory.INTERNAL
+        retryable = False if retryable is None else retryable
         try:
             await asyncio.to_thread(
                 self._operational_workflow.record_error,
                 user_id=user_id,
                 operation=operation,
                 message=message,
-                context=context,
+                code=code,
+                category=category,
+                retryable=retryable,
+                context=resolved_context,
                 error=error,
                 stage=stage,
                 severity=severity,
@@ -1528,20 +1553,24 @@ class TelegramBotAdapter:
                 ),
             )
         except Exception as exc:
-            logger.error(
-                "Use case falhou no pipeline: %s",
-                type(exc).__name__,
+            operational_error = classify_operational_error(
+                exc,
+                sanitizer=lambda text: sanitize_text(text, self._settings),
             )
-            failure_reason = f"Erro inesperado no pipeline: {type(exc).__name__}"
-            self._execution_lifecycle.fail_unexpected(job, error=failure_reason)
+            logger.error("Use case falhou no pipeline [%s]", operational_error.code.value)
+            self._execution_lifecycle.fail_unexpected(job, error=operational_error.safe_message)
             await self._record_operational_error(
                 user_id=payload.user_id,
                 operation="transcribe",
-                message=failure_reason,
+                message=operational_error.safe_message,
+                code=operational_error.code,
+                category=operational_error.category,
+                retryable=operational_error.retryable,
                 context={
                     "video_id": _video_id_value(payload.video_id),
                     "url": payload.url,
                     "requested_language": payload.requested_language or "auto",
+                    **dict(operational_error.technical_context),
                 },
                 error=exc,
                 stage="pipeline",
@@ -1551,8 +1580,10 @@ class TelegramBotAdapter:
                 job_id=job.job_id,
                 video_id=_video_id_value(payload.video_id),
                 user_id=payload.user_id,
-                error_type=type(exc).__name__,
-                error_message=type(exc).__name__,
+                error_code=operational_error.code.value,
+                error_category=operational_error.category.value,
+                error_retryable=operational_error.retryable,
+                safe_message=operational_error.safe_message,
             )
             await progress.finish("❌ Erro inesperado no pipeline. Consulte /lasterror.")
             self._cleanup_telegram_source(job)
@@ -1570,12 +1601,31 @@ class TelegramBotAdapter:
             self._cleanup_telegram_source(result.job)
             return
         if result.failure_reason is not None:
+            error_fields: dict[str, object] = {"safe_message": result.failure_reason}
+            if result.operational_error is not None:
+                error_fields.update(
+                    {
+                        "error_code": result.operational_error.code.value,
+                        "error_category": result.operational_error.category.value,
+                        "error_retryable": result.operational_error.retryable,
+                    }
+                )
+                await self._record_operational_error(
+                    user_id=payload.user_id,
+                    operation="transcribe",
+                    message=result.operational_error.safe_message,
+                    code=result.operational_error.code,
+                    category=result.operational_error.category,
+                    retryable=result.operational_error.retryable,
+                    context=dict(result.operational_error.technical_context),
+                    stage="pipeline",
+                )
             self._audit(
                 "job_failed",
                 job_id=result.job.job_id,
                 video_id=_video_id_value(payload.video_id),
                 user_id=payload.user_id,
-                error_message=result.failure_reason,
+                **error_fields,
             )
             await progress.finish(f"⚠️ Falhou: {result.failure_reason}")
             self._cleanup_telegram_source(result.job)
@@ -1791,6 +1841,9 @@ class TelegramBotAdapter:
             user_id=payload.user_id,
             operation="transcribe_delivery",
             message=message,
+            code=OperationalErrorCode.DELIVERY_FAILED,
+            category=OperationalErrorCategory.DELIVERY,
+            retryable=True,
             context=context,
             stage="delivery",
         )
@@ -1848,6 +1901,9 @@ class TelegramBotAdapter:
             user_id=user_id,
             operation=operation,
             message=f"Falha na entrega de {artifact_label}; artefato preservado localmente.",
+            code=OperationalErrorCode.DELIVERY_FAILED,
+            category=OperationalErrorCategory.DELIVERY,
+            retryable=True,
             context={
                 "artifact_kind": artifact_label,
                 "artifact_path": str(artifact_path),

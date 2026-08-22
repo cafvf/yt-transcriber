@@ -1,9 +1,4 @@
-"""Pipeline (Chain of Responsibility) com cancelamento e progresso.
-
-Cada ``PipelineStep`` recebe o ``PipelineContext`` e pode mutá-lo; pode
-também sinalizar que NÃO é aplicável (devolvendo ``False`` em ``should_run``)
-para ser pulado, ou pode lançar exceções que abortam o pipeline.
-"""
+"""Pipeline (Chain of Responsibility) com cancelamento e progresso."""
 
 from __future__ import annotations
 
@@ -14,6 +9,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Sequence
 
 from yt_transcriber_bot.application.cancellation import OperationCanceledError
+from yt_transcriber_bot.application.operational_errors import classify_operational_error
 from yt_transcriber_bot.application.pipeline.context import PipelineContext
 
 logger = logging.getLogger(__name__)
@@ -24,14 +20,11 @@ class PipelineCanceledError(Exception):
 
 
 class PipelineStep(ABC):
-    """Etapa do pipeline."""
-
     @property
     @abstractmethod
     def name(self) -> str: ...
 
     def should_run(self, ctx: PipelineContext) -> bool:
-        """Default: sempre executa. Subclasses podem sobrescrever."""
         return True
 
     @abstractmethod
@@ -39,15 +32,10 @@ class PipelineStep(ABC):
 
 
 ProgressFn = Callable[[str, str], None]
-"""``(step_name, message)`` para feedback ao usuário."""
-
 AuditFn = Callable[[str, dict[str, object]], None]
-"""``(event_name, payload)`` para trilha local de auditoria estruturada."""
 
 
 class PipelineRunner:
-    """Executa os steps em ordem, gerencia cancelamento e progresso."""
-
     def __init__(
         self,
         steps: Sequence[PipelineStep],
@@ -84,25 +72,31 @@ class PipelineRunner:
             try:
                 step.execute(ctx)
             except OperationCanceledError as exc:
+                error = classify_operational_error(exc)
                 _audit_step(
                     audit,
                     "step_failed",
                     ctx,
                     step.name,
                     duration_ms=_elapsed_ms(started),
-                    error_type=type(exc).__name__,
-                    error_message=str(exc),
+                    error_code=error.code.value,
+                    error_category=error.category.value,
+                    error_retryable=error.retryable,
+                    safe_message=error.safe_message,
                 )
-                raise PipelineCanceledError(str(exc)) from exc
+                raise PipelineCanceledError(error.safe_message) from exc
             except Exception as exc:
+                error = classify_operational_error(exc)
                 _audit_step(
                     audit,
                     "step_failed",
                     ctx,
                     step.name,
                     duration_ms=_elapsed_ms(started),
-                    error_type=type(exc).__name__,
-                    error_message=str(exc),
+                    error_code=error.code.value,
+                    error_category=error.category.value,
+                    error_retryable=error.retryable,
+                    safe_message=error.safe_message,
                 )
                 raise
             logger.info("step %s done", step.name)
@@ -119,7 +113,7 @@ class PipelineRunner:
 
     def _check_canceled(self) -> None:
         if self._cancel_event.is_set():
-            raise PipelineCanceledError("Pipeline cancelado pelo usuario")
+            raise PipelineCanceledError("Operação cancelada pelo usuário.")
 
 
 def _elapsed_ms(started: float) -> int:

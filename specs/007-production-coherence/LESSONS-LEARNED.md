@@ -312,3 +312,36 @@ When a quality gate reasons about the exact physical path set, Git rename detect
 ## LL-044 — Gate closure requires reproduction on committed bytes
 
 A gate that passes only before commit is not yet fully evidenced. After the intended commit is created, rerun an independent validation on the committed tree and confirm a clean working tree. This distinguishes validated content from assumptions about staging/commit behavior.
+
+## LL-045 — cancellation must bypass fallback catches
+A fallback-oriented `except Exception` must re-raise cancellation before deciding to continue with another provider or processing path. Cancellation is control flow, not provider failure.
+
+## LL-046 — rollback failure must not mask the primary persistence failure
+When structured evidence is rolled back after an artifact write fails, cleanup is secondary. A cleanup failure may be logged safely, but the original write failure remains the causal error.
+
+## LL-047 — full-suite snapshots that exercise historical Git evidence need Git history
+A filesystem-only snapshot is insufficient for tests that intentionally reconstruct frozen inventories through `git show`. Such tests must run in the real checkout or a history-preserving clone.
+
+## LL-048 — secret sanity checks must distinguish fixtures from newly introduced reusable secrets
+Static token-like fixtures can be deliberate security-test inputs. Gate scans should focus on changed lines for fast sanity while Gitleaks remains the repository-wide blocking scanner.
+
+## LL-049 — Ubuntu project tooling must not assume a `python` executable
+For this repository, gate tooling resolves the interpreter from the repository virtual environment first (`.venv/bin/python`) and otherwise from `python3`. A bare `python` command is not a supported assumption.
+
+## LL-050 — lessons learned are implementation preconditions, not only retrospective notes
+Before a gate remediation is applied, the runner verifies the relevant previously accepted lessons. Packaging and remediation logic must explicitly incorporate those constraints rather than relying on conversational memory alone.
+
+## LL-051 — executable launchers are a packaging invariant
+A package that instructs the operator to run `./script.sh` must preserve executable mode in the archive. Package QA must verify `test -x` (or equivalent) after a fresh extraction, in addition to shell syntax and file hashes.
+
+## LL-052 — abstract port changes must migrate all test doubles
+When an application port gains a required method, migration scope includes production adapters, fakes, stubs and other subclasses in tests/scripts. Gate auditors must discover those subclasses semantically so an indirect consumer cannot remain stale.
+
+## LL-053 — stable-error tests assert semantics, not provider prose
+Tests for a stable operational-error contract must assert code/category/retryability, safe public projection, and the technical-detail boundary. They must not require provider exception prose to appear in `failure_reason`, persisted job errors, audit events, or Telegram-facing text.
+
+## LL-054 — application-port parameter names are part of the security surface
+A non-secret local discriminator must not use credential-shaped vocabulary such as `token` at an application boundary. Prefer semantic names such as `collision_key`; do not weaken provider-secret conformance to accommodate ambiguous naming.
+
+## LL-055 — remediation dry-runs should execute candidate quality tools
+When repository quality tools are available, the semantic dry-run should execute the gate's formatter/linter/static checks on the candidate snapshot before mutating the real checkout. Package-only syntax checks are not sufficient evidence that the applied candidate is formatted and lint-clean.

@@ -126,8 +126,15 @@ class TestPipelineRunner:
             runner.run(ctx, audit=lambda event, payload: events.append((event, payload)))
 
         assert [event for event, _ in events] == ["step_started", "step_failed"]
-        assert events[-1][1]["error_type"] == "ValueError"
-        assert events[-1][1]["error_message"] == "boom"
+        failure = events[-1][1]
+        assert failure["error_code"] == "internal.invariant_violation"
+        assert failure["error_category"] == "internal"
+        assert failure["error_retryable"] is False
+        assert failure["safe_message"] == (
+            "O processamento falhou por uma condição interna inesperada."
+        )
+        assert "error_type" not in failure
+        assert "error_message" not in failure
 
     def test_exception_propagates_and_stops_chain(self) -> None:
         s1 = _CountingStep("a", raise_exc=ValueError("boom"))
@@ -186,5 +193,6 @@ class TestPipelineRunner:
         runner = PipelineRunner(steps=(CancelingStep(),))
         ctx = PipelineContext(job=_make_job())
 
-        with pytest.raises(PipelineCanceledError, match="durante etapa ativa"):
+        with pytest.raises(PipelineCanceledError, match="cancelada pelo usuário") as caught:
             runner.run(ctx)
+        assert isinstance(caught.value.__cause__, OperationCanceledError)

@@ -23,7 +23,6 @@ PACKAGE_ROOT = REPO_ROOT / "src" / PROJECT_PACKAGE
 # AC-04 routing metadata, not a dependency-violation allowlist.
 _GOVERNED_APPLICATION_IO_HOTSPOTS = {
     "application/config.py": "REQ-ARC-010",
-    "application/pipeline/steps.py": "REQ-ARC-012 / TASK-P03-013",
 }
 
 _DIRECT_IO_MODULE_ROOTS = {

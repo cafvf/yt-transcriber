@@ -15,10 +15,19 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
+from yt_transcriber_bot.application.cancellation import OperationCanceledError
 from yt_transcriber_bot.application.config import AppSettings
+from yt_transcriber_bot.application.operational_errors import (
+    LanguageNotAllowedError,
+    MediaDurationUnknownError,
+    NoAudioAvailableError,
+    PipelineRejectionError,
+    VideoTooLongError,
+)
 from yt_transcriber_bot.application.pipeline.context import PipelineContext
 from yt_transcriber_bot.application.pipeline.runner import PipelineStep
 from yt_transcriber_bot.application.ports.audio_converter import AudioConverter
+from yt_transcriber_bot.application.ports.canonical_markdown import CanonicalMarkdownWriter
 from yt_transcriber_bot.application.ports.canonical_transcript import (
     CanonicalTranscriptRecord,
     CanonicalTranscriptStore,
@@ -83,18 +92,6 @@ logger = logging.getLogger(__name__)
 # ----------------------------------------------------------------------
 
 
-class PipelineRejectionError(Exception):
-    """Erro semântico: pipeline rejeita o vídeo por motivo de negócio."""
-
-
-class VideoTooLongError(PipelineRejectionError):
-    """Vídeo excede o limite máximo configurado."""
-
-
-class LanguageNotAllowedError(PipelineRejectionError):
-    """Idioma não está na allowlist."""
-
-
 # ----------------------------------------------------------------------
 # Step 1 — fetch metadata + validar duração + idioma
 # ----------------------------------------------------------------------
@@ -123,7 +120,7 @@ class FetchMetadataStep(PipelineStep):
         ctx.metadata = meta
 
         if meta.duration is None:
-            raise PipelineRejectionError(
+            raise MediaDurationUnknownError(
                 "Não foi possível estabelecer a duração da mídia antes do processamento caro."
             )
         max_seconds = int(self._settings.media_processing.max_media_duration_min) * 60
@@ -202,9 +199,11 @@ class TryYouTubeSubtitlesStep(PipelineStep):
 
         try:
             tracks = self._dl.list_subtitles(ctx.job.video_id)
-        except Exception as exc:
-            logger.warning("listagem de legendas falhou: %s", exc)
-            ctx.add_diagnostic(f"Falha ao listar legendas: {exc}")
+        except OperationCanceledError:
+            raise
+        except Exception:
+            logger.warning("listagem de legendas falhou; usando fallback de áudio")
+            ctx.add_diagnostic("Falha ao listar legendas; seguindo para aquisição de áudio.")
             return
 
         chosen = self._pick_best(tracks, target_language)
@@ -218,9 +217,11 @@ class TryYouTubeSubtitlesStep(PipelineStep):
                 chosen,
                 cancel_event=ctx.cancel_event,
             )
-        except Exception as exc:
-            logger.warning("download da legenda falhou: %s", exc)
-            ctx.add_diagnostic(f"Falha ao baixar legenda: {exc}")
+        except OperationCanceledError:
+            raise
+        except Exception:
+            logger.warning("download da legenda falhou; usando fallback de áudio")
+            ctx.add_diagnostic("Falha ao baixar legenda; seguindo para aquisição de áudio.")
             return
 
         if not fetched.segments:
@@ -470,7 +471,6 @@ class DownloadAudioStep(PipelineStep):
         return not ctx.youtube_subtitle_used
 
     def execute(self, ctx: PipelineContext) -> None:
-        self._downloads_dir.mkdir(parents=True, exist_ok=True)
         assert ctx.job.video_id is not None
         try:
             result = self._dl.download_audio(
@@ -479,8 +479,8 @@ class DownloadAudioStep(PipelineStep):
                 cancel_event=ctx.cancel_event,
             )
         except NoAudioStreamError as exc:
-            raise PipelineRejectionError(
-                f"Vídeo sem fluxo de áudio (provavelmente live ou só vídeo): {exc}"
+            raise NoAudioAvailableError(
+                "A mídia não possui uma faixa de áudio elegível para transcrição."
             ) from exc
         ctx.raw_audio_path = result.audio_path
         ctx.audio_track_selection = result.track_selection
@@ -501,7 +501,7 @@ class UseTelegramAudioStep(PipelineStep):
         if not path.is_file():
             raise PipelineRejectionError("Arquivo de áudio Telegram não encontrado localmente.")
         if ctx.job.source_duration_seconds is None or ctx.job.source_duration_seconds <= 0:
-            raise PipelineRejectionError(
+            raise MediaDurationUnknownError(
                 "Não foi possível estabelecer a duração do áudio Telegram antes do ASR."
             )
         ctx.job.transition_to(JobStatus.ACQUIRING)
@@ -548,7 +548,6 @@ class ConvertAudioStep(PipelineStep):
         ctx.job.transition_to(JobStatus.CONVERTING)
         if ctx.raw_audio_path is None:
             raise RuntimeError("ConvertAudioStep sem raw_audio_path")
-        self._processed_dir.mkdir(parents=True, exist_ok=True)
         if ctx.metadata is not None:
             slug = str(Slug.from_title(ctx.metadata.title))
         else:
@@ -665,8 +664,8 @@ class TranscribeStep(PipelineStep):
             result = self._engine.transcribe(
                 _transcription_request(ctx, plan, self._settings, self._progress)
             )
-        except OutOfMemoryError as exc:
-            ctx.add_diagnostic(f"OOM durante transcrição ({exc}); retentando menor.")
+        except OutOfMemoryError:
+            ctx.add_diagnostic("OOM durante transcrição; retentando com plano menor.")
             smaller = smaller_model_alternative(plan.model)
             if smaller is None:
                 raise
@@ -836,6 +835,7 @@ class RenderMarkdownStep(PipelineStep):
     def __init__(
         self,
         renderer: TranscriptRenderer,
+        writer: CanonicalMarkdownWriter,
         transcripts_dir: Path,
         settings: AppSettings,
         diarization_model_name: str = "pyannote/speaker-diarization-community-1",
@@ -843,6 +843,7 @@ class RenderMarkdownStep(PipelineStep):
         processing_fingerprint: str = "",
     ) -> None:
         self._renderer = renderer
+        self._writer = writer
         self._transcripts_dir = transcripts_dir
         self._settings = settings
         self._diar_model_name = diarization_model_name
@@ -862,13 +863,7 @@ class RenderMarkdownStep(PipelineStep):
             else self._settings.whisper_model
         )
         slug = Slug.from_title(ctx.metadata.title)
-        self._transcripts_dir.mkdir(parents=True, exist_ok=True)
-        dest = self._transcripts_dir / f"{slug}.md"
-
-        n = 2
-        while dest.exists():
-            dest = self._transcripts_dir / f"{slug}-{n}.md"
-            n += 1
+        preferred_dest = self._transcripts_dir / f"{slug}.md"
 
         render_context = TranscriptRenderContext(
             rendered_at=datetime.now(UTC),
@@ -901,13 +896,19 @@ class RenderMarkdownStep(PipelineStep):
 
         reference = ctx.job.job_id
         self._snapshot_repository.persist(reference, record)
-        tmp = dest.with_name(f".{dest.name}.{ctx.job.job_id}.tmp")
         try:
-            tmp.write_text(rendered, encoding="utf-8")
-            tmp.replace(dest)
+            dest = self._writer.write_new(
+                preferred_dest,
+                rendered,
+                collision_key=ctx.job.job_id,
+            )
         except Exception:
-            tmp.unlink(missing_ok=True)
-            self._snapshot_repository.delete(reference)
+            try:
+                self._snapshot_repository.delete(reference)
+            except Exception:
+                logger.error(
+                    "Rollback do snapshot canônico falhou; preservando a falha original de Markdown."
+                )
             raise
 
         ctx.final_md_path = dest

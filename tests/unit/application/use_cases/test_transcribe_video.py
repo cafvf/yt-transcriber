@@ -48,6 +48,9 @@ from yt_transcriber_bot.domain.value_objects.duration import Duration
 from yt_transcriber_bot.domain.value_objects.language import Language
 from yt_transcriber_bot.domain.value_objects.media_source import MediaSource
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
+from yt_transcriber_bot.infrastructure.persistence.filesystem.canonical_markdown_writer import (
+    FilesystemCanonicalMarkdownWriter,
+)
 from yt_transcriber_bot.infrastructure.persistence.filesystem.owned_artifact_cleanup import (
     FilesystemOwnedArtifactCleanup,
 )
@@ -91,6 +94,7 @@ def _make_uc(
         transcription_engine=fake_transcription,
         diarization_engine=fake_diarization,
         renderer=MarkdownTranscriptRenderer(),
+        markdown_writer=FilesystemCanonicalMarkdownWriter(),
         settings=settings,
         repository=fake_repo,
         snapshot_repository=snapshot_repository,
@@ -458,9 +462,14 @@ class TestRejections:
         assert stored is not None
         assert stored.status is JobStatus.FAILED
         assert stored.error_message == result.failure_reason
+        assert result.operational_error is not None
+        assert result.operational_error.code.value == "youtube.no_audio_stream"
         assert raw_secret not in (result.failure_reason or "")
         assert raw_payload not in (result.failure_reason or "")
-        assert "[REDACTED]" in (result.failure_reason or "")
+        detail = result.operational_error.technical_context.get("detail", "")
+        assert raw_secret not in detail
+        assert raw_payload not in detail
+        assert "[REDACTED]" in detail
 
     def test_video_too_long_rejected(
         self,
@@ -524,7 +533,13 @@ class TestRejections:
         )
         result = uc.execute(_job())
         assert result.job.status == JobStatus.FAILED
-        assert "es" in (result.failure_reason or "")
+        assert result.operational_error is not None
+        assert result.operational_error.code.value == "media.language_not_allowed"
+        assert result.operational_error.category.value == "media"
+        assert result.failure_reason == result.operational_error.safe_message
+        assert result.failure_reason == (
+            "O idioma da mídia não está permitido pela configuração atual."
+        )
 
     def test_und_language_passes(
         self,
@@ -1046,7 +1061,8 @@ class TestDiarizationOutcomes:
         fake_transcription: FakeTranscriptionEngine,
         fake_diarization: FakeDiarizationEngine,
     ) -> None:
-        fake_diarization.raise_on_call = DiarizationError("hf token invalido")
+        provider_detail = "DIARIZATION_DETAIL_OPAQUE_9281"
+        fake_diarization.raise_on_call = DiarizationError(provider_detail)
         uc = _make_uc(
             settings,
             fake_repo=fake_repo,
@@ -1058,7 +1074,11 @@ class TestDiarizationOutcomes:
         )
         result = uc.execute(_job())
         assert result.job.status == JobStatus.FAILED
-        assert "hf token invalido" in (result.failure_reason or "")
+        assert result.operational_error is not None
+        assert result.operational_error.code.value == "diarization.failed"
+        assert result.failure_reason == result.operational_error.safe_message
+        assert provider_detail not in (result.failure_reason or "")
+        assert result.operational_error.technical_context.get("detail") == provider_detail
 
     def test_segments_assigned_to_speakers(
         self,
@@ -1125,7 +1145,8 @@ class TestYouTubeFailures:
         fake_transcription: FakeTranscriptionEngine,
         fake_diarization: FakeDiarizationEngine,
     ) -> None:
-        fake_downloader.raise_on_audio = NoAudioStreamError("somente vídeo")
+        provider_detail = "NO_AUDIO_DETAIL_OPAQUE_4817"
+        fake_downloader.raise_on_audio = NoAudioStreamError(provider_detail)
         uc = _make_uc(
             settings,
             fake_repo=fake_repo,
@@ -1142,7 +1163,11 @@ class TestYouTubeFailures:
         )
 
         assert result.job.status == JobStatus.FAILED
-        assert "sem fluxo de áudio" in (result.failure_reason or "")
+        assert result.operational_error is not None
+        assert result.operational_error.code.value == "youtube.no_audio_stream"
+        assert result.failure_reason == result.operational_error.safe_message
+        assert provider_detail not in (result.failure_reason or "")
+        assert result.operational_error.technical_context.get("detail") == provider_detail
         assert [step for step, _ in events] == [
             "fetch_metadata",
             "fetch_metadata",
@@ -1164,7 +1189,8 @@ class TestYouTubeFailures:
         fake_transcription: FakeTranscriptionEngine,
         fake_diarization: FakeDiarizationEngine,
     ) -> None:
-        fake_downloader.raise_on_metadata = VideoUnavailableError("vídeo privado")
+        provider_detail = "VIDEO_UNAVAILABLE_DETAIL_OPAQUE_7713"
+        fake_downloader.raise_on_metadata = VideoUnavailableError(provider_detail)
         uc = _make_uc(
             settings,
             fake_repo=fake_repo,
@@ -1176,7 +1202,11 @@ class TestYouTubeFailures:
         )
         result = uc.execute(_job())
         assert result.job.status == JobStatus.FAILED
-        assert "privado" in (result.failure_reason or "")
+        assert result.operational_error is not None
+        assert result.operational_error.code.value == "youtube.video_unavailable"
+        assert result.failure_reason == result.operational_error.safe_message
+        assert provider_detail not in (result.failure_reason or "")
+        assert result.operational_error.technical_context.get("detail") == provider_detail
 
 
 # ======================================================================
@@ -1309,16 +1339,18 @@ class TestRepositoryPersistence:
         assert stored.status == JobStatus.FAILED
         assert stored.error_message == result.failure_reason
         assert stored.error_message is not None
-        assert "RuntimeError" in stored.error_message
-        assert "[REDACTED]" in stored.error_message
+        assert result.operational_error is not None
+        assert result.operational_error.code.value == "internal.invariant_violation"
+        assert stored.error_message == result.operational_error.safe_message
+        assert "RuntimeError" not in stored.error_message
         assert raw_secret not in stored.error_message
         assert raw_payload not in stored.error_message
-        assert result.failure_reason is not None
-        assert raw_secret not in result.failure_reason
-        assert raw_payload not in result.failure_reason
-        assert "Pipeline falhou" in caplog.text
-        assert "RuntimeError" in caplog.text
-        assert "[REDACTED]" in caplog.text
+        detail = result.operational_error.technical_context.get("detail", "")
+        assert "[REDACTED]" in detail
+        assert raw_secret not in detail
+        assert raw_payload not in detail
+        assert "Pipeline falhou [internal.invariant_violation]" in caplog.text
+        assert "RuntimeError" not in caplog.text
         assert raw_secret not in caplog.text
         assert raw_payload not in caplog.text
 

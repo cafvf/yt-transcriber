@@ -197,7 +197,7 @@ def main() -> int:
     settings = AppSettings()
 
     # Constrói composition padrão e troca downloader/diarization
-    composition = build(settings)
+    composition = build(settings, credentials=settings.credentials)
 
     video_id = VideoId(args.video_id)
     stub_downloader = StubYouTubeDownloader(video_id, args.audio, args.title)
@@ -214,8 +214,10 @@ def main() -> int:
         transcription_engine=composition.use_case._deps.transcription_engine,
         diarization_engine=diarization_engine,
         renderer=composition.use_case._deps.renderer,
+        markdown_writer=composition.use_case._deps.markdown_writer,
         settings=settings,
         repository=composition.repository,
+        snapshot_repository=composition.snapshots,
     )
     use_case = TranscribeVideoUseCase(new_deps)
 

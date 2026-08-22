@@ -39,6 +39,9 @@ from yt_transcriber_bot.domain.entities.media_metadata import MediaMetadata
 from yt_transcriber_bot.domain.value_objects.media_source import MediaSource
 from yt_transcriber_bot.domain.value_objects.video_id import VideoId
 from yt_transcriber_bot.infrastructure.logging.execution_audit import ExecutionAuditLogger
+from yt_transcriber_bot.infrastructure.persistence.filesystem.canonical_markdown_writer import (
+    FilesystemCanonicalMarkdownWriter,
+)
 from yt_transcriber_bot.infrastructure.persistence.filesystem.owned_artifact_cleanup import (
     FilesystemOwnedArtifactCleanup,
 )
@@ -126,6 +129,7 @@ def _make_use_case(
             transcription_engine=fake_transcription,
             diarization_engine=fake_diarization,
             renderer=MarkdownTranscriptRenderer(),
+            markdown_writer=FilesystemCanonicalMarkdownWriter(),
             settings=settings,
             repository=fake_repo,
             snapshot_repository=TranscriptSnapshotRepository(settings.base_dir / "segments"),

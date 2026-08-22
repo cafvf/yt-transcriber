@@ -9,6 +9,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from yt_transcriber_bot.application.config import AppSettings
+from yt_transcriber_bot.application.operational_errors import (
+    OperationalError,
+    OperationalErrorCode,
+    PipelineRejectionError,
+    classify_operational_error,
+    error_for_code,
+)
 from yt_transcriber_bot.application.pipeline.context import PipelineContext
 from yt_transcriber_bot.application.pipeline.runner import (
     AuditFn,
@@ -16,29 +23,23 @@ from yt_transcriber_bot.application.pipeline.runner import (
     PipelineRunner,
     PipelineStep,
 )
-from yt_transcriber_bot.application.pipeline.source_acquisition import (
-    SourceAcquisitionResolver,
-)
+from yt_transcriber_bot.application.pipeline.source_acquisition import SourceAcquisitionResolver
 from yt_transcriber_bot.application.pipeline.steps import (
     ConvertAudioStep,
     DiarizeStep,
-    PipelineRejectionError,
     RenderMarkdownStep,
     SelectRuntimeStep,
     TranscribeStep,
     TranscriptionStepProgress,
 )
 from yt_transcriber_bot.application.ports.audio_converter import AudioConverter
-from yt_transcriber_bot.application.ports.canonical_transcript import (
-    CanonicalTranscriptStore,
-)
+from yt_transcriber_bot.application.ports.canonical_markdown import CanonicalMarkdownWriter
+from yt_transcriber_bot.application.ports.canonical_transcript import CanonicalTranscriptStore
 from yt_transcriber_bot.application.ports.diarization_engine import DiarizationEngine
 from yt_transcriber_bot.application.ports.gpu_detector import GpuDetector
 from yt_transcriber_bot.application.ports.job_repository import JobRepository
 from yt_transcriber_bot.application.ports.transcript_renderer import TranscriptRenderer
-from yt_transcriber_bot.application.ports.transcription_engine import (
-    TranscriptionEngine,
-)
+from yt_transcriber_bot.application.ports.transcription_engine import TranscriptionEngine
 from yt_transcriber_bot.application.ports.youtube_downloader import YouTubeDownloader
 from yt_transcriber_bot.application.services.processing_fingerprint import (
     compute_processing_fingerprint,
@@ -61,6 +62,7 @@ class TranscribeVideoResult:
     language_confidence: float | None = None
     canceled: bool = False
     failure_reason: str | None = None
+    operational_error: OperationalError | None = None
 
 
 @dataclass
@@ -71,6 +73,7 @@ class TranscribeVideoDependencies:
     transcription_engine: TranscriptionEngine
     diarization_engine: DiarizationEngine
     renderer: TranscriptRenderer
+    markdown_writer: CanonicalMarkdownWriter
     settings: AppSettings
     repository: JobRepository
     snapshot_repository: CanonicalTranscriptStore | None = None
@@ -121,46 +124,50 @@ class TranscribeVideoUseCase:
 
         try:
             runner.run(ctx, progress=progress_step, audit=audit)
-        except PipelineCanceledError:
-            job.transition_to(JobStatus.CANCELLED, error="cancelado pelo usuario")
+        except PipelineCanceledError as exc:
+            error = error_for_code(
+                OperationalErrorCode.OPERATION_CANCELLED,
+                technical_context={"detail": sanitize_text(str(exc), deps.settings)},
+            )
+            job.transition_to(JobStatus.CANCELLED, error=error.safe_message)
             deps.repository.save(job)
-            return self._result(ctx, canceled=True)
+            return self._result(ctx, canceled=True, operational_error=error)
         except PipelineRejectionError as exc:
-            failure_reason = sanitize_text(str(exc), deps.settings)
-            job.transition_to(JobStatus.FAILED, error=failure_reason)
-            deps.repository.save(job)
-            return self._result(
-                ctx,
-                failure_reason=failure_reason,
-                canonical=False,
-            )
+            error = self._classify(exc)
+            return self._failed_result(ctx, error)
         except Exception as exc:
-            failure_reason = sanitize_text(
-                f"{type(exc).__name__}: {exc}",
-                deps.settings,
-            )
-            logger.error("Pipeline falhou: %s", failure_reason)
-            job.transition_to(JobStatus.FAILED, error=failure_reason)
-            deps.repository.save(job)
-            return self._result(
-                ctx,
-                failure_reason=failure_reason,
-                canonical=False,
-            )
+            error = self._classify(exc)
+            logger.error("Pipeline falhou [%s]", error.code.value)
+            return self._failed_result(ctx, error)
 
         if ctx.final_md_path is None or not job.canonical_transcript_ref:
-            failure_reason = "Evidência canônica da transcrição não foi persistida."
-            job.transition_to(JobStatus.FAILED, error=failure_reason)
-            deps.repository.save(job)
-            return self._result(
-                ctx,
-                failure_reason=failure_reason,
-                canonical=False,
+            error = error_for_code(
+                OperationalErrorCode.INTERNAL_INVARIANT_VIOLATION,
+                safe_message="O processamento terminou sem evidência canônica válida.",
             )
+            return self._failed_result(ctx, error)
 
         job.transition_to(JobStatus.DELIVERING)
         deps.repository.save(job)
         return self._result(ctx)
+
+    def _classify(self, exc: BaseException) -> OperationalError:
+        return classify_operational_error(
+            exc,
+            sanitizer=lambda text: sanitize_text(text, self._deps.settings),
+        )
+
+    def _failed_result(
+        self, ctx: PipelineContext, error: OperationalError
+    ) -> TranscribeVideoResult:
+        ctx.job.transition_to(JobStatus.FAILED, error=error.safe_message)
+        self._deps.repository.save(ctx.job)
+        return self._result(
+            ctx,
+            failure_reason=error.safe_message,
+            operational_error=error,
+            canonical=False,
+        )
 
     def _result(
         self,
@@ -168,6 +175,7 @@ class TranscribeVideoUseCase:
         *,
         canceled: bool = False,
         failure_reason: str | None = None,
+        operational_error: OperationalError | None = None,
         canonical: bool = True,
     ) -> TranscribeVideoResult:
         return TranscribeVideoResult(
@@ -182,6 +190,7 @@ class TranscribeVideoUseCase:
             language_confidence=ctx.transcription_confidence,
             canceled=canceled,
             failure_reason=failure_reason,
+            operational_error=operational_error,
         )
 
     def runner_for(self, job: Job) -> PipelineRunner:
@@ -228,6 +237,7 @@ class TranscribeVideoUseCase:
             ),
             RenderMarkdownStep(
                 deps.renderer,
+                deps.markdown_writer,
                 deps.settings.transcripts_dir(),
                 deps.settings,
                 diarization_model_name=deps.diarization_model_name,

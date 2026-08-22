@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from yt_transcriber_bot.application.config import AppSettings
+from yt_transcriber_bot.application.operational_errors import OperationalErrorCode
 from yt_transcriber_bot.application.ports.cache import CacheCleanupResult
 from yt_transcriber_bot.application.ports.canonical_transcript import (
     CanonicalTranscriptRecord,
@@ -245,7 +246,13 @@ def test_p05_015_operational_error_wins_timestamp_tie() -> None:
     job = _delivery_failed(Job.new(VideoId("dQw4w9WgXcQ"), 7))
     when = datetime(2026, 8, 17, 12, tzinfo=UTC)
     job.updated_at = when
-    operational = OperationalErrorRecord(7, "summary", "timeout", occurred_at=when)
+    operational = OperationalErrorRecord(
+        user_id=7,
+        operation="summary",
+        code=OperationalErrorCode.TEXT_GENERATION_TIMEOUT,
+        safe_message="timeout",
+        occurred_at=when,
+    )
     report = LastErrorService(
         repository=_Repo([job]),  # type: ignore[arg-type]
         settings=AppSettings(_env_file=None, telegram_allowed_user_id=7),

@@ -6,6 +6,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from yt_transcriber_bot.application.config import AppSettings
+from yt_transcriber_bot.application.operational_errors import (
+    OperationalErrorCategory,
+    OperationalErrorCode,
+)
 from yt_transcriber_bot.application.ports.job_repository import JobRepository
 from yt_transcriber_bot.application.ports.operational_error import (
     JobLogReader,
@@ -45,23 +49,32 @@ class LastErrorService:
         user_id: int,
         operation: str,
         message: str,
+        code: OperationalErrorCode = OperationalErrorCode.INTERNAL_INVARIANT_VIOLATION,
+        category: OperationalErrorCategory = OperationalErrorCategory.INTERNAL,
+        retryable: bool = False,
         context: dict[str, object] | None = None,
         error: BaseException | None = None,
-        error_type: str = "",
         stage: str = "",
         severity: str = "error",
     ) -> OperationalErrorRecord:
-        resolved = (error_type or (type(error).__name__ if error else "")).strip()
+        technical_context = {
+            str(key): str(sanitize_value(str(key), value, self._settings))
+            for key, value in (context or {}).items()
+            if value is not None
+        }
+        if error is not None:
+            technical_context["exception_type"] = type(error).__name__
+            detail = sanitize_text(str(error), self._settings).strip()
+            if detail:
+                technical_context["detail"] = detail
         record = OperationalErrorRecord(
             user_id=user_id,
             operation=_clean_label(operation, fallback="unknown"),
-            message=sanitize_text(message, self._settings),
-            context={
-                str(key): str(sanitize_value(str(key), value, self._settings))
-                for key, value in (context or {}).items()
-                if value is not None
-            },
-            error_type=sanitize_text(resolved, self._settings),
+            code=code,
+            category=category,
+            retryable=retryable,
+            safe_message=sanitize_text(message, self._settings),
+            technical_context=technical_context,
             stage=_clean_label(stage, fallback=""),
             severity=_clean_label(severity, fallback="error"),
             traceback_tail=_format_traceback_tail(error, self._settings) if error else "",
@@ -146,22 +159,28 @@ class LastErrorService:
             "",
             "Tipo: operação derivada",
             f"Operação: {record.operation}",
+            f"Código: {record.code.value}",
+            f"Categoria: {record.category.value}",
+            f"Retentável: {'sim' if record.retryable else 'não'}",
             f"Severidade: {record.severity}",
             f"Ocorrido em: {record.occurred_at.strftime('%Y-%m-%d %H:%M:%S %Z')}",
         ]
         if record.stage:
             lines.append(f"Etapa: {record.stage}")
-        if record.error_type:
-            lines.append(f"Classe do erro: {record.error_type}")
-        lines.extend(["", "Erro:", sanitize_text(record.message, self._settings)])
-        if record.context:
-            lines.extend(["", "Contexto:"])
-            lines.extend(f"- {key}: {record.context[key]}" for key in sorted(record.context))
+        lines.extend(["", "Erro:", sanitize_text(record.safe_message, self._settings)])
+        if record.technical_context:
+            lines.extend(["", "Contexto técnico sanitizado:"])
+            lines.extend(
+                f"- {key}: {record.technical_context[key]}"
+                for key in sorted(record.technical_context)
+            )
         if record.traceback_tail:
             lines.extend(["", "Traceback final sanitizado:", record.traceback_tail])
         hints = _hints_for_text(
             operation=record.operation,
-            message="\n".join([record.message, record.error_type, record.stage]),
+            message="\n".join(
+                [record.safe_message, record.code.value, record.category.value, record.stage]
+            ),
         )
         if hints:
             lines.extend(["", "Próximas verificações:", *(f"- {hint}" for hint in hints)])
@@ -202,7 +221,7 @@ def _hints_for_text(*, operation: str, message: str) -> list[str]:
         )
     if any(key in text for key in ("ffmpeg", "ffprobe", "video_subs", "vídeo legendado")):
         hints.append("Verifique ffmpeg/ffprobe no PATH e os limites de vídeo legendado.")
-    if any(key in text for key in ("cookie", "private", "unavailable", "youtube")):
+    if any(key in text for key in ("cookie", "private", "unavailable", "youtube", "auth_required")):
         hints.append("Verifique cookies do YouTube e disponibilidade/restrições do vídeo.")
     if any(key in text for key in ("cuda", "outofmemory", "oom", "memória")):
         hints.append("Reduza modelo/compute_type ou rode em CPU; confira VRAM e WHISPER_MODEL.")

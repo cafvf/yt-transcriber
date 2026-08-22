@@ -3,8 +3,12 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
+from yt_transcriber_bot.application.operational_errors import (
+    OperationalErrorCategory,
+    OperationalErrorCode,
+)
 from yt_transcriber_bot.application.ports.operational_error import (
     OperationalErrorRecord,
     OperationalErrorStore,
@@ -34,10 +38,12 @@ class JsonlOperationalErrorStore(OperationalErrorStore):
         payload = {
             "user_id": record.user_id,
             "operation": record.operation,
-            "message": record.message,
+            "code": record.code.value,
+            "category": record.category.value,
+            "retryable": record.retryable,
+            "safe_message": record.safe_message,
             "occurred_at": record.occurred_at.isoformat(),
-            "context": record.context,
-            "error_type": record.error_type,
+            "technical_context": record.technical_context,
             "stage": record.stage,
             "severity": record.severity,
             "traceback_tail": record.traceback_tail,
@@ -86,6 +92,20 @@ class JsonlOperationalErrorStore(OperationalErrorStore):
         ensure_private_file(self._path)
 
 
+EnumT = TypeVar("EnumT", OperationalErrorCode, OperationalErrorCategory)
+
+
+def _parse_enum(
+    enum_type: type[EnumT],
+    value: object,
+    fallback: EnumT,
+) -> EnumT:
+    try:
+        return enum_type(str(value))
+    except ValueError:
+        return fallback
+
+
 def _parse(line: str) -> OperationalErrorRecord | None:
     if not line.strip():
         return None
@@ -94,19 +114,57 @@ def _parse(line: str) -> OperationalErrorRecord | None:
         when = datetime.fromisoformat(str(payload.get("occurred_at", "")))
         if when.tzinfo is None:
             when = when.replace(tzinfo=UTC)
+
+        if "safe_message" in payload or "code" in payload:
+            raw_context = payload.get("technical_context", {})
+            technical_context = (
+                {str(key): str(value) for key, value in raw_context.items()}
+                if isinstance(raw_context, dict)
+                else {}
+            )
+            code = _parse_enum(
+                OperationalErrorCode,
+                payload.get("code", ""),
+                OperationalErrorCode.LEGACY_UNCLASSIFIED,
+            )
+            category = _parse_enum(
+                OperationalErrorCategory,
+                payload.get("category", ""),
+                OperationalErrorCategory.INTERNAL,
+            )
+            return OperationalErrorRecord(
+                user_id=int(payload.get("user_id", 0)),
+                operation=str(payload.get("operation", "unknown")),
+                code=code,
+                category=category,
+                retryable=bool(payload.get("retryable", False)),
+                safe_message=str(payload.get("safe_message", "")),
+                occurred_at=when,
+                technical_context=technical_context,
+                stage=str(payload.get("stage", "")),
+                severity=str(payload.get("severity", "error")),
+                traceback_tail=str(payload.get("traceback_tail", "")),
+            )
+
+        # COMPAT-005: read-only translation for pre-Gate-B JSONL records.
         raw_context = payload.get("context", {})
-        context = (
+        technical_context = (
             {str(key): str(value) for key, value in raw_context.items()}
             if isinstance(raw_context, dict)
             else {}
         )
+        legacy_error_type = str(payload.get("error_type", "")).strip()
+        if legacy_error_type:
+            technical_context["legacy_exception_type"] = legacy_error_type
         return OperationalErrorRecord(
             user_id=int(payload.get("user_id", 0)),
             operation=str(payload.get("operation", "unknown")),
-            message=str(payload.get("message", "")),
+            code=OperationalErrorCode.LEGACY_UNCLASSIFIED,
+            category=OperationalErrorCategory.INTERNAL,
+            retryable=False,
+            safe_message=str(payload.get("message", "")),
             occurred_at=when,
-            context=context,
-            error_type=str(payload.get("error_type", "")),
+            technical_context=technical_context,
             stage=str(payload.get("stage", "")),
             severity=str(payload.get("severity", "error")),
             traceback_tail=str(payload.get("traceback_tail", "")),

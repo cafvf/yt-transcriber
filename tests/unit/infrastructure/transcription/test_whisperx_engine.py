@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from yt_transcriber_bot.application.ports.transcription_engine import (
+    ObservedLanguageNotAllowedError,
     OutOfMemoryError,
     ProcessingPrecision,
     ProcessingTarget,
@@ -240,7 +241,7 @@ class TestLanguageEnforcement:
         backend = FakeBackend(raw=_ok_raw(detected), aligned=_ok_aligned())
         engine = WhisperXTranscriptionEngine(backend=backend)
 
-        with pytest.raises(TranscriptionError, match="não suportado"):
+        with pytest.raises(ObservedLanguageNotAllowedError, match="não suportado"):
             engine.transcribe(_request(_make_audio(tmp_path)))
 
     def test_forced_language_is_not_reported_as_detector_confidence(self, tmp_path: Path) -> None:

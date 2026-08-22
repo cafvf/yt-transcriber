@@ -315,6 +315,7 @@ def build(settings: AppSettings, *, credentials: ProviderCredentials) -> Composi
     )
     converter: AudioConverter = FfmpegAudioConverter()
     renderer = MarkdownTranscriptRenderer()
+    markdown_writer = FilesystemCanonicalMarkdownWriter()
     use_case = TranscribeVideoUseCase(
         TranscribeVideoDependencies(
             downloader=downloader,
@@ -323,13 +324,14 @@ def build(settings: AppSettings, *, credentials: ProviderCredentials) -> Composi
             transcription_engine=_make_transcription_engine(),
             diarization_engine=_make_diarization_engine(credentials.hf_token),
             renderer=renderer,
+            markdown_writer=markdown_writer,
             settings=settings,
             repository=repository,
             snapshot_repository=snapshots,
         )
     )
 
-    rename_service = RenameSpeakersService(snapshots, renderer, FilesystemCanonicalMarkdownWriter())
+    rename_service = RenameSpeakersService(snapshots, renderer, markdown_writer)
     export_service = TranscriptExportService(snapshots)
     plain_text_export_service = PlainTextTranscriptExportService(snapshots)
     video_subtitle_export_service = VideoSoftSubtitleExportService(

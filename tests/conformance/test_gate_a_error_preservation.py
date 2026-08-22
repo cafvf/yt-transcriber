@@ -84,14 +84,15 @@ def test_use_case_keeps_separate_cancel_rejection_and_unexpected_failure_paths()
     assert "<bare>" not in caught
 
 
-def test_use_case_still_sanitizes_persisted_failure_text() -> None:
+def test_use_case_persists_only_stable_safe_failure_semantics() -> None:
     path = SRC_ROOT / "application" / "use_cases" / "transcribe_video.py"
     source = path.read_text(encoding="utf-8")
 
-    assert "sanitize_text(str(exc), deps.settings)" in source
-    assert 'f"{type(exc).__name__}: {exc}"' in source
+    assert "classify_operational_error" in source
+    assert "error.safe_message" in source
+    assert 'f"{type(exc).__name__}: {exc}"' not in source
     assert "canonical=False" in source
-    assert "Evidência canônica da transcrição não foi persistida." in source
+    assert "INTERNAL_INVARIANT_VIOLATION" in source
 
 
 def test_artifact_policy_is_not_a_recovery_precondition_anymore() -> None:

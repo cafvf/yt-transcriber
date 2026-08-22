@@ -102,6 +102,11 @@ class FakeMarkdownWriter(CanonicalMarkdownWriter):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
 
+    def write_new(self, preferred_path: Path, content: str, *, collision_key: str) -> Path:
+        del collision_key
+        self.write(preferred_path, content)
+        return preferred_path
+
 
 class FakeChatClient:
     model = "fake-model"

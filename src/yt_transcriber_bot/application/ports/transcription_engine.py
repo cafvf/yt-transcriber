@@ -20,6 +20,10 @@ class OutOfMemoryError(TranscriptionError):
     """Backend reported an out-of-memory execution failure."""
 
 
+class ObservedLanguageNotAllowedError(TranscriptionError):
+    """ASR observed a language outside the application allowlist."""
+
+
 class ProcessingTarget(StrEnum):
     CPU = "cpu"
     GPU = "gpu"

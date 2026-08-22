@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from yt_transcriber_bot.application.operational_errors import (
+    OperationalErrorCategory,
+    OperationalErrorCode,
+)
 from yt_transcriber_bot.application.ports.cache import CacheCleanupResult
 from yt_transcriber_bot.application.services.cache_maintenance import CacheMaintenanceService
 from yt_transcriber_bot.application.services.healthcheck import (
@@ -39,6 +43,9 @@ class OperationalWorkflow:
         user_id: int,
         operation: str,
         message: str,
+        code: OperationalErrorCode = OperationalErrorCode.INTERNAL_INVARIANT_VIOLATION,
+        category: OperationalErrorCategory = OperationalErrorCategory.INTERNAL,
+        retryable: bool = False,
         context: dict[str, object] | None = None,
         error: BaseException | None = None,
         stage: str = "",
@@ -48,6 +55,9 @@ class OperationalWorkflow:
             user_id=user_id,
             operation=operation,
             message=message,
+            code=code,
+            category=category,
+            retryable=retryable,
             context=context,
             error=error,
             stage=stage,
@@ -60,7 +70,10 @@ class OperationalWorkflow:
             self._last_error.record_operation_error(
                 user_id=user_id,
                 operation="clearcache",
-                message="Limpeza de cache concluída parcialmente; alguns itens não puderam ser removidos.",
+                message=(
+                    "Limpeza de cache concluída parcialmente; "
+                    "alguns itens não puderam ser removidos."
+                ),
                 context={"failures": result.failures},
                 stage="cache_cleanup",
                 severity="warn",
