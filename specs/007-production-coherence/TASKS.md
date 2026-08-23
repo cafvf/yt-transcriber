@@ -157,3 +157,20 @@ Gate-level closure evidence is recorded in
 [`GATE-D-CLOSURE.md`](GATE-D-CLOSURE.md).
 
 Next and final task group: **P07-E — Release gate (P07-018…P07-023)**.
+
+<!-- PLAN-007:GATE-E:TASK-CLOSURE:2026-08-23 -->
+## Gate E task closure ledger — 2026-08-23
+
+| Task | Status | Canonical outcome |
+| --- | --- | --- |
+| P07-018 | **DONE** | cumulative syntax/import/lint/format/type/architecture/test evidence passed for release candidate `2f2b99840830a555c29afcd56082b259dc971df4` |
+| P07-019 | **DONE** | secret scanner, Gitleaks, private-artifact inspection and pre-commit passed |
+| P07-020 | **DONE** | build, wheel inspection, clean installed origin/CLI and checkout-independent offline/read-only preflight passed |
+| P07-021 | **DONE WITH RESERVATION** | real YouTube metadata/formats/acquisition passed; selected fixture did not expose identifiable multi-audio original-track candidates |
+| P07-022 | **DONE WITH RESERVATION** | production migration/systemd/SQLite/status passed; LM Studio was intentionally offline during manual healthcheck |
+| P07-023 | **DONE** | exact candidate/base, package/hashes/evidence, clean-tree and local/remote guards recorded |
+
+Gate-level and PLAN-level closure evidence is recorded in
+[`GATE-E-CLOSURE.md`](GATE-E-CLOSURE.md).
+
+Final PLAN-007 decision: **CLOSED / PASS WITH RESERVATION**.

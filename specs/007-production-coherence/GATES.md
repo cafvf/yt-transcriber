@@ -268,3 +268,15 @@ architecture → gate → behavior → task → use case → test → evidence
 | GATE-P07-B — Safe Boundaries and Operational Error Semantics | **CLOSED / PASS** | [`GATE-B-CLOSURE.md`](GATE-B-CLOSURE.md), implementation `2bc2041` | GATE-P07-C |
 
 Gate C inherits the Gate A and Gate B invariants; neither closure may be weakened by later packaging/configuration work.
+
+<!-- PLAN-007:GATE-E:STATUS:2026-08-23 -->
+## Final gate and PLAN closure ledger — 2026-08-23
+
+| Gate | Status | Evidence | Next |
+| --- | --- | --- | --- |
+| GATE-P07-E — Release Candidate Evidence | **CLOSED / PASS WITH RESERVATION** | [`GATE-E-CLOSURE.md`](GATE-E-CLOSURE.md), release candidate `2f2b99840830a555c29afcd56082b259dc971df4` | PLAN-007 complete |
+
+The reservations are non-critical disclosed limitations only. No type, correctness, architecture,
+security, artifact-integrity, clean-install or required core-runtime failure was downgraded.
+
+Feature work may resume after this allowed release decision.

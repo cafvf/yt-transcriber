@@ -78,3 +78,14 @@ Obsidian-specific note generation.
 - Closure evidence: [`GATE-D-CLOSURE.md`](GATE-D-CLOSURE.md).
 - Gates A, B and C remain inherited and green on the Gate D candidate.
 - Next and final target: **GATE-P07-E — Release Gate (P07-018…P07-023)**.
+
+<!-- PLAN-007:GATE-E:STATUS:2026-08-23 -->
+## Execution status — 2026-08-23 — Gate E / PLAN-007 closure
+
+- **GATE-P07-E — Release Candidate Evidence: CLOSED / PASS WITH RESERVATION**.
+- Exact validated release candidate: `2f2b99840830a555c29afcd56082b259dc971df4`.
+- Closure evidence: [`GATE-E-CLOSURE.md`](GATE-E-CLOSURE.md).
+- Gates A, B, C and D remained inherited and green on the release candidate.
+- Reservations are limited to live multi-audio/original-track coverage and intentionally unavailable
+  LM Studio during the final manual healthcheck.
+- **PLAN-007 is complete. Feature work may resume.**
