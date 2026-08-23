@@ -60,3 +60,21 @@ Obsidian-specific note generation.
 - Closure evidence: [`GATE-B-CLOSURE.md`](GATE-B-CLOSURE.md).
 - Gate A remains inherited and green on the Gate B candidate.
 - Next implementation target: **GATE-P07-C — Distributable Runtime and Configuration**.
+
+<!-- PLAN-007:GATE-C:STATUS:2026-08-22 -->
+## Execution status — 2026-08-22 — Gate C closure
+
+- **GATE-P07-C — Distributable Runtime and Configuration: CLOSED / PASS**.
+- Canonical implementation: `612a95636fd9cf1b2a5ce4229df456dc53a8049c`.
+- Closure evidence: [`GATE-C-CLOSURE.md`](GATE-C-CLOSURE.md).
+- Next implementation target at closure time: **GATE-P07-D — Documentation and Onboarding**.
+
+<!-- PLAN-007:GATE-D:STATUS:2026-08-23 -->
+## Execution status — 2026-08-23 — Gate D closure
+
+- **GATE-P07-D — Documentation and Onboarding: CLOSED / PASS**.
+- Canonical implementation: `7080afc9342f0bd94b0ab74aba3b1c60996c0bc9`
+  (`docs: reconcile PLAN-007 production onboarding`).
+- Closure evidence: [`GATE-D-CLOSURE.md`](GATE-D-CLOSURE.md).
+- Gates A, B and C remain inherited and green on the Gate D candidate.
+- Next and final target: **GATE-P07-E — Release Gate (P07-018…P07-023)**.

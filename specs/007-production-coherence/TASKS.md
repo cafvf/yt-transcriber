@@ -36,7 +36,7 @@ Status: **Approved for execution**
 - **TASK-P07-015:** rewrite README as product front door: product, capabilities, limitations,
   prerequisites, install, credential table, private config, start, healthcheck, first transcription,
   systemd, update, backup, troubleshooting, development, deep docs.
-- **TASK-P07-016:** reconcile installation/security/runbook/readiness docs; historical evidence stays.
+- **TASK-P07-016:** reconcile installation/security/runbook/readiness docs; historical engineering evidence remains under `specs/`, not duplicated as obsolete public operator docs.
 - **TASK-P07-017:** document user-relevant deprecations/removal policy.
 - **GATE-P07-D:** documentation-to-implementation conformance.
 
@@ -141,3 +141,19 @@ Detailed C3 proof contract: [`GATE-C-DISTRIBUTION-PROOF.md`](GATE-C-DISTRIBUTION
 Gate-level closure evidence is recorded in [`GATE-C-CLOSURE.md`](GATE-C-CLOSURE.md).
 
 Next task group: **P07-D — Documentation and onboarding (P07-015…017)**.
+
+<!-- PLAN-007:GATE-D:TASK-CLOSURE:2026-08-23 -->
+## Gate D task closure ledger — 2026-08-23
+
+| Task | Status | Canonical outcome |
+| --- | --- | --- |
+| P07-015 | **DONE** | README is the current product front door and distinguishes installed production from checkout development |
+| P07-016 | **DONE** | installation/security/runbook/readiness agree with implementation; engineering history remains in `specs/`, not duplicated as obsolete operator-facing gate reports/patch notes |
+| P07-017 | **DONE** | user-facing compatibility, deprecation and removal policy is explicit and current |
+
+Canonical implementation: `7080afc9342f0bd94b0ab74aba3b1c60996c0bc9`.
+
+Gate-level closure evidence is recorded in
+[`GATE-D-CLOSURE.md`](GATE-D-CLOSURE.md).
+
+Next and final task group: **P07-E — Release gate (P07-018…P07-023)**.
