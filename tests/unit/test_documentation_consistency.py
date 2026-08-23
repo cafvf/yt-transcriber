@@ -255,16 +255,17 @@ def test_docs_identify_delivery_failed_as_implemented() -> None:
     assert "transcribe_delivery" in ledger
 
 
-def test_production_readiness_ledger_tracks_phase_zero_scope() -> None:
+def test_production_readiness_tracks_current_installed_contract() -> None:
     ledger = Path("docs/09-production-readiness.md")
     assert ledger.exists()
     doc = ledger.read_text(encoding="utf-8")
 
     for phrase in (
-        "Phase 0",
-        "Fila durável e restart recovery",
-        "speakers",
-        "queue",
+        "EnvironmentFile=/etc/yt-transcriber-bot/env",
+        "WorkingDirectory=/var/lib/yt-transcriber-bot",
+        "ExecStart=/opt/yt-transcriber-bot/venv/bin/yt-transcriber-bot",
+        "yt-transcriber-bot --preflight",
+        "em memória",
         "/search",
         "/text",
         "/translate",

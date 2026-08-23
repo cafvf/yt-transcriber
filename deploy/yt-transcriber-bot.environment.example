@@ -1,0 +1,27 @@
+# Template de PRODUÇÃO para /etc/yt-transcriber-bot/env. Nunca versione o arquivo real.
+TELEGRAM_BOT_TOKEN=REPLACE_ME_TELEGRAM_BOT_TOKEN
+TELEGRAM_ALLOWED_USER_ID=123456789
+HF_TOKEN=hf_REPLACE_ME
+PATH=/opt/yt-transcriber-bot/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+YOUTUBE_COOKIES_FILE=
+# YOUTUBE_COOKIES_BROWSER=firefox
+WHISPER_MODEL=auto
+WHISPER_MODEL_PT=inesc-id/WhisperLv3-X-PT-All
+WHISPER_MODEL_EN=medium
+WHISPER_MODEL_DEFAULT=medium
+DEVICE=auto
+COMPUTE_TYPE=auto
+PREFER_YOUTUBE_SUBTITLES=true
+MAX_MEDIA_DURATION_MIN=180
+RETENTION_COUNT=5
+TELEGRAM_MAX_QUEUE_SIZE=5
+TELEGRAM_MAX_MEDIA_SIZE_MB=20
+BASE_DIR=/var/lib/yt-transcriber-bot/data
+MODELS_DIR=/var/lib/yt-transcriber-bot/models
+DB_PATH=/var/lib/yt-transcriber-bot/data/jobs.db
+SUMMARY_BACKEND=openai_compatible
+SUMMARY_BASE_URL=http://127.0.0.1:1234/v1
+SUMMARY_MODEL=qwen3.5-9b
+SUMMARY_API_KEY=
+SUMMARY_DISABLE_THINKING=true
+SUMMARY_TOKENIZER_TRUST_REMOTE_CODE=false

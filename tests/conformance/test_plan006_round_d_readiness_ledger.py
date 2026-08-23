@@ -138,7 +138,7 @@ def test_p06_010_acceptance_review_is_explicit() -> None:
     assert "318d90dda0ead178c5df30b899fb4fea4430fc0d" in ledger
 
 
-def test_p06_010_readiness_document_no_longer_claims_rehearsals_are_missing() -> None:
+def test_current_readiness_is_operational_not_plan006_evidence_ledger() -> None:
     readiness = READINESS.read_text(encoding="utf-8")
 
     stale = (
@@ -153,9 +153,13 @@ def test_p06_010_readiness_document_no_longer_claims_rehearsals_are_missing() ->
     for phrase in stale:
         assert phrase not in readiness
 
-    assert "TASK-P06-010" in readiness
-    assert "TASK-P06-011" in readiness
-    assert BASELINE in readiness
+    assert "Estado operacional atual para produção privada/single-operator em Linux" in readiness
+    assert "EnvironmentFile=/etc/yt-transcriber-bot/env" in readiness
+    assert "yt-transcriber-bot --preflight" in readiness
+    assert "backup credential-free planejado" in readiness
+    assert "TASK-P06-" not in readiness
+    assert "~/Downloads/" not in readiness
+    assert BASELINE not in readiness
 
 
 def test_p06_010_execution_tracking_reports_plan006_closed() -> None:

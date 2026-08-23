@@ -8,7 +8,7 @@ O roadmap abaixo foi revisado após a estabilização de `/healthcheck` e `/last
 
 ## Funcionalidades recém-promovidas para implementação
 
-As funcionalidades abaixo saíram do roadmap e devem permanecer documentadas no README, no contrato funcional, no manual e nas patch notes:
+As funcionalidades abaixo saíram do roadmap e devem permanecer documentadas no README, no contrato funcional, no manual e na documentação canônica correspondente:
 
 - `/healthcheck`: diagnóstico operacional de configuração, dependências, diretórios, SQLite, cookies, LM Studio, tokenizer/orçamento de sumarização e espaço em disco.
 - `/lasterror`: recuperação do último erro operacional sanitizado, cobrindo jobs `failed`, jobs `delivery_failed` e erros derivados de `/summary`, exportações, vídeo legendado, limpeza de cache, falha de entrega registrada como `transcribe_delivery` e exceções defensivas do pipeline.

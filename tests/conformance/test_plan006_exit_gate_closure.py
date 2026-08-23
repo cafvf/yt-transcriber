@@ -64,15 +64,20 @@ def test_p06_011_stage_b_is_explicitly_non_material_to_operational_evidence() ->
     assert "not repeated solely for documentation bookkeeping" in normalized
 
 
-def test_plan006_closure_uses_sanitized_new_private_locators() -> None:
+def test_plan006_private_locators_remain_in_engineering_specs_only() -> None:
     unsafe_gate_locator = re.compile(rf"/home/[^/]+/Downloads/{re.escape(GATE_DIR)}/")
-    for path in (CLOSURE, LEDGER, ROADMAP, READINESS):
+    for path in (CLOSURE, LEDGER, ROADMAP):
         text = path.read_text(encoding="utf-8")
         assert SUMMARY in text, path
         assert unsafe_gate_locator.search(text) is None, path
 
     closure = CLOSURE.read_text(encoding="utf-8")
     assert "/home/" not in closure
+
+    readiness = READINESS.read_text(encoding="utf-8")
+    assert SUMMARY not in readiness
+    assert "~/Downloads/" not in readiness
+    assert "TASK-P06-" not in readiness
 
 
 def test_plan006_execution_readme_reports_closed_state() -> None:
@@ -104,16 +109,16 @@ def test_p06_010_ledger_is_closed_and_consumed_by_p06_011() -> None:
     assert "READY TO CLOSE" not in text
 
 
-def test_production_readiness_declares_private_single_operator_baseline_complete() -> None:
+def test_production_readiness_describes_current_single_operator_contract() -> None:
     text = READINESS.read_text(encoding="utf-8")
-    assert "baseline privada/single-operator está completa" in text
-    assert "`TASK-P06-011` passou" in text
-    assert BASELINE in text
-    assert "[x] Declarar produção privada/single-operator completa" in text
-    assert "PLAN-006 exit gate - 2026-08-18" in text
-    assert "Nenhum blocker do PLAN-006 permanece" in text
-    assert "ainda depende do exit gate" not in text
-    assert "ainda precisa confirmar" not in text
+    assert "produção privada/single-operator em Linux" in text
+    assert "EnvironmentFile=/etc/yt-transcriber-bot/env" in text
+    assert "WorkingDirectory=/var/lib/yt-transcriber-bot" in text
+    assert "ExecStart=/opt/yt-transcriber-bot/venv/bin/yt-transcriber-bot" in text
+    assert "yt-transcriber-bot --preflight" in text
+    assert "delivery_failed" in text
+    assert "TASK-P06-" not in text
+    assert BASELINE not in text
 
 
 def test_plan006_closure_does_not_claim_frozen_out_features() -> None:

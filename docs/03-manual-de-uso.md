@@ -15,7 +15,7 @@ reporta bloqueios, que há espaço em disco e que o modelo/servidor de resumo s�
 
 Arquivos Telegram aceitos: `mp3`, `m4a`, `ogg`, `opus`, `wav`, `flac` e `webm`,
 com MIME de áudio e dentro de `TELEGRAM_MAX_MEDIA_SIZE_MB` e
-`MAX_VIDEO_DURATION_MIN`. O bot informa rejeições antes de enfileirar.
+`MAX_MEDIA_DURATION_MIN`. O bot informa rejeições antes de enfileirar.
 
 ## Referência rápida de comandos
 

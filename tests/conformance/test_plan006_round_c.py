@@ -9,14 +9,15 @@ def test_plan006_round_c_exposes_isolated_restore_command() -> None:
     assert "_safe_extract_canonical_transcripts" in rehearsal
 
 
-def test_plan006_round_c_runbook_keeps_credentials_outside_restore() -> None:
+def test_current_runbook_keeps_credentials_outside_restore() -> None:
     runbook = Path("docs/11-operator-runbook.md").read_text(encoding="utf-8")
-    assert "P06-006 — backup credential-free e restore validado" in runbook
-    assert "restore-staging" in runbook
-    assert ".env" in runbook
+
+    assert "## Backup credential-free" in runbook
+    assert "## Restore" in runbook
     assert "/etc/yt-transcriber-bot/env" in runbook
     assert "cookies" in runbook.lower()
-    assert "staging isolado" in runbook.lower()
+    assert "Credenciais/cookies são reprovisionados separadamente" in runbook
+    assert "PRAGMA integrity_check" in runbook
     assert "/healthcheck" in runbook
     assert "/status" in runbook
     assert "/list" in runbook

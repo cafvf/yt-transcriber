@@ -21,5 +21,6 @@ def test_p06_008_manual_recovery_contract_is_traceable() -> None:
     assert '"implicit_resend": False' in helper
     assert '"job_reopened": False' in helper
     assert '"recomputation_triggered": False' in helper
-    assert "P06-008" in runbook
-    assert "manual_artifact_recovery.py" in runbook
+    assert "delivery_failed" in runbook
+    assert "/lasterror" in runbook
+    assert "Não há reenvio automático universal" in runbook

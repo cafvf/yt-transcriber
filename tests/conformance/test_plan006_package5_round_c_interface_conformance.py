@@ -90,8 +90,7 @@ def test_p06_009_package_and_readme_describe_youtube_plus_telegram_media() -> No
     assert "YouTube" in package_description
     assert "áudio" in package_description
 
-    assert "YouTube ou arquivos de" in readme
-    assert "áudio enviados pelo próprio usuário" in readme
+    assert "transcrever links do YouTube e mídia de áudio enviada pelo próprio usuário" in readme
     assert "Aceita links do YouTube, áudio, mensagens de voz e documentos de áudio" in readme
 
 
@@ -105,7 +104,16 @@ def test_p06_009_shipped_ci_is_not_listed_as_future() -> None:
     assert "Rodar testes unitários e linters em PRs" not in roadmap
 
 
-def test_p06_009_historical_gate_reports_remain_historical() -> None:
-    readme = README.read_text(encoding="utf-8")
-    assert "`docs/05-plano-de-execucao.md`, `docs/gate-reports/` e `docs/patches/` são" in readme
-    assert "histórico e evidência; não substituem os guias acima" in readme
+def test_current_public_docs_do_not_keep_historical_gate_report_tree() -> None:
+    for path in (
+        Path("docs/05-plano-de-execucao.md"),
+        Path("docs/gate-reports"),
+        Path("docs/patches"),
+    ):
+        assert not path.exists(), path
+
+    assert Path("specs/005-tasks/PLAN-006-TASKS.md").is_file()
+    assert Path("specs/006-execution/PLAN-006-CLOSURE.md").is_file()
+    assert "permanecem em `specs/` como contratos de engenharia" in README.read_text(
+        encoding="utf-8"
+    )

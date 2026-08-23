@@ -1,153 +1,187 @@
 # YT Transcriber Bot
 
-Bot privado do Telegram para transcrever conteúdo do YouTube ou arquivos de
-áudio enviados pelo próprio usuário. Ele produz uma transcrição em Markdown,
-separa falantes quando o ambiente permite, mantém histórico local e oferece
-exportação, busca e resumo opcional por um servidor compatível com OpenAI.
+Bot privado do Telegram para um único operador transcrever links do YouTube e mídia de áudio enviada pelo próprio usuário. O produto gera uma transcrição canônica em Markdown, mantém histórico local em SQLite, oferece exportações e busca textual, pode diarizar falantes e pode gerar resumos por um endpoint OpenAI-compatible configurado pelo operador.
 
-O projeto foi desenhado para **um único operador autorizado**, em uma máquina
-Linux ou WSL2. Não é um serviço público, multiusuário ou hospedado.
+O alvo de produção atual é **Linux, single-operator e private-chat-only**. Não é um serviço público, multiusuário ou hospedado.
 
-## O que ele faz
+## Capacidades atuais
 
-- aceita um link do YouTube, uma mensagem de voz, um áudio ou um documento de
-  áudio no Telegram;
-- prefere legendas aproveitáveis do YouTube e usa WhisperX quando necessário;
-- converte o áudio com ffmpeg, diariza falantes e entrega Markdown;
-- guarda histórico em SQLite, permite renomear/mesclar falantes e exportar
-  JSON, SRT, VTT e texto simples;
-- gera MP4 com legenda selecionável apenas para origens YouTube compatíveis;
-- pesquisa transcrições concluídas, produz resumo opcional e oferece
-  `/healthcheck` e `/lasterror` para operação local.
-
-## Começo rápido
-
-Pré-requisitos mínimos: Python 3.11 ou 3.12, [uv](https://docs.astral.sh/uv/),
-ffmpeg/ffprobe, uma conta Telegram com bot criado no BotFather e tokens locais
-para Telegram e Hugging Face. WhisperX, PyTorch e pyannote são instalados pelo
-`uv sync`, mas podem exigir GPU, memória e aceite dos modelos no Hugging Face.
-
-```bash
-git clone <repo>
-cd yt-transcriber
-uv sync --dev
-sudo apt install ffmpeg              # Ubuntu/WSL; use o equivalente da sua distro
-cp .env.example .env
-# edite .env: TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USER_ID e HF_TOKEN
-uv run python scripts/config/print_effective_settings.py
-uv run python -m yt_transcriber_bot
-```
-
-Use `uv run python -m yt_transcriber_bot` ou o comando instalado
-`uv run yt-transcriber-bot`. O processo recusa segredos ausentes e verifica as
-dependências de runtime antes de iniciar o polling.
-
-Leia o [manual de instalação](docs/04-manual-de-instalacao.md) antes de usar em
-um host persistente: ele cobre drivers/GPU, cookies YouTube, Hugging Face, LM
-Studio e systemd.
-
-## Uso no Telegram
-
-Envie uma URL do YouTube ou um arquivo de áudio. Para fixar idioma, use
-`/pt <link>` ou `/en <link>`; `/transcribe <link>` usa a seleção automática.
-
-| Objetivo | Comando |
-|---|---|
-| Ajuda e estado | `/help`, `/status`, `/queue` ou `/fila` |
-| Cancelar | `/cancel`, `/cancelall` ou `/clearqueue` |
-| Histórico | `/list`, `/last [n]`, `/search <texto>` |
-| Reprocessar URL | `/redo <link> [--lang pt\|en]` |
-| Renomear falantes | `/rename [n]` |
-| Resumir | `/summary [n]` |
-| Exportar | `/text [n]`, `/json [n]`, `/srt [n]`, `/vtt [n]`, `/export <tipo> [n]` |
-| Vídeo com legenda | `/video_subs [n]` (somente YouTube) |
-| Diagnosticar | `/healthcheck`, `/lasterror`, `/clearcache` |
-
-`n` é o índice mostrado por `/list`. `/last` reenvia apenas o Markdown salvo;
-não reenvia o áudio. `/redo <link>` reprocessa imediatamente e não pede
-confirmação inline; confirmação visual e comparação de configuração ainda não
-existem.
-
-O bot atende somente `TELEGRAM_ALLOWED_USER_ID`. Arquivos aceitos devem ser
-áudio reconhecível, usar extensão suportada (`mp3`, `m4a`, `ogg`, `opus`, `wav`,
-`flac` ou `webm`) e respeitar os limites de tamanho e duração configurados.
-
-## Como o processamento funciona
-
-```text
-YouTube: URL -> metadados -> legenda aproveitável ou download -> conversão
-Telegram: mídia validada e baixada para staging -> conversão
-ambos: seleção de runtime -> ASR -> diarização -> Markdown -> entrega/exportação
-```
-
-Cada pedido vira um job. A fila de execução é sequencial e fica em memória;
-SQLite guarda o estado, origem e dados mínimos necessários para recovery. Após
-reinício (restart), pendentes seguros voltam à fila. A deduplicação protege a
-mesma origem/idioma em processamento ou na fila; jobs concluídos podem ser
-reprocessados. Jobs interrompidos em etapa ativa são marcados como falhos e não
-retomam no meio de ASR ou diarização; falha de entrega é `delivery_failed` e
-aparece em `/lasterror`.
+- aceita URL do YouTube, áudio, mensagem de voz e documento de áudio no Telegram;
+- prefere legendas aproveitáveis do YouTube e usa WhisperX quando ASR é necessário;
+- usa ffmpeg/ffprobe para mídia e pyannote/WhisperX para diarização;
+- produz Markdown e exporta TXT, JSON, SRT e VTT;
+- gera MP4 com legenda selecionável para origens YouTube compatíveis;
+- mantém histórico local, `/search <texto>`, `/rename`, `/summary`, `/healthcheck` e `/lasterror`;
+- executa um job por vez; a fila é **em memória**, com estado mínimo persistido para reconciliação após reinício.
 
 Aceita links do YouTube, áudio, mensagens de voz e documentos de áudio.
 
-Mídia Telegram é tratada como privada: não recebe URL ou ID sintético do
-YouTube. Cada conversão usa um caminho vinculado ao `job_id`, evitando colisão
-entre arquivos com o mesmo nome. A política de retenção remove mídia bruta,
-conversões e logs associados a jobs antigos, mas preserva Markdown e snapshots
-de segmentos para histórico e renomeação de falantes.
+## Limitações importantes
 
-## Configuração essencial
+- Python suportado: **3.11 ou 3.12**;
+- produção suportada: Linux; WSL2 pode ser usado para operação local;
+- existe apenas um usuário autorizado (`TELEGRAM_ALLOWED_USER_ID`);
+- não há retomada no meio de ASR ou diarização: estados ativos interrompidos viram falha e `delivering` interrompido vira `delivery_failed`;
+- `/redo <link>` reprocessa imediatamente e não pede confirmação inline;
+- `/translate`, `/search semantic <texto>`, multiusuário, Docker Compose e checkpoints internos continuam fora do produto atual;
+- sumarização depende do endpoint configurado e pode ser desabilitada sem impedir transcrição;
+- cookies do YouTube podem ser necessários para conteúdo autenticado ou cenários anti-bot.
 
-`.env.example` contém apenas exemplos. Copie-o para `.env`; ele nunca é usado
-como configuração real. Variáveis de ambiente têm precedência e
-`YT_TRANSCRIBER_ENV_FILE` permite escolher um arquivo `.env` explícito.
+## Pré-requisitos
 
-| Grupo | Variáveis importantes |
-|---|---|
-| Acesso | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER_ID`, `HF_TOKEN` |
-| YouTube | `YOUTUBE_COOKIES_FILE` ou `YOUTUBE_COOKIES_BROWSER` |
-| ASR | `WHISPER_MODEL`, `WHISPER_MODEL_PT`, `WHISPER_MODEL_EN`, `DEVICE`, `COMPUTE_TYPE` |
-| Limites | `MAX_VIDEO_DURATION_MIN`, `TELEGRAM_MAX_MEDIA_SIZE_MB`, `TELEGRAM_MAX_QUEUE_SIZE`, `RETENTION_COUNT` |
-| Diretórios | `BASE_DIR`, `DB_PATH`, `MODELS_DIR` |
-| Resumo | `SUMMARY_BACKEND`, `SUMMARY_BASE_URL`, `SUMMARY_MODEL`, `SUMMARY_API_KEY` |
+Para produção, instale Git para obter/atualizar a fonte de instalação, Python 3.11 ou 3.12 com `venv`, `ffmpeg`/`ffprobe` e ao menos um runtime JavaScript suportado: **Deno >= 2.3.0** ou **Node.js >= 22.0.0**. GPU NVIDIA é opcional.
 
-LM Studio é o backend local recomendado para resumo, mas é opcional: sem ele a
-transcrição continua funcionando e apenas `/summary` fica indisponível.
+A stack de ML é dependência de produção e é instalada junto com o pacote; não use um ambiente “mínimo” sem WhisperX/pyannote.
 
-## Documentação
+## Instalação de produção
 
-| Documento | Para quê serve |
-|---|---|
-| [00 — auditoria](docs/00-auditoria-da-documentacao.md) | Mapa desta reconciliação e decisões de escopo. |
-| [01 — contrato funcional](docs/01-contrato-funcional.md) | O que o produto faz e não faz. |
-| [02 — arquitetura](docs/02-arquitetura.md) | Camadas, pipeline, dados e recovery. |
-| [03 — manual de uso](docs/03-manual-de-uso.md) | Referência de comandos e exemplos. |
-| [04 — instalação](docs/04-manual-de-instalacao.md) | Dependências, configuração e execução. |
-| [06 — roadmap](docs/06-funcionalidades-futuras.md) | Próximas capacidades, sem promessas de entrega. |
-| [07 — glossário e decisões](docs/07-glossario-e-decisoes.md) | Vocabulário e decisões duráveis. |
-| [08 — segurança](docs/08-seguranca-e-segredos.md) | Dados privados, segredos e verificações. |
-| [09 — prontidão](docs/09-production-readiness.md) | Estado e lacunas para operação privada. |
-| [10 — ADR de recovery](docs/10-recovery-semantics-adr.md) | Semântica de reinício. |
-| [11 — runbook](docs/11-operator-runbook.md) | Operação systemd, backup e incidentes. |
-
-`/translate` e busca semântica continuam planejados; não são comandos atuais.
-
-`docs/05-plano-de-execucao.md`, `docs/gate-reports/` e `docs/patches/` são
-histórico e evidência; não substituem os guias acima. Evidências operacionais
-geradas em `ops-evidence/` são locais, contêm dados sensíveis e são ignoradas
-pelo Git.
-
-## Verificação local
+O checkout é usado para construir/instalar a distribuição, mas **não faz parte do runtime de produção**.
 
 ```bash
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy src
-uv run pytest
-uv run pre-commit run --all-files
-python3 scripts/security/scan_secrets.py --all
+git clone https://github.com/cafvf/yt-transcriber.git
+cd yt-transcriber
+
+if command -v python3.12 >/dev/null 2>&1; then
+    PYTHON_BIN="$(command -v python3.12)"
+elif command -v python3.11 >/dev/null 2>&1; then
+    PYTHON_BIN="$(command -v python3.11)"
+else
+    echo "Python 3.11 ou 3.12 é obrigatório" >&2
+    exit 1
+fi
+
+sudo install -d -m 0755 -o "$USER" -g "$(id -gn)" /opt/yt-transcriber-bot
+"$PYTHON_BIN" -m venv /opt/yt-transcriber-bot/venv
+/opt/yt-transcriber-bot/venv/bin/pip install --upgrade pip
+/opt/yt-transcriber-bot/venv/bin/pip install .
 ```
 
-Nunca versiona `.env`, cookies, tokens, banco SQLite, mídia, transcrições,
-modelos ou logs. Consulte a [política de segurança](docs/08-seguranca-e-segredos.md)
-antes de compartilhar diagnósticos ou backups.
+Após a instalação, produção executa `/opt/yt-transcriber-bot/venv/bin/yt-transcriber-bot`. Produção não depende de `uv`, `python -m yt_transcriber_bot`, dependências de desenvolvimento ou presença do checkout em `sys.path`.
+
+## Credenciais e configuração
+
+| Item | Estado atual | Observação |
+|---|---|---|
+| `TELEGRAM_BOT_TOKEN` | obrigatório | Token do BotFather. |
+| `TELEGRAM_ALLOWED_USER_ID` | obrigatório | ID numérico do único operador autorizado. |
+| `HF_TOKEN` | obrigatório no startup/preflight atual | Usado pela diarização; o código atual recusa startup sem ele. |
+| `YOUTUBE_COOKIES_FILE` | opcional/condicional | Use quando o YouTube exigir sessão autenticada. |
+| `YOUTUBE_COOKIES_BROWSER` | opcional/condicional | Alternativa quando o browser está acessível no mesmo host. |
+| `SUMMARY_API_KEY` | opcional | Depende do endpoint OpenAI-compatible. |
+
+Crie a configuração privada de produção:
+
+```bash
+sudo install -d -m 0755 /etc/yt-transcriber-bot
+sudo install -m 0600 -o "$USER" -g "$(id -gn)" \
+  deploy/yt-transcriber-bot.environment.example /etc/yt-transcriber-bot/env
+${EDITOR:-nano} /etc/yt-transcriber-bot/env
+```
+
+O contrato de produção é:
+
+```text
+EnvironmentFile=/etc/yt-transcriber-bot/env
+WorkingDirectory=/var/lib/yt-transcriber-bot
+StateDirectory=yt-transcriber-bot
+ExecStart=/opt/yt-transcriber-bot/venv/bin/yt-transcriber-bot
+```
+
+Em checkout de desenvolvimento, `.env` continua sendo conveniência local. Uma distribuição instalada não procura `.env` no diretório corrente. Para uma execução explícita fora do systemd, use `YT_TRANSCRIBER_ENV_FILE=/caminho/privado/env`.
+
+## Preflight antes do primeiro start
+
+O preflight da distribuição é **offline e read-only**: não inicia polling Telegram, não chama LM Studio, não inicializa SQLite, não cria diretórios e não carrega/downloada modelos.
+
+```bash
+PATH="/opt/yt-transcriber-bot/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+YT_TRANSCRIBER_ENV_FILE=/etc/yt-transcriber-bot/env \
+/opt/yt-transcriber-bot/venv/bin/yt-transcriber-bot --preflight
+```
+
+Para JSON, acrescente `--json`. O `PATH` inclui o `bin` do venv para que readiness encontre o console `yt-dlp` instalado pela própria distribuição.
+
+## systemd e início do bot
+
+```bash
+sed \
+  -e "s/^User=SEU_USUARIO$/User=$USER/" \
+  -e "s/^Group=SEU_USUARIO$/Group=$(id -gn)/" \
+  deploy/yt-transcriber-bot.service \
+  | sudo tee /etc/systemd/system/yt-transcriber-bot.service >/dev/null
+sudo systemctl daemon-reload
+sudo systemctl enable --now yt-transcriber-bot
+sudo systemctl status yt-transcriber-bot --no-pager
+```
+
+## Primeira transcrição
+
+1. Abra o chat privado com o bot.
+2. Envie `/healthcheck`; ele é um diagnóstico de runtime online, mais amplo que `--preflight`.
+3. Envie uma URL curta do YouTube ou um arquivo de áudio.
+4. Acompanhe com `/status` ou `/queue`.
+5. Use `/list` para confirmar que o job concluído entrou no histórico.
+
+Para idioma explícito, use `/pt <link>` ou `/en <link>`; `/transcribe <link>` usa a política automática.
+
+## Comandos principais
+
+| Objetivo | Comando |
+|---|---|
+| Ajuda/estado | `/help`, `/status`, `/queue` ou `/fila` |
+| Cancelamento | `/cancel`, `/cancelall`, `/clearqueue` |
+| Histórico | `/list`, `/last [n]`, `/search <texto>` |
+| Reprocessar | `/redo <link> [--lang pt\|en]` |
+| Falantes | `/rename [n]` |
+| Resumo | `/summary [n]` |
+| Exportação | `/text [n]`, `/json [n]`, `/srt [n]`, `/vtt [n]`, `/export <tipo> [n]` |
+| Vídeo legendado | `/video_subs [n]` |
+| Diagnóstico | `/healthcheck`, `/lasterror`, `/clearcache` |
+
+Jobs concluídos podem ser reprocessados; a deduplicação protege a mesma origem/idioma **em processamento ou na fila**. Em falha de entrega, consulte `/lasterror`; `delivery_failed` é estado persistido.
+
+## Atualização
+
+O checkout é fonte de instalação, não diretório de execução. Faça backup, pare o serviço, atualize o checkout para a revisão desejada, reinstale com `/opt/yt-transcriber-bot/venv/bin/pip install --upgrade .`, execute `--preflight`, inicie o serviço e valide `/healthcheck`, `/status` e um smoke curto. Veja o [runbook](docs/11-operator-runbook.md).
+
+## Backup
+
+O backup padrão é **credential-free**. Preserve SQLite e artefatos canônicos, mas não inclua `/etc/yt-transcriber-bot/env`, cookies, tokens, cache de modelos ou mídia temporária. Veja [segurança](docs/08-seguranca-e-segredos.md) e [runbook](docs/11-operator-runbook.md).
+
+## Troubleshooting
+
+- `--preflight` falha: corrija Python, módulos/binários, credenciais ou runtime JS;
+- serviço não inicia: `sudo systemctl status yt-transcriber-bot` e `journalctl -u yt-transcriber-bot -n 120 --no-pager`;
+- provider falha: `/healthcheck` e depois `/lasterror`;
+- YouTube retorna 401/403/429: revise cookies e runtime JS;
+- `/summary` falha: valide backend/endpoint/modelo; transcrição continua independente;
+- `delivery_failed`: o artefato pode existir localmente; siga o runbook.
+
+## Desenvolvimento
+
+```bash
+uv sync --dev
+uv run pytest -p no:cacheprovider
+uv run ruff check --no-cache .
+uv run ruff format --check --no-cache .
+uv run mypy src
+uv run pre-commit run --all-files
+```
+
+Use `.env.example` somente como template de desenvolvimento.
+
+## Documentação canônica
+
+- [Contrato funcional](docs/01-contrato-funcional.md)
+- [Arquitetura](docs/02-arquitetura.md)
+- [Manual de uso](docs/03-manual-de-uso.md)
+- [Instalação](docs/04-manual-de-instalacao.md)
+- [Roadmap](docs/06-funcionalidades-futuras.md) — explicitamente futuro, não comportamento atual.
+- [Glossário e decisões vigentes](docs/07-glossario-e-decisoes.md)
+- [Segurança e segredos](docs/08-seguranca-e-segredos.md)
+- [Production readiness](docs/09-production-readiness.md)
+- [Recovery semantics](docs/10-recovery-semantics-adr.md)
+- [Runbook](docs/11-operator-runbook.md)
+- [Deprecações e compatibilidade](docs/12-deprecacoes-e-compatibilidade.md)
+
+Specs, requirements, tasks e casos de uso permanecem em `specs/` como contratos de engenharia e conformance; não são o onboarding operacional do usuário.

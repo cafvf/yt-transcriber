@@ -38,15 +38,15 @@ def test_security_example_keeps_remote_code_disabled_and_credentials_inert() -> 
 def test_security_policy_marks_sanitized_material_private_and_standard_backup_secret_free() -> None:
     policy = Path("docs/08-seguranca-e-segredos.md").read_text(encoding="utf-8").lower()
 
-    assert "sanitizado" in policy
-    assert "privado" in policy
+    assert "sanitiza" in policy
+    assert "privada" in policy
     assert "backup padrão" in policy
+    assert "/etc/yt-transcriber-bot/env" in policy
     assert ".env" in policy
     assert "cookies" in policy
-    assert "não deve carregar" in policy
-    assert "exclu" in policy
-    assert "revogar" in policy
-    assert "rotacion" in policy
+    assert "exclua" in policy
+    assert "revogue" in policy
+    assert "rotacione" in policy
 
 
 def test_locked_install_remains_the_reproducible_ci_authority() -> None:

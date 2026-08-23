@@ -26,15 +26,18 @@ def test_supported_python_versions_match_metadata_ci_and_install_docs() -> None:
     assert "Python 3.11 ou 3.12" in install
 
 
-def test_supported_linux_and_system_dependencies_have_preflight_evidence_path() -> None:
+def test_linux_runtime_dependencies_have_current_preflight_evidence_path() -> None:
     install = Path("docs/04-manual-de-instalacao.md").read_text(encoding="utf-8")
     runbook = Path("docs/11-operator-runbook.md").read_text(encoding="utf-8")
 
-    for phrase in ("Fedora 38+", "Ubuntu 22.04+", "WSL2"):
-        assert phrase in install
-    for dependency in ("uv", "ffmpeg", "ffprobe"):
-        assert dependency in runbook
+    assert "Use Linux com Python 3.11 ou 3.12" in install
+    assert "`ffmpeg`/`ffprobe`" in install
+    assert "Deno >= 2.3.0 ou Node.js >= 22.0.0" in install
+    assert "scripts/ops/systemd_host_preflight.py" in install
+    assert "scripts/ops/systemd_host_preflight.py" in runbook
     assert "/healthcheck" in runbook
+    assert "uv sync --dev" in install
+    assert "desenvolvimento, não o contrato do serviço instalado" in install
 
 
 def test_environment_gated_inventory_preserves_frozen_46_lineage() -> None:
@@ -65,8 +68,8 @@ def test_current_docs_do_not_claim_mid_stage_checkpoint_resume() -> None:
         encoding="utf-8"
     )
 
-    assert re.search(r"não\s+retomam no meio de ASR ou diarização", readme)
-    assert "não retoma o meio da etapa" in runbook
+    assert "não há retomada no meio de ASR ou diarização" in readme
+    assert "Não existe checkpoint no meio de ASR/diarização" in runbook
     assert "Job interrompido por reinício do processo antes da conclusão" in recovery
     assert "checkpoint resume" not in readme.lower()
     assert "checkpoint resume" not in runbook.lower()

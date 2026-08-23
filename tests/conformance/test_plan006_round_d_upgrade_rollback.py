@@ -12,12 +12,15 @@ def test_plan006_p06_007_exposes_read_only_preflight_and_explicit_rehearsal() ->
     assert "final_production_revision" in helper
 
 
-def test_plan006_p06_007_runbook_documents_upgrade_rollback_contract() -> None:
+def test_current_runbook_documents_upgrade_rollback_contract() -> None:
     runbook = Path("docs/11-operator-runbook.md").read_text(encoding="utf-8")
-    assert "P06-007 — upgrade e rollback versionados" in runbook
-    assert "upgrade_rollback_rehearsal.py preflight" in runbook
-    assert "upgrade_rollback_rehearsal.py rehearsal" in runbook
-    assert "--execute" in runbook
+
+    assert "## Atualização" in runbook
+    assert "## Rollback" in runbook
+    assert "/opt/yt-transcriber-bot/venv/bin/pip install --upgrade ." in runbook
+    assert "/opt/yt-transcriber-bot/venv/bin/yt-transcriber-bot --preflight" in runbook
+    assert "revisão previamente conhecida" in runbook
+    assert "Dados não são revertidos automaticamente com código" in runbook
     assert "backup" in runbook.lower()
     assert "/healthcheck" in runbook
     assert "/status" in runbook
