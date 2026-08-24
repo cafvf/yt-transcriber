@@ -53,6 +53,16 @@ Use this file for persistent Codex/agent instructions. Human-facing product and 
 - Gitleaks full scan when installed: `python3 scripts/security/gitleaks_if_available.py --all`
 - Config smoke: `uv run python scripts/config/print_effective_settings.py`
 
+## Candidate Auto-fix Policy
+
+- Mutating auto-fix or formatting commands are allowed only in an isolated candidate clone or worktree, before any validated bytes are copied into the real checkout.
+- Before auto-fix, define an explicit task-owned path allowlist. Auto-fix commands must name only those authorized paths; never run broad auto-fix commands such as `ruff check --fix .` or repository-wide mutating formatting for a scoped change.
+- For Ruff on authorized Python paths, prefer `uv run ruff check --fix --no-cache <authorized-paths>` followed by `uv run ruff format --no-cache <authorized-paths>`.
+- Immediately after auto-fix, recompute tracked and untracked changed paths and fail closed if any path falls outside the allowlist.
+- After candidate preparation, final quality gates are strict and non-mutating: use `ruff check` without `--fix`, `ruff format --check`, typing/tests/security checks, and verify the final changed-path set again.
+- CI is always non-mutating: CI must detect lint/format violations and fail; it must not use `--fix` to rewrite submitted code.
+- The real checkout receives only validated candidate bytes. Do not run blanket auto-fix on the real checkout to make a gate pass.
+
 ## Change Rules
 
 - Follow spec-driven development: update `docs/` contracts for product/architecture changes before or alongside tests and code.
